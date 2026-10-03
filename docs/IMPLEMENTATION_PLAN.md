@@ -1,7 +1,7 @@
 # ND Blocking & Previs — Architecture and Implementation Plan
 
-Status: Milestone 0 foundation locked
-Scope: Phase 1 foundation; application shell and Three.js Stage remain intentionally unimplemented.
+Status: Milestone 1 application shell and empty Stage implemented
+Scope: Phase 1 foundation and workspace shell; actor/camera/timeline editing remain intentionally unimplemented.
 
 Milestone 0 decisions are implemented in the domain source and specified by these focused contracts:
 
@@ -9,6 +9,7 @@ Milestone 0 decisions are implemented in the domain source and specified by thes
 - [CAMERA_MODEL.md](CAMERA_MODEL.md) — sensor gate, delivery frame, lens profile, and anamorphic math
 - [TIMELINE_MODEL.md](TIMELINE_MODEL.md) — integer-frame blocking timeline and typed tracks
 - [PERFORMANCE_RULES.md](PERFORMANCE_RULES.md) — runtime/render-loop constraints for later milestones
+- [STAGE_RUNTIME.md](STAGE_RUNTIME.md) — Milestone 1 Stage lifecycle and rendering policy
 
 ## 1. Repository audit
 

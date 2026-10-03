@@ -32,24 +32,6 @@ export const DEFAULT_PLACEMENT: Placement = {
 export function createMinimumValidProject(idFactory: IdFactory = createId): ProjectDocument {
   const projectId = idFactory()
   const shotId = idFactory()
-  const cameraId = idFactory()
-
-  const camera: CameraDocument = {
-    id: cameraId,
-    name: 'Camera A',
-    placement: {
-      position: [0, 1.6, 5],
-      rotation: { order: 'XYZ', radians: [0, 0, 0] },
-    },
-    lens: {
-      focalLengthMm: 50,
-      sensorFormat: { kind: 'preset', preset: 'super-35' },
-      profile: { type: 'spherical', preset: 'spherical', squeezeFactor: 1 },
-      focusDistanceM: 5,
-    },
-    aim: { mode: 'free' },
-  }
-
   const shot: ShotDocument = {
     id: shotId,
     name: 'Shot 01',
@@ -60,10 +42,10 @@ export function createMinimumValidProject(idFactory: IdFactory = createId): Proj
     frame: structuredClone(DEFAULT_FRAME_SETTINGS),
     actors: [],
     props: [],
-    cameras: [camera],
+    cameras: [],
     lights: [],
     timeline: { tracks: [] },
-    activeCameraId: cameraId,
+    activeCameraId: null,
   }
 
   return {

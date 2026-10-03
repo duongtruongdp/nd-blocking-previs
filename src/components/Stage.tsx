@@ -1,8 +1,14 @@
 import { useEffect, useRef } from 'react'
 import { SceneRuntime } from '../runtime/SceneRuntime'
+import { blockingStore, useBlockingSelector } from '../state/blockingStore'
+import { poseCalibrationStore, usePoseCalibrationSelector } from '../state/poseCalibrationStore'
 
 export function Stage() {
   const stageRef = useRef<HTMLDivElement>(null)
+  const runtimeRef = useRef<SceneRuntime | null>(null)
+  const state = useBlockingSelector((snapshot) => snapshot)
+  const calibration = usePoseCalibrationSelector((snapshot) => snapshot)
+  const shot = state.project.shots.find((entry) => entry.id === state.project.activeShotId)
 
   useEffect(() => {
     const container = stageRef.current
@@ -10,9 +16,16 @@ export function Stage() {
 
     try {
       const runtime = new SceneRuntime(container)
+      runtime.setInteractionHandlers({
+        onSelectionChange: (entityId) => blockingStore.selectEntity(entityId),
+        onTransformCommit: (entityId, placement) => blockingStore.setEntityPlacement(entityId, placement),
+        onPoseDiagnosticsChange: (snapshot) => poseCalibrationStore.setRuntimeDiagnostics(snapshot),
+      })
+      runtimeRef.current = runtime
       container.dataset.stageState = 'ready'
       return () => {
         delete container.dataset.stageState
+        runtimeRef.current = null
         runtime.dispose()
       }
     } catch (initializationError) {
@@ -20,6 +33,31 @@ export function Stage() {
       container.dataset.stageState = 'failed'
     }
   }, [])
+
+  useEffect(() => {
+    runtimeRef.current?.syncBlockingEntities(shot?.actors ?? [], shot?.props ?? [])
+  }, [shot?.actors, shot?.props])
+
+  useEffect(() => {
+    runtimeRef.current?.setSelectedEntity(state.selection.entityId)
+  }, [state.selection.entityId])
+
+  useEffect(() => {
+    runtimeRef.current?.setTool(state.tool)
+  }, [state.tool])
+
+  useEffect(() => {
+    runtimeRef.current?.setPoseCalibration(calibration.actorId, calibration.pose)
+  }, [calibration.actorId, calibration.pose])
+
+  useEffect(() => {
+    runtimeRef.current?.setRigDebugOverlay(calibration.actorId, {
+      showRig: calibration.showRig,
+      showJointAxes: calibration.showJointAxes,
+      showContact: calibration.showContact,
+      showPoseTargets: calibration.showPoseTargets,
+    })
+  }, [calibration.actorId, calibration.showRig, calibration.showJointAxes, calibration.showContact, calibration.showPoseTargets])
 
   return (
     <section className="stage-panel" aria-label="Stage">

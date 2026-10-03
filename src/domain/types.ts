@@ -6,6 +6,10 @@ export type ProjectSchemaVersion = typeof CURRENT_PROJECT_SCHEMA_VERSION
 
 export type Vec3 = [number, number, number]
 
+export type CharacterType = 'male' | 'female'
+
+export type PoseCategory = 'standing' | 'sitting' | 'lying' | 'walking' | 'action' | 'custom'
+
 export type EulerRotation = {
   order: 'XYZ'
   radians: Vec3
@@ -77,10 +81,16 @@ export type ActorDocument = {
   id: string
   name: string
   role?: string
+  character: {
+    characterId: string
+  }
   appearance: {
     color: string
     heightM: number
     representation: 'person-proxy' | 'box-proxy'
+  }
+  pose: {
+    poseId: string
   }
   placement: Placement
 }
@@ -91,6 +101,7 @@ export type PropDocument = {
   appearance: {
     color: string
     dimensionsM: Vec3
+    propType: 'cube' | 'cylinder' | 'wall' | 'floor' | 'table' | 'chair'
     representation: 'box-proxy' | 'cylinder-proxy' | 'plane-proxy'
   }
   placement: Placement
@@ -174,7 +185,7 @@ export type ShotDocument = {
   cameras: CameraDocument[]
   lights: LightDocument[]
   timeline: TimelineDocument
-  activeCameraId: string
+  activeCameraId: string | null
 }
 
 export type ProjectDocument = {

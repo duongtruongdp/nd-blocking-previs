@@ -1,6 +1,17 @@
-const futureTools = ['Select', 'Move', 'Rotate']
+import { blockingStore, useBlockingSelector, type BlockingTool } from '../state/blockingStore'
+
+const tools: Array<{ label: string; value: BlockingTool; shortcut: string }> = [
+  { label: 'Select', value: 'select', shortcut: 'Q' },
+  { label: 'Move', value: 'move', shortcut: 'W' },
+  { label: 'Rotate', value: 'rotate', shortcut: 'E' },
+]
 
 export function TopBar() {
+  const state = useBlockingSelector((snapshot) => snapshot)
+  const activeTool = state.tool
+  const shot = state.project.shots.find((entry) => entry.id === state.project.activeShotId)
+  const projectContext = { projectName: state.project.name, shotName: shot?.name ?? 'Shot' }
+
   return (
     <header className="top-bar">
       <div className="brand-lockup">
@@ -10,11 +21,11 @@ export function TopBar() {
 
       <nav className="project-context" aria-label="Project context">
         <button type="button" className="toolbar-button" disabled title="Project controls arrive in a later milestone">
-          Project
+          {projectContext.projectName}
         </button>
         <span className="context-divider" aria-hidden="true">/</span>
         <button type="button" className="toolbar-button" disabled title="Shot controls arrive in a later milestone">
-          Shot
+          {projectContext.shotName}
         </button>
       </nav>
 
@@ -30,9 +41,16 @@ export function TopBar() {
       </div>
 
       <div className="tool-strip" aria-label="Stage tools">
-        {futureTools.map((tool) => (
-          <button key={tool} type="button" className="tool-button" disabled title={`${tool} arrives in a later milestone`}>
-            {tool}
+        {tools.map((tool) => (
+          <button
+            key={tool.value}
+            type="button"
+            className={`tool-button ${activeTool === tool.value ? 'is-active' : ''}`}
+            aria-pressed={activeTool === tool.value}
+            onClick={() => blockingStore.setTool(tool.value)}
+            title={`${tool.label} (${tool.shortcut})`}
+          >
+            {tool.label}
           </button>
         ))}
       </div>

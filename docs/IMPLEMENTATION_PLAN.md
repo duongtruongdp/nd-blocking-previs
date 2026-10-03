@@ -1,7 +1,7 @@
 # ND Blocking & Previs — Architecture and Implementation Plan
 
-Status: Milestone 1 application shell and empty Stage implemented
-Scope: Phase 1 foundation and workspace shell; actor/camera/timeline editing remain intentionally unimplemented.
+Status: Milestone 2H-C implemented: complete Standing, Sitting, and Lying pose library reconstructed; live visual review remains pending
+Scope: Phase 1 foundation, workspace shell, Actor/Prop blocking, and character/pose seams; camera authoring and timeline editing remain intentionally unimplemented.
 
 Milestone 0 decisions are implemented in the domain source and specified by these focused contracts:
 
@@ -10,6 +10,10 @@ Milestone 0 decisions are implemented in the domain source and specified by thes
 - [TIMELINE_MODEL.md](TIMELINE_MODEL.md) — integer-frame blocking timeline and typed tracks
 - [PERFORMANCE_RULES.md](PERFORMANCE_RULES.md) — runtime/render-loop constraints for later milestones
 - [STAGE_RUNTIME.md](STAGE_RUNTIME.md) — Milestone 1 Stage lifecycle and rendering policy
+- [BLOCKING_RUNTIME.md](BLOCKING_RUNTIME.md) — Milestone 2 entity mapping, selection, and transform commits
+- [CHARACTER_ASSET_SPEC.md](CHARACTER_ASSET_SPEC.md) — authored GLB requirements, licensing, budgets, and grounding
+- [CHARACTER_RIG_DIAGNOSTICS.md](CHARACTER_RIG_DIAGNOSTICS.md) — production rig findings, reconstruction, symmetry, and contact decisions
+- [ANATOMICAL_POSE_SOLVER.md](ANATOMICAL_POSE_SOLVER.md) — anatomical intent, rig-specific quaternion solving, references, and contact boundary
 
 ## 1. Repository audit
 
@@ -52,7 +56,7 @@ This is a shot-blocking and cinematography planning tool, not a general-purpose 
 
 ### Explicitly out of scope initially
 
-- Full character rigs, animation retargeting, facial performance, or cloth simulation.
+- Full artist-facing pose authoring, animation retargeting, facial performance, or cloth simulation. The query-gated calibration overlay is a development diagnostic only; the three reference poses are auto-calibrated but not artist-reviewed.
 - Photoreal materials, physically accurate lighting, and a general asset marketplace.
 - Arbitrary geometry modeling, sculpting, or scene-graph editing.
 - Multi-user collaboration, WordPress APIs, accounts, or server-side project storage.
@@ -187,7 +191,7 @@ type ShotDocument = {
   cameras: CameraDocument[]
   lights: LightDocument[]
   timeline: TimelineDocument
-  activeCameraId: string
+  activeCameraId: string | null
 }
 ```
 
@@ -211,16 +215,18 @@ type ActorDocument = {
   id: string
   name: string
   role?: string
+  character: { characterId: string }
   appearance: {
     color: string
-    height: number
+    heightM: number
     representation: 'person-proxy' | 'box-proxy'
   }
+  pose: { poseId: string }
   placement: Placement
 }
 ```
 
-The initial actor proxy should communicate body position, facing, and eyeline without pretending to be a final character asset. Height is important to camera blocking and should be visible/editable in the Inspector.
+The Actor stores only stable character and pose IDs, color, height, and placement. The runtime resolves the selected character through the Character Registry and uses the procedural articulated mannequin only when a production GLB is unavailable or fails validation. Height is important to camera blocking and should be visible/editable in the Inspector.
 
 ### Prop
 
@@ -230,7 +236,8 @@ type PropDocument = {
   name: string
   appearance: {
     color: string
-    dimensions: [number, number, number]
+    dimensionsM: [number, number, number]
+    propType: 'cube' | 'cylinder' | 'wall' | 'floor' | 'table' | 'chair'
     representation: 'box-proxy' | 'cylinder-proxy' | 'plane-proxy'
   }
   placement: Placement
@@ -623,4 +630,4 @@ Internal implementation names may use technical terms where they make the code c
 
 ## 14. Recommended next step
 
-Milestone 0 is now implemented: typed contracts, pure math/serialization seams, validation, fixtures, and tests. The exact recommendation for Milestone 1 is to build the application shell and empty stage only after reviewing the locked contracts; do not add production scene behavior, actor UI, camera UI, timeline UI, or export in the foundation pass.
+Milestone 2G.6 is now implemented: production character diagnostics, protected Standing/Sitting references, deterministic Male/Female supine reconstruction, normalized visible-bounds longitudinal validation, semantic joint audits, arm-chain validation, internal contact solving, development pose guides, facing-tick suppression during pose review, selection bounds refresh, and regression coverage for direct pose and asset transitions. Live visual review of Male/Female Supine remains required before the next milestone. The exact recommendation for the next milestone remains production Camera authoring and camera-aware framing only after that review; do not begin timeline animation, `.ndblock` Open/Save UI, lighting authoring, or export in that pass.

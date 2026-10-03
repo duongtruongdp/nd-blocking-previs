@@ -39,6 +39,19 @@ describe('.ndblock project format', () => {
     expect(validateProjectFile(JSON.parse(fixture('valid-v1.ndblock'))).valid).toBe(true)
   })
 
+  it('normalizes legacy Actors with explicit default character and pose IDs', () => {
+    const loaded = deserializeProject(fixture('valid-v1.ndblock'))
+    const actor = loaded.shots[0].actors[0]
+    expect(actor.character).toEqual({ characterId: 'male-01' })
+    expect(actor.pose).toEqual({ poseId: 'standing-neutral' })
+
+    const serialized = JSON.parse(serializeProject(loaded)) as { project: { shots: Array<{ actors: Array<unknown> }> } }
+    expect(serialized.project.shots[0].actors[0]).toMatchObject({
+      character: { characterId: 'male-01' },
+      pose: { poseId: 'standing-neutral' },
+    })
+  })
+
   it('rejects malformed format identifiers and project data', () => {
     const invalidFormat = validateProjectFile(JSON.parse(fixture('invalid-format.ndblock')))
     const malformed = validateProjectFile(JSON.parse(fixture('malformed-project.ndblock')))

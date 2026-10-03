@@ -19,6 +19,8 @@ import {
 } from './types'
 import { isValidFrameRate } from '../math/frameRate'
 import { validateMarkRange } from './timeline'
+import { DEFAULT_CHARACTER_ID, getCharacterDefinition } from '../characters/characterRegistry'
+import { DEFAULT_POSE_ID, getPoseDefinition } from '../characters/poseLibrary'
 
 export type ValidationResult<T> =
   | { valid: true; value: T }
@@ -167,10 +169,14 @@ function validateShot(input: unknown, path: string, issues: ValidationIssue[]): 
   const cameras = validateArray(input.cameras, `${path}.cameras`, issues, validateCamera)
   const lights = validateArray(input.lights, `${path}.lights`, issues, validateLight)
   const timeline = validateTimeline(input.timeline, `${path}.timeline`, issues)
-  requireId(input.activeCameraId, `${path}.activeCameraId`, issues)
-
-  if (cameras && !cameras.some((camera) => camera.id === input.activeCameraId)) {
-    issues.push({ path: `${path}.activeCameraId`, message: 'activeCameraId must reference a camera in this shot.' })
+  if (cameras?.length === 0 && input.activeCameraId !== null) {
+    issues.push({ path: `${path}.activeCameraId`, message: 'activeCameraId must be null when a shot has no cameras.' })
+  }
+  if (cameras && cameras.length > 0) {
+    requireId(input.activeCameraId, `${path}.activeCameraId`, issues)
+    if (!cameras.some((camera) => camera.id === input.activeCameraId)) {
+      issues.push({ path: `${path}.activeCameraId`, message: 'activeCameraId must reference a camera in this shot.' })
+    }
   }
   if (timeline && cameras && actors && props && lights) {
     const entityIds = new Set([...actors, ...props, ...cameras, ...lights].map((entity) => entity.id))
@@ -201,7 +207,7 @@ function validateShot(input: unknown, path: string, issues: ValidationIssue[]): 
     cameras,
     lights,
     timeline,
-    activeCameraId: input.activeCameraId as string,
+    activeCameraId: input.activeCameraId as string | null,
   }
 }
 
@@ -210,14 +216,16 @@ function validateActor(input: unknown, path: string, issues: ValidationIssue[]):
     issues.push({ path, message: 'Actor must be an object.' })
     return undefined
   }
-  onlyKeys(input, ['id', 'name', 'role', 'appearance', 'placement'], path, issues)
+  onlyKeys(input, ['id', 'name', 'role', 'character', 'appearance', 'pose', 'placement'], path, issues)
   requireId(input.id, `${path}.id`, issues)
   requireNonEmptyString(input.name, `${path}.name`, issues)
   if (input.role !== undefined && typeof input.role !== 'string') issues.push({ path: `${path}.role`, message: 'role must be a string.' })
+  const character = validateActorCharacter(input.character, `${path}.character`, issues)
   const appearance = validateActorAppearance(input.appearance, `${path}.appearance`, issues)
+  const pose = validateActorPose(input.pose, `${path}.pose`, issues)
   const placement = validatePlacement(input.placement, `${path}.placement`, issues)
-  if (!appearance || !placement) return undefined
-  return { id: input.id as string, name: input.name as string, ...(input.role === undefined ? {} : { role: input.role as string }), appearance, placement }
+  if (!character || !appearance || !pose || !placement) return undefined
+  return { id: input.id as string, name: input.name as string, ...(input.role === undefined ? {} : { role: input.role as string }), character, appearance, pose, placement }
 }
 
 function validateProp(input: unknown, path: string, issues: ValidationIssue[]): PropDocument | undefined {
@@ -500,18 +508,57 @@ function validateActorAppearance(input: unknown, path: string, issues: Validatio
   return { color: input.color as string, heightM, representation: input.representation as ActorDocument['appearance']['representation'] }
 }
 
+function validateActorCharacter(input: unknown, path: string, issues: ValidationIssue[]): ActorDocument['character'] | undefined {
+  if (input === undefined) return { characterId: DEFAULT_CHARACTER_ID }
+  if (!isRecord(input)) {
+    issues.push({ path, message: 'Actor character must be an object.' })
+    return undefined
+  }
+  onlyKeys(input, ['characterId'], path, issues)
+  requireNonEmptyString(input.characterId, `${path}.characterId`, issues)
+  if (typeof input.characterId === 'string' && !getCharacterDefinition(input.characterId)) {
+    issues.push({ path: `${path}.characterId`, message: 'Unknown character ID.' })
+  }
+  if (typeof input.characterId !== 'string' || !getCharacterDefinition(input.characterId)) return undefined
+  return { characterId: input.characterId }
+}
+
+function validateActorPose(input: unknown, path: string, issues: ValidationIssue[]): ActorDocument['pose'] | undefined {
+  if (input === undefined) return { poseId: DEFAULT_POSE_ID }
+  if (!isRecord(input)) {
+    issues.push({ path, message: 'Actor pose must be an object.' })
+    return undefined
+  }
+  onlyKeys(input, ['poseId'], path, issues)
+  requireNonEmptyString(input.poseId, `${path}.poseId`, issues)
+  if (typeof input.poseId === 'string' && !getPoseDefinition(input.poseId)) {
+    issues.push({ path: `${path}.poseId`, message: 'Unknown pose ID.' })
+  }
+  if (typeof input.poseId !== 'string' || !getPoseDefinition(input.poseId)) return undefined
+  return { poseId: input.poseId }
+}
+
 function validatePropAppearance(input: unknown, path: string, issues: ValidationIssue[]): PropDocument['appearance'] | undefined {
   if (!isRecord(input)) {
     issues.push({ path, message: 'Prop appearance must be an object.' })
     return undefined
   }
-  onlyKeys(input, ['color', 'dimensionsM', 'representation'], path, issues)
+  onlyKeys(input, ['color', 'dimensionsM', 'propType', 'representation'], path, issues)
   requireNonEmptyString(input.color, `${path}.color`, issues)
   const dimensionsM = validateVec3(input.dimensionsM, `${path}.dimensionsM`, issues)
   if (dimensionsM && dimensionsM.some((dimension) => dimension <= 0)) issues.push({ path: `${path}.dimensionsM`, message: 'Prop dimensions must be greater than zero.' })
-  if (!['box-proxy', 'cylinder-proxy', 'plane-proxy'].includes(input.representation as string)) issues.push({ path: `${path}.representation`, message: 'Invalid prop representation.' })
+  const representation = input.representation as PropDocument['appearance']['representation']
+  if (!['box-proxy', 'cylinder-proxy', 'plane-proxy'].includes(representation)) issues.push({ path: `${path}.representation`, message: 'Invalid prop representation.' })
+  const propType = input.propType === undefined ? inferPropType(representation) : input.propType as PropDocument['appearance']['propType']
+  if (!['cube', 'cylinder', 'wall', 'floor', 'table', 'chair'].includes(propType)) issues.push({ path: `${path}.propType`, message: 'Invalid prop type.' })
   if (!dimensionsM) return undefined
-  return { color: input.color as string, dimensionsM, representation: input.representation as PropDocument['appearance']['representation'] }
+  return { color: input.color as string, dimensionsM, propType, representation }
+}
+
+function inferPropType(representation: PropDocument['appearance']['representation']): PropDocument['appearance']['propType'] {
+  if (representation === 'cylinder-proxy') return 'cylinder'
+  if (representation === 'plane-proxy') return 'floor'
+  return 'cube'
 }
 
 function validateArray<T>(input: unknown, path: string, issues: ValidationIssue[], validate: (value: unknown, path: string, issues: ValidationIssue[]) => T | undefined): T[] | undefined {

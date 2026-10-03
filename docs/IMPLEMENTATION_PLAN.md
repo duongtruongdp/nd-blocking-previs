@@ -1,7 +1,14 @@
 # ND Blocking & Previs — Architecture and Implementation Plan
 
-Status: proposed for review  
-Scope: Phase 1 foundation only; no application implementation is included in this document's creation.
+Status: Milestone 0 foundation locked
+Scope: Phase 1 foundation; application shell and Three.js Stage remain intentionally unimplemented.
+
+Milestone 0 decisions are implemented in the domain source and specified by these focused contracts:
+
+- [PROJECT_FORMAT.md](PROJECT_FORMAT.md) — `.ndblock`, validation, portability, and migrations
+- [CAMERA_MODEL.md](CAMERA_MODEL.md) — sensor gate, delivery frame, lens profile, and anamorphic math
+- [TIMELINE_MODEL.md](TIMELINE_MODEL.md) — integer-frame blocking timeline and typed tracks
+- [PERFORMANCE_RULES.md](PERFORMANCE_RULES.md) — runtime/render-loop constraints for later milestones
 
 ## 1. Repository audit
 
@@ -154,7 +161,7 @@ type ProjectDocument = {
   createdAt: string
   updatedAt: string
   unitSystem: 'metric'
-  frameRate: number
+  frameRate: { numerator: number; denominator: number }
   startFrame: number
   endFrame: number
   activeShotId: string
@@ -258,11 +265,6 @@ type FrameSettings = {
     showHorizon: boolean
   }
   safeAreaPercent: number
-  anamorphic: {
-    enabled: boolean
-    squeezeFactor: 1 | 1.3 | 1.5 | 2
-    displayMode: 'desqueezed' | 'squeezed'
-  }
 }
 ```
 
@@ -376,20 +378,15 @@ type TimelineDocument = {
 type TimelineTrack = {
   id: string
   entityId: string
-  property:
-    | 'position'
-    | 'rotation'
-    | 'focalLengthMm'
-    | 'focusDistanceM'
-    | 'aimTarget'
+  property: 'position' | 'rotation' | 'focalLengthMm' | 'focusDistanceM'
   keyframes: Keyframe[]
 }
 
 type Keyframe = {
   id: string
   frame: number
-  value: number[]
-  interpolation: 'step' | 'linear' | 'smooth'
+  value: Vec3 | EulerRotation | number
+  interpolation: 'step' | 'linear'
 }
 ```
 
@@ -399,7 +396,7 @@ type Keyframe = {
 - `markIn` and `markOut` define the active playback/export range.
 - A property may have at most one track per entity in the first version.
 - Track values are typed by the property even if the serialized value is a numeric array.
-- Position and rotation interpolate linearly first; smooth interpolation can initially be implemented as a bounded easing option.
+- Position, rotation, lens, and focus interpolate with explicitly defined linear or step behavior. Smooth interpolation is intentionally omitted until its mathematical behavior is designed.
 - Lens and focus tracks are scalar values.
 - Actor movement uses position and rotation tracks; camera movement uses position, rotation/aim, lens, and focus tracks.
 - At a frame, evaluate the nearest surrounding keyframes and apply the result to the runtime. If no keyframes exist, use the entity's base placement/settings.
@@ -566,42 +563,42 @@ Every milestone should keep `npm run build` and `npm run lint` passing. Add a te
 
 ### Domain state and Three.js drift
 
-Risk: runtime objects and serialized state diverge during direct manipulation.  
+Risk: runtime objects and serialized state diverge during direct manipulation.
 Mitigation: domain commands are authoritative; use a runtime registry and synchronize on command commit/pointer release.
 
 ### Camera math and framing accuracy
 
-Risk: field-of-view, sensor, crop, and aspect-ratio behavior produce misleading compositions.  
+Risk: field-of-view, sensor, crop, and aspect-ratio behavior produce misleading compositions.
 Mitigation: centralize camera math in pure functions, use named sensor fixtures, and verify against known lens/sensor combinations.
 
 ### Anamorphic preview ambiguity
 
-Risk: users cannot tell whether the lens, crop, or display is being changed.  
+Risk: users cannot tell whether the lens, crop, or display is being changed.
 Mitigation: treat it as an explicit preview display mode, label squeeze factor, and preserve the saved lens values.
 
 ### Timeline determinism
 
-Risk: frame-rate drift and time-based animation cause different playback results.  
+Risk: frame-rate drift and time-based animation cause different playback results.
 Mitigation: use integer frames as the source of truth; convert to seconds only at the renderer/export boundary.
 
 ### Browser export support
 
-Risk: codec availability varies by browser and platform.  
+Risk: codec availability varies by browser and platform.
 Mitigation: probe supported MIME types, offer a clear fallback/error, and keep export isolated behind an adapter.
 
 ### Performance during playback
 
-Risk: React rerenders or object creation inside the render loop cause stutter.  
+Risk: React rerenders or object creation inside the render loop cause stutter.
 Mitigation: keep per-frame state out of broad React state, reuse runtime objects, and evaluate only active tracks.
 
 ### Scope creep into a 3D editor
 
-Risk: features become technically interesting but do not improve blocking or framing.  
+Risk: features become technically interesting but do not improve blocking or framing.
 Mitigation: review every feature against the product verbs: block, frame, move, aim, preview, or export.
 
 ### Persistence and future WordPress embedding
 
-Risk: application code becomes coupled to a host CMS.  
+Risk: application code becomes coupled to a host CMS.
 Mitigation: keep the app as a standalone Vite build with browser-native file/local persistence; add any host bridge only at the edge later.
 
 ## 13. User-facing vocabulary
@@ -625,4 +622,4 @@ Internal implementation names may use technical terms where they make the code c
 
 ## 14. Recommended next step
 
-Review and approve the domain boundaries, camera behavior, timeline semantics, and milestone order. After approval, implement Milestone 0 only: typed contracts, pure math/serialization seams, and fixtures. Do not start with a large Three.js scene or the full timeline UI.
+Milestone 0 is now implemented: typed contracts, pure math/serialization seams, validation, fixtures, and tests. The exact recommendation for Milestone 1 is to build the application shell and empty stage only after reviewing the locked contracts; do not add production scene behavior, actor UI, camera UI, timeline UI, or export in the foundation pass.

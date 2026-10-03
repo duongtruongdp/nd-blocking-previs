@@ -1,0 +1,60 @@
+{
+  "format": "nd-blocking-previs",
+  "formatVersion": 1,
+  "generator": {
+    "application": "ND Blocking & Previs",
+    "version": "fixture"
+  },
+  "project": {
+    "schemaVersion": 1,
+    "id": "project-minimum",
+    "name": "Minimum Valid Project",
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-01T00:00:00.000Z",
+    "unitSystem": "metric",
+    "frameRate": { "numerator": 24, "denominator": 1 },
+    "shots": [
+      {
+        "id": "shot-01",
+        "name": "Shot 01",
+        "startFrame": 0,
+        "endFrame": 24,
+        "markIn": 0,
+        "markOut": 24,
+        "frame": {
+          "aspectRatio": { "width": 16, "height": 9 },
+          "guideOptions": {
+            "showSafeAreas": true,
+            "showCenterMarks": true,
+            "showThirds": false,
+            "showHorizon": false
+          },
+          "safeAreaPercent": 90
+        },
+        "actors": [],
+        "props": [],
+        "cameras": [
+          {
+            "id": "camera-a",
+            "name": "Camera A",
+            "placement": {
+              "position": [0, 1.6, 5],
+              "rotation": { "order": "XYZ", "radians": [0, 0, 0] }
+            },
+            "lens": {
+              "focalLengthMm": 50,
+              "sensorFormat": { "kind": "preset", "preset": "super-35" },
+              "profile": { "type": "spherical", "preset": "spherical", "squeezeFactor": 1 },
+              "focusDistanceM": 5
+            },
+            "aim": { "mode": "free" }
+          }
+        ],
+        "lights": [],
+        "timeline": { "tracks": [] },
+        "activeCameraId": "camera-a"
+      }
+    ],
+    "activeShotId": "shot-01"
+  }
+}

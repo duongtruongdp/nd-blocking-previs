@@ -1,0 +1,6 @@
+{
+  "format": "generic-json-scene",
+  "formatVersion": 1,
+  "generator": { "application": "ND Blocking & Previs", "version": "fixture" },
+  "project": {}
+}

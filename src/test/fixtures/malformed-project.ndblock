@@ -1,0 +1,16 @@
+{
+  "format": "nd-blocking-previs",
+  "formatVersion": 1,
+  "generator": { "application": "ND Blocking & Previs", "version": "fixture" },
+  "project": {
+    "schemaVersion": 1,
+    "id": "project-bad",
+    "name": "Malformed",
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-01T00:00:00.000Z",
+    "unitSystem": "metric",
+    "frameRate": { "numerator": 24000, "denominator": 0 },
+    "shots": [],
+    "activeShotId": "missing-shot"
+  }
+}

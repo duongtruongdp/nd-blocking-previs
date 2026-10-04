@@ -21,6 +21,20 @@ const sources = {
   a35ManualSup60: 'arri.alexa-35.sup-6-0.manual',
   a35Formats: 'arri.alexa-35.recording-formats',
   a35Afro: 'arri.formats-overview-v6-3.alexa-35',
+  miniProductBatch2: 'arri.alexa-mini.product',
+  miniManualBatch2: 'arri.alexa-mini.sup-6-1.manual',
+  miniSupBatch2: 'arri.alexa-mini.sup-6-1-2',
+  miniFaqBatch2: 'arri.alexa-mini.faq',
+  miniAfroBatch2: 'arri.formats-overview-v6-3.alexa-mini',
+  lfProduct: 'arri.alexa-lf.product',
+  lfManual: 'arri.alexa-lf.sup-4-3.manual',
+  lfSup: 'arri.alexa-lf.sup-4-3',
+  lfFaq: 'arri.alexa-lf.faq',
+  lfAfro: 'arri.formats-overview-v6-3.alexa-lf',
+  amiraProduct: 'arri.amira.product',
+  amiraManual: 'arri.amira.sup-6-1.manual',
+  amiraSup: 'arri.amira.sup-6-1-2',
+  amiraAfro: 'arri.formats-overview-v6-3.amira',
 } as const
 
 type RateMaximum = {
@@ -198,6 +212,133 @@ const a35Modes: RecordingMode[] = [
   ], [sources.a35Product, sources.a35Manual, sources.a35Afro]),
 ]
 
+const miniBatch2Firmware = 'ALEXA Mini / SUP 6.1.2 / SUP 6.1 User Manual'
+const lfFirmware = 'ALEXA LF / SUP 4.3 / ALEXA LF User Manual'
+const amiraFirmware = 'AMIRA / SUP 6.1.2 / SUP 6.1 User Manual'
+
+function productionRates(
+  codec: string,
+  resolution: string,
+  maximum: number,
+  firmware: string,
+  options: { media?: string; license?: string; notes?: string } = {},
+): RecordingFrameRates {
+  return {
+    ranges: [{
+      minimum: THREE_QUARTERS,
+      maximum: { numerator: maximum, denominator: 1 },
+      conditions: {
+        codec,
+        resolution,
+        firmware,
+        ...(options.media === undefined ? {} : { media: options.media }),
+        ...(options.license === undefined ? {} : { license: options.license }),
+        ...(options.notes === undefined ? {} : { notes: options.notes }),
+      },
+    }],
+  }
+}
+
+function boundedRates(
+  minimum: { numerator: number; denominator: number },
+  maximum: { numerator: number; denominator: number },
+  codec: string,
+  resolution: string,
+  firmware: string,
+  options: { notes?: string } = {},
+): RecordingFrameRates {
+  return {
+    ranges: [{
+      minimum,
+      maximum,
+      conditions: {
+        codec,
+        resolution,
+        firmware,
+        ...(options.notes === undefined ? {} : { notes: options.notes }),
+      },
+    }],
+  }
+}
+
+const miniBatch2Sources = [sources.miniProductBatch2, sources.miniManualBatch2, sources.miniSupBatch2, sources.miniFaqBatch2, sources.miniAfroBatch2]
+const lfSources = [sources.lfProduct, sources.lfManual, sources.lfSup, sources.lfFaq, sources.lfAfro]
+const amiraSources = [sources.amiraProduct, sources.amiraManual, sources.amiraSup, sources.amiraAfro]
+
+const miniBatch2Rates = (codec: string, resolution: string, maximum: number, options: { license?: string; notes?: string } = {}) => productionRates(codec, resolution, maximum, miniBatch2Firmware, options)
+const lfRates = (codec: string, resolution: string, maximum: number, media: string, notes?: string) => productionRates(codec, resolution, maximum, lfFirmware, { media, notes })
+const amiraRates = (codec: string, resolution: string, maximum: number, license?: string) => productionRates(codec, resolution, maximum, amiraFirmware, license === undefined ? {} : { license })
+
+const miniBatch2Modes: RecordingMode[] = [
+  mode('arri.alexa-mini.s16-hd', 'S16 HD', 1600, 900, 13.20, 7.43, 'super-16-window', [
+    output('arri.alexa-mini.s16-hd.prores', 'Apple ProRes S16 HD', 'Apple ProRes', 1920, 1080, miniBatch2Rates('Apple ProRes', 'S16 HD', 200), miniBatch2Sources),
+  ], miniBatch2Sources),
+  mode('arri.alexa-mini.2_8k-16_9', '2.8K 16:9', 2880, 1620, 23.76, 13.37, 'window', [
+    output('arri.alexa-mini.2_8k-16_9.prores-hd', 'Apple ProRes HD', 'Apple ProRes', 1920, 1080, miniBatch2Rates('Apple ProRes', 'HD', 200), miniBatch2Sources),
+    output('arri.alexa-mini.2_8k-16_9.arriraw', 'ARRIRAW 2.8K 16:9', 'ARRIRAW', 2880, 1620, miniBatch2Rates('ARRIRAW', '2.8K 16:9', 48, { license: 'ARRIRAW License Key' }), miniBatch2Sources),
+  ], miniBatch2Sources),
+  mode('arri.alexa-mini.2k-16_9', '2K 16:9', 2868, 1612, 23.66, 13.30, 'window', [
+    output('arri.alexa-mini.2k-16_9.prores', 'Apple ProRes 2K', 'Apple ProRes', 2048, 1152, miniBatch2Rates('Apple ProRes', '2K', 200), miniBatch2Sources),
+  ], miniBatch2Sources),
+  mode('arri.alexa-mini.3_2k-16_9', '3.2K 16:9', 3200, 1800, 26.40, 14.85, 'window', [
+    output('arri.alexa-mini.3_2k-16_9.prores', 'Apple ProRes 3.2K', 'Apple ProRes', 3200, 1800, miniBatch2Rates('Apple ProRes', '3.2K', 60), miniBatch2Sources),
+    output('arri.alexa-mini.3_2k-16_9.prores-uhd', 'Apple ProRes UHD', 'Apple ProRes', 3840, 2160, miniBatch2Rates('Apple ProRes', 'UHD', 60), miniBatch2Sources),
+  ], miniBatch2Sources),
+  mode('arri.alexa-mini.2_8k-4_3', '2.8K 4:3', 2880, 2160, 23.76, 17.82, 'window', [
+    output('arri.alexa-mini.2_8k-4_3.prores', 'Apple ProRes 2.8K 4:3', 'Apple ProRes', 2944, 2160, miniBatch2Rates('Apple ProRes', '4:3 2.8K', 50), miniBatch2Sources, { imageWidth: 2880, imageHeight: 2160 }),
+  ], miniBatch2Sources),
+  mode('arri.alexa-mini.2_39-2k-ana', '2K 2.39:1 Anamorphic', 2560, 2145, 21.12, 17.70, 'anamorphic-oriented', [
+    output('arri.alexa-mini.2_39-2k-ana.prores', 'Apple ProRes 2K 2.39:1 Anamorphic', 'Apple ProRes', 2048, 858, miniBatch2Rates('Apple ProRes', '2.39:1 2K Ana', 120), miniBatch2Sources),
+  ], miniBatch2Sources, { anamorphic: { orientation: 'horizontal', notes: 'ARRI lists this as a 2K anamorphic recording format; lens squeeze remains separate from capture geometry.' } }),
+  mode('arri.alexa-mini.hd-ana', 'HD Anamorphic', 1920, 2160, 15.84, 17.82, 'anamorphic-oriented', [
+    output('arri.alexa-mini.hd-ana.prores', 'Apple ProRes HD Anamorphic', 'Apple ProRes', 1920, 1080, miniBatch2Rates('Apple ProRes', 'HD Ana', 120), miniBatch2Sources),
+  ], miniBatch2Sources, { anamorphic: { orientation: 'horizontal' } }),
+  mode('arri.alexa-mini.open-gate-3_4k', '3.4K Open Gate', 3424, 2202, 28.25, 18.17, 'full-sensor', [
+    output('arri.alexa-mini.open-gate-3_4k.arriraw', 'ARRIRAW 3.4K Open Gate', 'ARRIRAW', 3424, 2202, miniBatch2Rates('ARRIRAW', '3.4K Open Gate', 30, { license: 'ARRIRAW License Key' }), miniBatch2Sources),
+    output('arri.alexa-mini.open-gate-3_4k.prores', 'Apple ProRes 3.4K Open Gate', 'Apple ProRes', 3424, 2202, miniBatch2Rates('Apple ProRes', '3.4K Open Gate', 30), miniBatch2Sources),
+    output('arri.alexa-mini.open-gate-3_4k.arriraw-4_3', 'ARRIRAW 4:3 from Open Gate', 'ARRIRAW', 3424, 2202, miniBatch2Rates('ARRIRAW', '4:3 from Open Gate', 30, { license: 'ARRIRAW License Key' }), miniBatch2Sources, { notes: 'ARRI lists this as an ARRIRAW output using the Open Gate 3.4K image content; it is not a separate sensor readout.' }),
+    output('arri.alexa-mini.open-gate-3_4k.arriraw-2_39-ana', 'ARRIRAW 2.39:1 Anamorphic from Open Gate', 'ARRIRAW', 3424, 2202, miniBatch2Rates('ARRIRAW', '2.39:1 Anamorphic from Open Gate', 30, { license: 'ARRIRAW License Key' }), miniBatch2Sources, { notes: 'ARRI lists this as an ARRIRAW output using the Open Gate 3.4K image content; it is not a separate sensor readout.' }),
+    output('arri.alexa-mini.open-gate-3_4k.arriraw-hd-ana', 'ARRIRAW HD Anamorphic from Open Gate', 'ARRIRAW', 3424, 2202, miniBatch2Rates('ARRIRAW', 'HD Anamorphic from Open Gate', 30, { license: 'ARRIRAW License Key' }), miniBatch2Sources, { notes: 'ARRI lists this as an ARRIRAW output using the Open Gate 3.4K image content; it is not a separate sensor readout.' }),
+  ], miniBatch2Sources),
+]
+
+const lfModes: RecordingMode[] = [
+  mode('arri.alexa-lf.open-gate', 'LF Open Gate', 4448, 3096, 36.70, 25.54, 'full-sensor', [
+    output('arri.alexa-lf.open-gate.arriraw', 'ARRIRAW 4.5K LF Open Gate', 'ARRIRAW', 4448, 3096, lfRates('ARRIRAW', 'LF Open Gate 4.5K', 90, 'SXR Capture Drive 1TB or 2TB'), lfSources),
+    output('arri.alexa-lf.open-gate.prores', 'Apple ProRes 4.5K LF Open Gate', 'Apple ProRes', 4480, 3096, lfRates('Apple ProRes', 'LF Open Gate 4.5K', 60, 'SXR Capture Drive 1TB or 2TB', 'ALEXA LF FAQ documents 60 fps for ProRes LF Open Gate on SXR Capture Drive; SxS PRO+ supports ProRes but its exact maximum is not assigned here.'), lfSources, { imageWidth: 4448, imageHeight: 3096 }),
+  ], lfSources),
+  mode('arri.alexa-lf.16_9', 'LF 16:9', 3840, 2160, 31.68, 17.82, 'window', [
+    output('arri.alexa-lf.16_9.prores-uhd', 'Apple ProRes UHD', 'Apple ProRes', 3840, 2160, lfRates('Apple ProRes', 'LF 16:9 UHD', 60, 'SXR Capture Drive 1TB or 2TB'), lfSources),
+    output('arri.alexa-lf.16_9.prores-2k', 'Apple ProRes 2K', 'Apple ProRes', 2048, 1152, lfRates('Apple ProRes', 'LF 16:9 2K', 60, 'SXR Capture Drive 1TB or 2TB'), lfSources),
+    output('arri.alexa-lf.16_9.prores-hd', 'Apple ProRes HD', 'Apple ProRes', 1920, 1080, lfRates('Apple ProRes', 'LF 16:9 HD', 60, 'SXR Capture Drive 1TB or 2TB'), lfSources),
+    output('arri.alexa-lf.16_9.arriraw-uhd', 'ARRIRAW UHD', 'ARRIRAW', 3840, 2160, lfRates('ARRIRAW', 'LF 16:9 UHD', 90, 'SXR Capture Drive 1TB or 2TB'), lfSources),
+  ], lfSources),
+  mode('arri.alexa-lf.2_39', 'LF 2.39:1', 4448, 1856, 36.70, 15.31, 'window', [
+    output('arri.alexa-lf.2_39.prores', 'Apple ProRes 4.5K LF 2.39:1', 'Apple ProRes', 4480, 1856, lfRates('Apple ProRes', 'LF 2.39:1 4.5K', 100, 'SXR Capture Drive 1TB or 2TB'), lfSources, { imageWidth: 4448, imageHeight: 1856 }),
+    output('arri.alexa-lf.2_39.arriraw', 'ARRIRAW 4.5K LF 2.39:1', 'ARRIRAW', 4448, 1856, lfRates('ARRIRAW', 'LF 2.39:1 4.5K', 150, 'SXR Capture Drive 1TB or 2TB'), lfSources),
+  ], lfSources),
+]
+
+const amiraModes: RecordingMode[] = [
+  mode('arri.amira.s16-hd', 'S16 HD', 1600, 900, 13.20, 7.43, 'super-16-window', [
+    output('arri.amira.s16-hd.prores', 'Apple ProRes S16 HD', 'Apple ProRes', 1920, 1080, amiraRates('Apple ProRes', 'S16 HD', 200), amiraSources),
+  ], amiraSources),
+  mode('arri.amira.16_9-hd', 'HD 16:9', 2880, 1620, 23.76, 13.37, 'window', [
+    output('arri.amira.16_9-hd.prores', 'Apple ProRes HD', 'Apple ProRes', 1920, 1080, amiraRates('Apple ProRes', 'HD', 200), amiraSources),
+    output('arri.amira.16_9-hd.mpeg-2', 'MPEG-2 HD', 'MPEG-2 HD', 1920, 1080, boundedRates({ numerator: 23976, denominator: 1000 }, { numerator: 5994, denominator: 100 }, 'MPEG-2 HD', 'HD', amiraFirmware, { notes: 'ARRI lists MPEG-2 HD as 23.976–59.94 fps; no additional discrete rates are inferred.' }), amiraSources),
+    output('arri.amira.16_9-hd.arriraw', 'ARRIRAW 2.8K 16:9', 'ARRIRAW', 2880, 1620, amiraRates('ARRIRAW', '2.8K 16:9', 48, 'ARRIRAW License Key'), amiraSources),
+  ], amiraSources),
+  mode('arri.amira.2k-16_9', '2K 16:9', 2868, 1612, 23.66, 13.30, 'window', [
+    output('arri.amira.2k-16_9.prores', 'Apple ProRes 2K', 'Apple ProRes', 2048, 1152, amiraRates('Apple ProRes', '2K', 200), amiraSources),
+  ], amiraSources),
+  mode('arri.amira.3_2k-16_9', '3.2K 16:9', 3200, 1800, 26.40, 14.85, 'window', [
+    output('arri.amira.3_2k-16_9.prores', 'Apple ProRes 3.2K', 'Apple ProRes', 3200, 1800, amiraRates('Apple ProRes', '3.2K', 60), amiraSources),
+  ], amiraSources),
+  mode('arri.amira.4k-uhd-16_9', '4K UHD 16:9', 3200, 1800, 26.40, 14.85, 'window', [
+    output('arri.amira.4k-uhd-16_9.prores', 'Apple ProRes UHD', 'Apple ProRes', 3840, 2160, amiraRates('Apple ProRes', 'UHD', 60, 'AMIRA 4K UHD License Key'), amiraSources),
+  ], amiraSources),
+]
+
 const arriSources = [
   {
     id: sources.miniProduct,
@@ -329,6 +470,165 @@ const arriSources = [
     accessedAt: ACCESSED_AT,
     verificationStatus: 'verified' as const,
   },
+  {
+    id: sources.miniProductBatch2,
+    sourceType: 'manufacturer-specification' as const,
+    manufacturerId: 'arri',
+    documentTitle: 'ALEXA Mini | Camera Systems — Technical Data',
+    url: 'https://www.arri.com/en/cine-systems/cine-cameras/legacy-cine-cameras/alexa-mini',
+    documentRevision: 'Current technical data page',
+    accessedAt: ACCESSED_AT,
+    verificationStatus: 'verified' as const,
+  },
+  {
+    id: sources.miniManualBatch2,
+    sourceType: 'manufacturer-manual' as const,
+    manufacturerId: 'arri',
+    documentTitle: 'ALEXA Mini SUP 6.1 User Manual',
+    url: 'https://www.arri.com/resource/blob/224858/9f4f64094e252696c3845cbcf4fe0b7b/user-manual-sup-6-1-alexa-mini-data.pdf',
+    documentRevision: 'SUP 6.1',
+    publicationDate: '2020-11-18',
+    firmwareRelevance: 'SUP 6.1; applicable to SUP 6.1.2',
+    accessedAt: ACCESSED_AT,
+    verificationStatus: 'verified' as const,
+  },
+  {
+    id: sources.miniSupBatch2,
+    sourceType: 'firmware-documentation' as const,
+    manufacturerId: 'arri',
+    documentTitle: 'ALEXA Mini SUP 6.1.2',
+    url: 'https://www.arri.com/resource/blob/263084/c32248e1ef6574c538ff2e8361497afb/alexa-mini-sup-6-1-2-release-notes-data.pdf',
+    documentRevision: 'SUP 6.1.2',
+    publicationDate: '2022-02-07',
+    firmwareRelevance: 'Current ALEXA Mini software update',
+    accessedAt: ACCESSED_AT,
+    verificationStatus: 'verified' as const,
+    notes: 'Maintenance release; ARRI states it can be installed on all previously shipped ALEXA Mini cameras.'
+  },
+  {
+    id: sources.miniFaqBatch2,
+    sourceType: 'manufacturer-specification' as const,
+    manufacturerId: 'arri',
+    documentTitle: 'ALEXA Mini Frequently Asked Questions',
+    url: 'https://www.arri.com/en/learn-help/learn-help-camera-system/frequently-asked-questions/alexa-mini',
+    documentRevision: 'Current FAQ page',
+    accessedAt: ACCESSED_AT,
+    verificationStatus: 'verified' as const,
+  },
+  {
+    id: sources.miniAfroBatch2,
+    sourceType: 'manufacturer-specification' as const,
+    manufacturerId: 'arri',
+    documentTitle: 'ARRI Formats and Resolutions Overview V6.3 — ALEXA Mini',
+    url: 'https://www.arri.com/resource/blob/405022/a7f09a1b2b341f7231be2503b9660c84/2026-07-arri-formatsandresolutionsoverview-v6-3-data.pdf',
+    documentRevision: 'V6.3',
+    publicationDate: '2026-07-15',
+    firmwareRelevance: 'Current ARRI formats overview',
+    accessedAt: ACCESSED_AT,
+    verificationStatus: 'verified' as const,
+  },
+  {
+    id: sources.lfProduct,
+    sourceType: 'manufacturer-specification' as const,
+    manufacturerId: 'arri',
+    documentTitle: 'ALEXA LF | Camera Systems — Technical Data',
+    url: 'https://www.arri.com/en/cine-systems/cine-cameras/alexa-lf',
+    documentRevision: 'Current technical data page',
+    accessedAt: ACCESSED_AT,
+    verificationStatus: 'verified' as const,
+  },
+  {
+    id: sources.lfManual,
+    sourceType: 'manufacturer-manual' as const,
+    manufacturerId: 'arri',
+    documentTitle: 'ALEXA LF User Manual SUP 4.3',
+    url: 'https://www.arri.com/resource/blob/200812/09cab27c321dbffdb466b8525e946b5e/arri-alexa-lf-user-manual-sup-4-3-data.pdf',
+    documentRevision: 'SUP 4.3',
+    firmwareRelevance: 'SUP 4.3',
+    accessedAt: ACCESSED_AT,
+    verificationStatus: 'verified' as const,
+  },
+  {
+    id: sources.lfSup,
+    sourceType: 'firmware-documentation' as const,
+    manufacturerId: 'arri',
+    documentTitle: 'ALEXA LF SUP 4.3',
+    url: 'https://www.arri.com/en/technical-service/firmware/software-and-firmware-updates-for-cameras/alexa-lf-sup-overview',
+    documentRevision: 'SUP 4.3',
+    publicationDate: '2021-09-15',
+    firmwareRelevance: 'Current ALEXA LF software update',
+    accessedAt: ACCESSED_AT,
+    verificationStatus: 'verified' as const,
+  },
+  {
+    id: sources.lfFaq,
+    sourceType: 'manufacturer-specification' as const,
+    manufacturerId: 'arri',
+    documentTitle: 'ALEXA LF Frequently Asked Questions',
+    url: 'https://www.arri.com/en/learn-help/learn-help-camera-system/frequently-asked-questions/alexa-lf-faq',
+    documentRevision: 'Current FAQ page',
+    accessedAt: ACCESSED_AT,
+    verificationStatus: 'verified' as const,
+    notes: 'Documents the three sensor modes, codec/media-dependent frame-rate behavior, and SxS PRO+ ProRes-only condition.'
+  },
+  {
+    id: sources.lfAfro,
+    sourceType: 'manufacturer-specification' as const,
+    manufacturerId: 'arri',
+    documentTitle: 'ARRI Formats and Resolutions Overview V6.3 — ALEXA LF',
+    url: 'https://www.arri.com/resource/blob/405022/a7f09a1b2b341f7231be2503b9660c84/2026-07-arri-formatsandresolutionsoverview-v6-3-data.pdf',
+    documentRevision: 'V6.3',
+    publicationDate: '2026-07-15',
+    firmwareRelevance: 'Current ARRI formats overview',
+    accessedAt: ACCESSED_AT,
+    verificationStatus: 'verified' as const,
+  },
+  {
+    id: sources.amiraProduct,
+    sourceType: 'manufacturer-specification' as const,
+    manufacturerId: 'arri',
+    documentTitle: 'AMIRA | Camera Systems — Technical Data',
+    url: 'https://www.arri.com/en/cine-systems/cine-cameras/amira',
+    documentRevision: 'Current technical data page',
+    accessedAt: ACCESSED_AT,
+    verificationStatus: 'verified' as const,
+  },
+  {
+    id: sources.amiraManual,
+    sourceType: 'manufacturer-manual' as const,
+    manufacturerId: 'arri',
+    documentTitle: 'AMIRA / AMIRA Live SUP 6.1 User Manual',
+    url: 'https://www.arri.com/resource/blob/224856/740d5ff8ba649665bdc73dc7222fb498/user-manual-amira-sup-6-1-data.pdf',
+    documentRevision: 'SUP 6.1',
+    publicationDate: '2020-11-30',
+    firmwareRelevance: 'SUP 6.1; applicable to SUP 6.1.2',
+    accessedAt: ACCESSED_AT,
+    verificationStatus: 'verified' as const,
+  },
+  {
+    id: sources.amiraSup,
+    sourceType: 'firmware-documentation' as const,
+    manufacturerId: 'arri',
+    documentTitle: 'AMIRA Live / AMIRA SUP 6.1.2',
+    url: 'https://www.arri.com/resource/blob/312978/6117432ce1fdf541f071d323b15248be/amira-sup-6-1-2-release-notes-data.pdf',
+    documentRevision: 'SUP 6.1.2',
+    publicationDate: '2022-02-07',
+    firmwareRelevance: 'Current AMIRA software update',
+    accessedAt: ACCESSED_AT,
+    verificationStatus: 'verified' as const,
+  },
+  {
+    id: sources.amiraAfro,
+    sourceType: 'manufacturer-specification' as const,
+    manufacturerId: 'arri',
+    documentTitle: 'ARRI Formats and Resolutions Overview V6.3 — AMIRA',
+    url: 'https://www.arri.com/resource/blob/405022/a7f09a1b2b341f7231be2503b9660c84/2026-07-arri-formatsandresolutionsoverview-v6-3-data.pdf',
+    documentRevision: 'V6.3',
+    publicationDate: '2026-07-15',
+    firmwareRelevance: 'Current ARRI formats overview',
+    accessedAt: ACCESSED_AT,
+    verificationStatus: 'verified' as const,
+  },
 ]
 
 export const ARRI_CAMERA_DATASET: CameraDataset = {
@@ -376,7 +676,69 @@ export const ARRI_CAMERA_DATASET: CameraDataset = {
       },
       recordingModes: a35Modes,
     },
+    {
+      id: 'arri.alexa-mini',
+      manufacturerId: 'arri',
+      manufacturerDisplayName: 'ARRI',
+      displayName: 'ALEXA Mini',
+      family: 'ALEXA',
+      status: 'verified',
+      sourceIds: miniBatch2Sources,
+      physicalSensor: {
+        id: 'arri.alexa-mini.alev-iii',
+        name: 'Super 35 ARRI ALEV III',
+        family: 'ALEV III',
+        widthMm: 28.25,
+        heightMm: 18.17,
+        nativeWidthPx: 3424,
+        nativeHeightPx: 2202,
+        sourceIds: miniBatch2Sources,
+      },
+      recordingModes: miniBatch2Modes,
+    },
+    {
+      id: 'arri.alexa-lf',
+      manufacturerId: 'arri',
+      manufacturerDisplayName: 'ARRI',
+      displayName: 'ALEXA LF',
+      family: 'ALEXA LF',
+      status: 'verified',
+      sourceIds: lfSources,
+      physicalSensor: {
+        id: 'arri.alexa-lf.alev-iii-a2x',
+        name: 'Large Format ARRI ALEV III (A2X)',
+        family: 'ALEV III (A2X)',
+        widthMm: 36.70,
+        heightMm: 25.54,
+        nativeWidthPx: 4448,
+        nativeHeightPx: 3096,
+        sourceIds: lfSources,
+      },
+      recordingModes: lfModes,
+    },
+    {
+      id: 'arri.amira',
+      manufacturerId: 'arri',
+      manufacturerDisplayName: 'ARRI',
+      displayName: 'AMIRA',
+      family: 'AMIRA',
+      status: 'verified',
+      sourceIds: amiraSources,
+      physicalSensor: {
+        id: 'arri.amira.alev-iii',
+        name: 'Super 35 ARRI ALEV III',
+        family: 'ALEV III',
+        widthMm: 26.40,
+        heightMm: 14.85,
+        nativeWidthPx: 3200,
+        nativeHeightPx: 1800,
+        sourceIds: amiraSources,
+      },
+      recordingModes: amiraModes,
+    },
   ],
 }
 
 export const ARRI_BATCH_1_CAMERA_IDS = ['arri.alexa-mini-lf', 'arri.alexa-35'] as const
+export const ARRI_BATCH_2_CAMERA_IDS = ['arri.alexa-mini', 'arri.alexa-lf', 'arri.amira'] as const
+export const ARRI_CAMERA_IDS = [...ARRI_BATCH_1_CAMERA_IDS, ...ARRI_BATCH_2_CAMERA_IDS] as const

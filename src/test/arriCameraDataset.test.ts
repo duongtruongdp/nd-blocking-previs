@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { formatCameraDatasetAudit } from '../cameras/cameraAudit'
 import { resolveCaptureSelection, validateCameraDataset } from '../cameras/cameraData'
-import { ARRI_BATCH_1_CAMERA_IDS, ARRI_CAMERA_DATASET } from '../cameras/data/arri'
+import { ARRI_BATCH_1_CAMERA_IDS, ARRI_BATCH_2_CAMERA_IDS, ARRI_CAMERA_DATASET, ARRI_CAMERA_IDS } from '../cameras/data/arri'
 import { CameraRegistry } from '../cameras/cameraRegistry'
 import {
   centeredDeliveryAperture,
@@ -12,20 +12,26 @@ import {
   sensorDiagonalMm,
 } from '../math/cinematography'
 
-describe('ARRI Batch 1 production camera dataset', () => {
-  it('contains exactly the requested verified ARRI cameras and validates', () => {
+describe('ARRI production camera dataset', () => {
+  it('contains the locked Batch 1 plus exactly the requested Batch 2 cameras and validates', () => {
     const result = validateCameraDataset(ARRI_CAMERA_DATASET)
     expect(result.valid).toBe(true)
     expect(ARRI_CAMERA_DATASET.manufacturers).toEqual([{ id: 'arri', displayName: 'ARRI' }])
-    expect(ARRI_CAMERA_DATASET.cameras.map((camera) => camera.id)).toEqual(ARRI_BATCH_1_CAMERA_IDS)
+    expect(ARRI_CAMERA_DATASET.cameras.map((camera) => camera.id)).toEqual(ARRI_CAMERA_IDS)
+    expect(ARRI_CAMERA_DATASET.cameras.slice(0, ARRI_BATCH_1_CAMERA_IDS.length).map((camera) => camera.id)).toEqual(ARRI_BATCH_1_CAMERA_IDS)
+    expect(ARRI_CAMERA_DATASET.cameras.slice(ARRI_BATCH_1_CAMERA_IDS.length).map((camera) => camera.id)).toEqual(ARRI_BATCH_2_CAMERA_IDS)
+    expect(ARRI_CAMERA_DATASET.cameras.map((camera) => camera.displayName)).not.toContain('ALEXA 65')
     expect(ARRI_CAMERA_DATASET.cameras.every((camera) => camera.status === 'verified')).toBe(true)
   })
 
   it('provides registry lookup, unique modes, output links, and resolvable provenance', () => {
     const registry = new CameraRegistry(ARRI_CAMERA_DATASET)
-    expect(registry.getCamerasByManufacturer('arri')).toHaveLength(2)
+    expect(registry.getCamerasByManufacturer('arri')).toHaveLength(5)
     expect(registry.getCameraById('arri.alexa-mini-lf')?.displayName).toBe('ALEXA Mini LF')
     expect(registry.getCameraById('arri.alexa-35')?.displayName).toBe('ALEXA 35')
+    expect(registry.getCameraById('arri.alexa-mini')?.displayName).toBe('ALEXA Mini')
+    expect(registry.getCameraById('arri.alexa-lf')?.displayName).toBe('ALEXA LF')
+    expect(registry.getCameraById('arri.amira')?.displayName).toBe('AMIRA')
 
     const sourceIds = new Set(ARRI_CAMERA_DATASET.sources.map((source) => source.id))
     const modeIds = new Set<string>()
@@ -41,7 +47,7 @@ describe('ARRI Batch 1 production camera dataset', () => {
         for (const output of mode.recordingOutputs ?? []) {
           expect(registry.getRecordingOutput(camera.id, mode.id, output.id)).toEqual(output)
           expect(output.sourceIds.every((sourceId) => sourceIds.has(sourceId))).toBe(true)
-          expect(output.frameRates.ranges?.length).toBeGreaterThan(0)
+          expect((output.frameRates.ranges?.length ?? 0) + (output.frameRates.explicit?.length ?? 0)).toBeGreaterThan(0)
         }
       }
     }
@@ -89,6 +95,58 @@ describe('ARRI Batch 1 production camera dataset', () => {
     expect(a35.recordingModes.every((mode) => mode.sourceIds.includes('arri.alexa-35.product') && mode.sourceIds.includes('arri.alexa-35.sup-6-1.manual') && mode.sourceIds.includes('arri.formats-overview-v6-3.alexa-35'))).toBe(true)
     expect(a35.recordingModes.every((mode) => (mode.recordingOutputs ?? []).every((output) => output.sourceIds.includes('arri.alexa-35.product') && output.sourceIds.includes('arri.alexa-35.sup-6-1.manual') && output.sourceIds.includes('arri.formats-overview-v6-3.alexa-35')))).toBe(true)
     expect(ARRI_CAMERA_DATASET.sources.every((source) => !/Xtreme/i.test(`${source.documentTitle} ${source.url ?? ''}`))).toBe(true)
+  })
+
+  it('locks the Batch 2 ALEXA Mini inventory, sensor geometry, and output conditions', () => {
+    const mini = ARRI_CAMERA_DATASET.cameras.find((camera) => camera.id === 'arri.alexa-mini')!
+    expect(mini.physicalSensor).toMatchObject({ nativeWidthPx: 3424, nativeHeightPx: 2202, widthMm: 28.25, heightMm: 18.17 })
+    expect(mini.recordingModes.map((mode) => mode.displayName)).toEqual([
+      'S16 HD',
+      '2.8K 16:9',
+      '2K 16:9',
+      '3.2K 16:9',
+      '2.8K 4:3',
+      '2K 2.39:1 Anamorphic',
+      'HD Anamorphic',
+      '3.4K Open Gate',
+    ])
+    const openGate = mini.recordingModes.find((mode) => mode.id === 'arri.alexa-mini.open-gate-3_4k')!
+    expect(openGate.recordingOutputs?.map((output) => [output.containerWidthPx, output.containerHeightPx, output.imageContentWidthPx, output.imageContentHeightPx])).toEqual([
+      [3424, 2202, 3424, 2202],
+      [3424, 2202, 3424, 2202],
+      [3424, 2202, 3424, 2202],
+      [3424, 2202, 3424, 2202],
+      [3424, 2202, 3424, 2202],
+    ])
+    expect(openGate.recordingOutputs?.[0].frameRates.ranges?.[0].conditions?.license).toBe('ARRIRAW License Key')
+    expect(mini.recordingModes.find((mode) => mode.id === 'arri.alexa-mini.2_39-2k-ana')?.anamorphic?.orientation).toBe('horizontal')
+  })
+
+  it('keeps ALEXA LF independent with three sensor modes and media-aware rates', () => {
+    const lf = ARRI_CAMERA_DATASET.cameras.find((camera) => camera.id === 'arri.alexa-lf')!
+    expect(lf.physicalSensor).toMatchObject({ nativeWidthPx: 4448, nativeHeightPx: 3096, widthMm: 36.70, heightMm: 25.54 })
+    expect(lf.recordingModes).toHaveLength(3)
+    expect(lf.recordingModes.map((mode) => mode.displayName)).toEqual(['LF Open Gate', 'LF 16:9', 'LF 2.39:1'])
+    expect(lf.recordingModes[0].recordingOutputs?.[0].frameRates.ranges?.[0].conditions?.media).toBe('SXR Capture Drive 1TB or 2TB')
+    expect(lf.recordingModes[0].recordingOutputs?.[1].frameRates.ranges?.[0].maximum.numerator).toBe(60)
+    expect(lf.recordingModes[1].recordingOutputs).toHaveLength(4)
+    expect(lf.recordingModes[2].recordingOutputs?.[1].frameRates.ranges?.[0].maximum.numerator).toBe(150)
+    expect(lf.recordingModes.some((mode) => mode.id.includes('mini-lf'))).toBe(false)
+  })
+
+  it('keeps AMIRA readout modes separate from recording outputs and licenses', () => {
+    const amira = ARRI_CAMERA_DATASET.cameras.find((camera) => camera.id === 'arri.amira')!
+    expect(amira.physicalSensor).toMatchObject({ nativeWidthPx: 3200, nativeHeightPx: 1800, widthMm: 26.40, heightMm: 14.85 })
+    expect(amira.recordingModes).toHaveLength(5)
+    const hd = amira.recordingModes.find((mode) => mode.id === 'arri.amira.16_9-hd')!
+    expect(hd.activeWidthPx).toBe(2880)
+    expect(hd.recordingOutputs?.map((output) => output.codec)).toEqual(['Apple ProRes', 'MPEG-2 HD', 'ARRIRAW'])
+    expect(hd.recordingOutputs?.[2].frameRates.ranges?.[0].conditions?.license).toBe('ARRIRAW License Key')
+    expect(hd.recordingOutputs?.[1].frameRates.ranges?.[0]).toMatchObject({
+      minimum: { numerator: 23976, denominator: 1000 },
+      maximum: { numerator: 5994, denominator: 100 },
+    })
+    expect(amira.recordingModes.find((mode) => mode.id === 'arri.amira.4k-uhd-16_9')?.recordingOutputs?.[0].frameRates.ranges?.[0].conditions?.license).toBe('AMIRA 4K UHD License Key')
   })
 
   it('resolves a production output snapshot without changing when the dataset later changes', () => {

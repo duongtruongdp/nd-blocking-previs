@@ -1,11 +1,16 @@
-# ARRI Batch 1 Dataset Review
+# ARRI Verified Camera Dataset Review
 
-Milestone 2.5B populates exactly two production cameras:
+The dataset now contains the two locked Batch 1 cameras plus exactly three
+Batch 2 production cameras:
 
 - ARRI ALEXA Mini LF
 - ARRI ALEXA 35
+- ARRI ALEXA Mini
+- ARRI ALEXA LF
+- ARRI AMIRA
 
-No other manufacturer or ARRI camera is included. The data is stored in
+The batch is deliberately closed without ALEXA 65. No other manufacturer or
+ARRI camera is included. The data is stored in
 [`src/cameras/data/arri.ts`](../src/cameras/data/arri.ts), outside UI
 components and outside synthetic fixtures.
 
@@ -25,6 +30,16 @@ All production facts use official ARRI sources, accessed 2026-10-04.
 | [ALEXA 35 SUP 6.1 User Manual](https://www.arri.com/resource/blob/406922/b3de0f288676a2665befd33a217fd524/alexa-35-sup-6-1-0-user-manual-en-data.pdf) | SUP 6.1.0, 2026-07-07 | Sensor-mode/output relationship, licenses, anamorphic workflow |
 | [ALEXA 35 SUP 6.0.0 User Manual](https://www.arri.com/resource/blob/403596/9bca057cb6a962cff63484fd092e4b33/alexa-35-sup-6-0-0-user-manual-en-data.pdf) | SUP 6.0.0, 2026-04-15 | Historical HD S16 conflict reference; not active mode provenance |
 | [ALEXA 35 Recording Formats Poster](https://www.arri.com/resource/blob/296424/812bdde50a7339a6748441a2983a90c9/alexa-35-recording-format-poster-data.pdf) | 2023-07-25 | Recording-format cross-check; superseded for current values by V6.3 |
+| [ALEXA Mini technical data](https://www.arri.com/en/cine-systems/cine-cameras/legacy-cine-cameras/alexa-mini) | Current product page | Physical Super 35 sensor, active areas, outputs, codecs, media, and FPS |
+| [ALEXA Mini SUP 6.1 User Manual](https://www.arri.com/resource/blob/224858/9f4f64094e252696c3845cbcf4fe0b7b/user-manual-sup-6-1-alexa-mini-data.pdf) | SUP 6.1, applicable to SUP 6.1.2 | Camera-specific mode/output and license cross-check |
+| [ALEXA Mini SUP 6.1.2](https://www.arri.com/resource/blob/263084/c32248e1ef6574c538ff2e8361497afb/alexa-mini-sup-6-1-2-release-notes-data.pdf) | 2022-02-07 | Current Mini software context |
+| [ALEXA Mini FAQ](https://www.arri.com/en/learn-help/learn-help-camera-system/frequently-asked-questions/alexa-mini) | Current FAQ | Sensor-mode and output relationship |
+| [ALEXA LF technical data](https://www.arri.com/en/cine-systems/cine-cameras/alexa-lf) | Current product page | Physical LF sensor, three modes, outputs, codecs, media, and FPS |
+| [ALEXA LF FAQ](https://www.arri.com/en/learn-help/learn-help-camera-system/frequently-asked-questions/alexa-lf-faq) | Current FAQ | Three sensor modes; codec/media-dependent FPS; SxS PRO+ ProRes-only condition |
+| [ALEXA LF User Manual SUP 4.3](https://www.arri.com/resource/blob/200812/09cab27c321dbffdb466b8525e946b5e/arri-alexa-lf-user-manual-sup-4-3-data.pdf) | SUP 4.3 | Camera-specific mode/output cross-check |
+| [AMIRA technical data](https://www.arri.com/en/cine-systems/cine-cameras/amira) | Current product page | Physical Super 35 sensor, outputs, codecs, licenses, media, and FPS |
+| [AMIRA / AMIRA Live SUP 6.1 User Manual](https://www.arri.com/resource/blob/224856/740d5ff8ba649665bdc73dc7222fb498/user-manual-amira-sup-6-1-data.pdf) | SUP 6.1, applicable to SUP 6.1.2 | Camera-specific mode/output and license cross-check |
+| [AMIRA SUP 6.1.2](https://www.arri.com/resource/blob/312978/6117432ce1fdf541f071d323b15248be/amira-sup-6-1-2-release-notes-data.pdf) | 2022-02-07 | Current AMIRA software context |
 
 Each camera, physical sensor, sensor mode, and recording output carries source
 IDs. The validator rejects unknown source references and requires HTTP(S) URLs
@@ -51,10 +66,19 @@ by `src/math/cinematography.ts`. Anamorphic metadata records only official
 workflow intent/orientation; it does not apply lens squeeze to the physical
 sensor geometry.
 
-The current dataset includes nine verified Mini LF modes and nine original
-ALEXA 35 sensor modes. ALEXA 35 3.8K 2.39:1 is represented as a ProRes output
-of the original 3.3K 6:5 mode, not as a separate sensor mode. The original
-ALEXA 35 dataset retains 2K 16:9 S16; it does not create an HD S16 sensor mode.
+The current dataset includes nine verified Mini LF modes, nine original
+ALEXA 35 sensor modes, eight ALEXA Mini modes, three independent ALEXA LF
+modes, and five AMIRA modes. ALEXA 35 3.8K 2.39:1 remains a ProRes output of
+the original 3.3K 6:5 mode, not a separate sensor mode. The original ALEXA 35
+dataset retains 2K 16:9 S16; it does not create an HD S16 sensor mode.
+
+Batch 2 keeps the same hierarchy for every camera: physical sensor, active
+readout, then codec/output. ALEXA LF's ProRes rates are attached to the
+documented SXR Capture Drive condition; the official FAQ confirms that SxS
+PRO+ is ProRes-only, but an exact SxS maximum is not invented where the source
+does not state one. AMIRA's MPEG-2 HD range is represented with explicit
+documented rate values rather than a synthetic continuous range.
+
 Image-circle values are deliberately not copied into the production record
 because the current schema does not need a manufacturer image-circle fact for
 the requested milestone.

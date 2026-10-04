@@ -3,7 +3,12 @@ import { blockingStore, useBlockingSelector } from '../state/blockingStore'
 import { ACTOR_COLOR_PRESETS } from '../domain/blockingCommands'
 import { CHARACTER_REGISTRY } from '../characters/characterRegistry'
 import { poseCategoryLabel, posesForCategory } from '../characters/poseLibrary'
-import type { ActorDocument, Placement, PoseCategory, PropDocument, Vec3 } from '../domain/types'
+import { ARRI_CAMERA_DATASET } from '../cameras/data/arri'
+import { CameraRegistry } from '../cameras/cameraRegistry'
+import type { ActorDocument, CameraDocument, CameraFrameGuide, LensProfile, Placement, PoseCategory, PropDocument, Vec3 } from '../domain/types'
+import { captureAspectRatio } from '../math/cinematography'
+
+const cameraRegistry = new CameraRegistry(ARRI_CAMERA_DATASET)
 
 export function Inspector() {
   const state = useBlockingSelector((snapshot) => snapshot)
@@ -12,13 +17,14 @@ export function Inspector() {
     ? shot?.actors.find((entry) => entry.id === state.selection.entityId)
     : state.selection.kind === 'prop'
       ? shot?.props.find((entry) => entry.id === state.selection.entityId)
+      : state.selection.kind === 'camera'
+        ? shot?.cameras.find((entry) => entry.id === state.selection.entityId)
       : undefined
 
   return (
-    <aside className="side-panel inspector-panel" aria-label="Inspector">
+    <aside className="side-panel inspector-panel" aria-label="Details">
       <div className="panel-heading">
-        <span className="panel-kicker">Details</span>
-        <h2>INSPECTOR</h2>
+        <h2>DETAILS</h2>
       </div>
       {entity && state.selection.kind ? (
         <InspectorContent key={`${entity.id}-${state.project.updatedAt}`} entity={entity} kind={state.selection.kind} />
@@ -33,7 +39,8 @@ export function Inspector() {
   )
 }
 
-function InspectorContent({ entity, kind }: { entity: ActorDocument | PropDocument; kind: 'actor' | 'prop' }) {
+function InspectorContent({ entity, kind }: { entity: ActorDocument | PropDocument | CameraDocument; kind: 'actor' | 'prop' | 'camera' }) {
+  if (kind === 'camera') return <CameraInspector camera={entity as CameraDocument} />
   const isActor = kind === 'actor'
   const actor = isActor ? entity as ActorDocument : undefined
   const prop = !isActor ? entity as PropDocument : undefined
@@ -61,9 +68,9 @@ function InspectorContent({ entity, kind }: { entity: ActorDocument | PropDocume
       </section>
 
       <section className="inspector-section">
-        <div className="inspector-section-label">{isActor ? 'FACING' : 'ROTATION'}</div>
+        <div className="inspector-section-label">{isActor ? 'FACING DIRECTION' : 'ROTATION'}</div>
         <NumberField
-          label="Y"
+          label="Direction"
           unit="°"
           value={radiansToDegrees(entity.placement.rotation.radians[1])}
           onCommit={(degrees) => commitFacing(entity.placement, degrees)}
@@ -100,13 +107,13 @@ function InspectorContent({ entity, kind }: { entity: ActorDocument | PropDocume
         <section className="inspector-section">
           <div className="inspector-section-label">BLOCKING</div>
           <NumberField label="Height" unit="m" value={actor.appearance.heightM} onCommit={(value) => blockingStore.setSelectedActorHeight(value)} />
-          <p className="field-note">Overall Actor stature</p>
+          <p className="field-note">Actor height</p>
         </section>
       ) : null}
 
       {prop ? (
         <section className="inspector-section">
-          <div className="inspector-section-label">DIMENSIONS</div>
+          <div className="inspector-section-label">SIZE</div>
           <div className="field-stack">
             {(['Width', 'Height', 'Depth'] as const).map((label, index) => (
               <NumberField
@@ -126,6 +133,109 @@ function InspectorContent({ entity, kind }: { entity: ActorDocument | PropDocume
       </div>
     </div>
   )
+}
+
+function CameraInspector({ camera }: { camera: CameraDocument }) {
+  const model = cameraRegistry.getCameraById(camera.cameraModelId)
+  const modes = model?.recordingModes ?? []
+  const mode = modes.find((candidate) => candidate.id === camera.sensorModeId)
+  const outputs = mode?.recordingOutputs ?? []
+  const profileValue = camera.lens.profile.type === 'spherical' ? 'spherical' : camera.lens.profile.preset
+  return (
+    <div className="inspector-content">
+      <section className="inspector-section">
+        <div className="inspector-section-label">CAMERA</div>
+        <TextField label="Name" defaultValue={camera.name} onCommit={(name) => blockingStore.renameSelected(name)} />
+        <SelectField
+          label="Camera Model"
+          defaultValue={camera.cameraModelId}
+          options={[{ label: 'Generic Camera', value: 'generic.camera' }, ...cameraRegistry.getCamerasByManufacturer('arri').map((candidate) => ({ label: candidate.displayName, value: candidate.id }))]}
+          onCommit={(value) => value === 'generic.camera' ? undefined : blockingStore.setSelectedCameraModel(value)}
+        />
+        {model ? (
+          <>
+            <SelectField
+              label="Capture Mode"
+              defaultValue={camera.sensorModeId}
+              options={modes.map((candidate) => ({ label: candidate.displayName, value: candidate.id }))}
+              onCommit={(value) => blockingStore.setSelectedCameraSensorMode(value)}
+            />
+            <SelectField
+              label="Recording Format"
+              defaultValue={camera.recordingOutputId ?? outputs[0]?.id ?? ''}
+              options={outputs.map((output) => ({ label: output.displayName, value: output.id }))}
+              onCommit={(value) => blockingStore.setSelectedCameraRecordingOutput(value || undefined)}
+            />
+          </>
+        ) : <p className="field-note">Choose an ARRI camera model to select its sensor modes and recording formats.</p>}
+      </section>
+
+      <section className="inspector-section">
+        <div className="inspector-section-label">LENS</div>
+        <NumberField label="Focal Length" unit="mm" value={camera.lens.focalLengthMm} onCommit={(value) => blockingStore.setSelectedCameraFocalLength(value)} />
+        <SelectField
+          label="Lens Type"
+          defaultValue={profileValue}
+          options={[{ label: 'Spherical', value: 'spherical' }, { label: 'Anamorphic 1.33x', value: '1.33' }, { label: 'Anamorphic 1.5x', value: '1.5' }, { label: 'Anamorphic 1.8x', value: '1.8' }, { label: 'Anamorphic 2.0x', value: '2.0' }, { label: 'Custom Anamorphic', value: 'custom' }]}
+          onCommit={(value) => commitLensProfile(camera.lens.profile, value)}
+        />
+        {camera.lens.profile.type === 'anamorphic' && camera.lens.profile.preset === 'custom' ? (
+          <NumberField label="Custom Squeeze" unit="x" value={camera.lens.profile.squeezeFactor} onCommit={(value) => blockingStore.setSelectedCameraLensProfile({ type: 'anamorphic', preset: 'custom', squeezeFactor: value })} />
+        ) : null}
+      </section>
+
+      <section className="inspector-section">
+        <div className="inspector-section-label">POSITION</div>
+        <div className="field-grid two-columns">
+          {(['X', 'Z'] as const).map((axis) => (
+            <NumberField key={axis} label={axis} unit="m" value={camera.placement.position[axis === 'X' ? 0 : 2]} onCommit={(value) => commitCameraPosition(camera.placement, axis === 'X' ? 0 : 2, value)} />
+          ))}
+        </div>
+        <NumberField label="Camera Height" unit="m" value={camera.placement.position[1]} onCommit={(value) => commitCameraPosition(camera.placement, 1, value)} />
+        <div className="field-grid three-columns">
+          <NumberField label="Pan" unit="°" value={radiansToDegrees(camera.placement.rotation.radians[1])} onCommit={(value) => commitCameraRotation(camera.placement, 1, value)} />
+          <NumberField label="Tilt" unit="°" value={radiansToDegrees(camera.placement.rotation.radians[0])} onCommit={(value) => commitCameraRotation(camera.placement, 0, value)} />
+          <NumberField label="Roll" unit="°" value={radiansToDegrees(camera.placement.rotation.radians[2])} onCommit={(value) => commitCameraRotation(camera.placement, 2, value)} />
+        </div>
+      </section>
+
+      <section className="inspector-section">
+        <div className="inspector-section-label">FOCUS</div>
+        <NumberField label="Focus Distance" unit="m" value={camera.lens.focusDistanceM} onCommit={(value) => blockingStore.setSelectedCameraFocusDistance(value)} />
+      </section>
+
+      <section className="inspector-section">
+        <div className="inspector-section-label">FRAME</div>
+        <p className="camera-readout">Sensor Area <strong>{camera.resolvedCapture.activeWidthMm.toFixed(2)} × {camera.resolvedCapture.activeHeightMm.toFixed(2)} mm</strong></p>
+        <p className="camera-readout">Capture Ratio <strong>{captureAspectRatio(camera.resolvedCapture).toFixed(2)}:1</strong></p>
+        <SelectField
+          label="Frame Guide"
+          defaultValue={camera.frameGuide.preset}
+          options={[{ label: 'Capture', value: 'capture' }, { label: '16:9', value: '16:9' }, { label: '1.85:1', value: '1.85:1' }, { label: '2.00:1', value: '2.00:1' }, { label: '2.39:1', value: '2.39:1' }, { label: 'Custom', value: 'custom' }]}
+          onCommit={(value) => commitFrameGuide(value)}
+        />
+        <p className="field-note">Frame guide only — camera setup stays the same.</p>
+        {camera.frameGuide.preset === 'custom' ? (
+          <div className="field-grid two-columns">
+            <NumberField label="Width" unit="" value={camera.frameGuide.width ?? 1.85} onCommit={(value) => commitCustomFrameGuide(value, camera.frameGuide.height ?? 1)} />
+            <NumberField label="Height" unit="" value={camera.frameGuide.height ?? 1} onCommit={(value) => commitCustomFrameGuide(camera.frameGuide.width ?? 1.85, value)} />
+          </div>
+        ) : null}
+      </section>
+
+      <div className="inspector-actions">
+        <button type="button" className="delete-button" onClick={() => blockingStore.deleteSelected()}>Delete Camera</button>
+      </div>
+    </div>
+  )
+
+  function commitFrameGuide(value: string): void {
+    if (value === 'custom') {
+      blockingStore.setSelectedCameraFrameGuide({ preset: 'custom', width: 1.85, height: 1 })
+      return
+    }
+    blockingStore.setSelectedCameraFrameGuide({ preset: value as CameraFrameGuide['preset'] })
+  }
 }
 
 function SelectField({ label, defaultValue, options, onCommit }: { label: string; defaultValue: string; options: Array<{ label: string; value: string }>; onCommit: (value: string) => void }) {
@@ -244,6 +354,34 @@ function commitDimension(dimensions: Vec3, axis: number, value: number): void {
   const next: Vec3 = [...dimensions]
   next[axis] = value
   blockingStore.setSelectedPropDimensions(next)
+}
+
+function commitCameraPosition(placement: Placement, axis: number, value: number): void {
+  const position: Vec3 = [...placement.position]
+  position[axis] = value
+  blockingStore.setSelectedPlacement({ ...placement, position })
+}
+
+function commitCameraRotation(placement: Placement, axis: number, degrees: number): void {
+  const radians: Vec3 = [...placement.rotation.radians]
+  radians[axis] = degreesToRadians(degrees)
+  blockingStore.setSelectedPlacement({ ...placement, rotation: { order: 'XYZ', radians } })
+}
+
+function commitLensProfile(current: LensProfile, value: string): void {
+  if (value === 'spherical') {
+    blockingStore.setSelectedCameraLensProfile({ type: 'spherical', preset: 'spherical', squeezeFactor: 1 })
+    return
+  }
+  if (value === 'custom') {
+    blockingStore.setSelectedCameraLensProfile({ type: 'anamorphic', preset: 'custom', squeezeFactor: current.type === 'anamorphic' ? current.squeezeFactor : 1.33 })
+    return
+  }
+  blockingStore.setSelectedCameraLensProfile({ type: 'anamorphic', preset: value as '1.33' | '1.5' | '1.8' | '2.0', squeezeFactor: Number(value) })
+}
+
+function commitCustomFrameGuide(width: number, height: number): void {
+  blockingStore.setSelectedCameraFrameGuide({ preset: 'custom', width, height })
 }
 
 function formatNumber(value: number): string {

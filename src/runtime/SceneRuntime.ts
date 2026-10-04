@@ -4,7 +4,7 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import { resolveCharacterDefinition } from '../characters/characterRegistry'
 import { getPoseDefinition, type PoseDefinition } from '../characters/poseLibrary'
 import { productionPoseIntents } from './anatomicalPose'
-import type { ActorDocument, EulerRotation, Placement, PropDocument } from '../domain/types'
+import type { ActorDocument, CameraDocument, EulerRotation, Placement, PropDocument } from '../domain/types'
 import { attachCharacterInstance, CharacterAssetLoader, computeBlockingBounds, getRigDiagnosticReport, inspectCharacterInstance, isUsableCharacterInstance, removeCharacterInstance, updateActorRuntimeAppearance } from './characterAssets'
 import { createBlockingProxy, BlockingAssetLibrary, updateBlockingProxy } from './entityAdapters'
 import { RuntimeRegistry } from './RuntimeRegistry'
@@ -12,7 +12,7 @@ import { capStagePixelRatio } from './renderPolicy'
 import { validatePoseDefinition, type PoseDiagnosticsSnapshot } from './rigDiagnostics'
 
 export type RuntimeTool = 'select' | 'move' | 'rotate'
-export type BlockingEntity = ActorDocument | PropDocument
+export type BlockingEntity = ActorDocument | PropDocument | CameraDocument
 
 export type SceneInteractionHandlers = {
   onSelectionChange: (entityId: string | null) => void
@@ -152,23 +152,25 @@ export class SceneRuntime {
     this.interactionHandlers = handlers
   }
 
-  syncBlockingEntities(actors: ActorDocument[], props: PropDocument[]): void {
-    const entities: BlockingEntity[] = [...actors, ...props]
+  syncBlockingEntities(actors: ActorDocument[], props: PropDocument[], cameras: CameraDocument[] = []): void {
+    const entities: BlockingEntity[] = [...actors, ...props, ...cameras]
     const incomingIds = new Set(entities.map((entity) => entity.id))
 
     this.registry.rootsList().forEach((root) => {
       const entityId = root.userData.entityId as string | undefined
       if (entityId && !incomingIds.has(entityId)) {
-        removeCharacterInstance(root as THREE.Group)
+        if (root.userData.entityKind === 'actor') removeCharacterInstance(root as THREE.Group)
+        disposeCameraRuntime(root)
         this.scene.remove(this.registry.unregister(entityId) ?? root)
       }
     })
 
     entities.forEach((entity) => {
-      const expectedKind = 'character' in entity ? 'actor' : 'prop'
+      const expectedKind = 'character' in entity ? 'actor' : 'lens' in entity ? 'camera' : 'prop'
       const existing = this.registry.get(entity.id)
       if (existing && existing.userData.entityKind !== expectedKind) {
-        removeCharacterInstance(existing as THREE.Group)
+        if (existing.userData.entityKind === 'actor') removeCharacterInstance(existing as THREE.Group)
+        disposeCameraRuntime(existing)
         this.scene.remove(this.registry.unregister(entity.id) ?? existing)
       }
 
@@ -186,6 +188,7 @@ export class SceneRuntime {
 
     if (this.selectedEntityId) this.updateSelectionVisual()
     this.updateFacingIndicators()
+    this.updateCameraGuides()
     this.requestRender()
   }
 
@@ -193,6 +196,7 @@ export class SceneRuntime {
     this.selectedEntityId = entityId
     this.updateSelectionVisual()
     this.updateFacingIndicators()
+    this.updateCameraGuides()
     this.configureTransformControls()
     this.requestRender()
   }
@@ -318,6 +322,14 @@ export class SceneRuntime {
       root.traverse((object) => {
         if (object.userData.facingIndicator === true) object.visible = visible
       })
+    })
+  }
+
+  private updateCameraGuides(): void {
+    this.registry.rootsList().forEach((root) => {
+      if (root.userData.entityKind !== 'camera') return
+      const guide = root.getObjectByName('CameraFrustumGuide')
+      if (guide) guide.visible = root.userData.entityId === this.selectedEntityId
     })
   }
 
@@ -766,6 +778,16 @@ function placementFromObject(object: THREE.Object3D): Placement {
 function disposeMaterial(material: THREE.Material | THREE.Material[]): void {
   const materials = Array.isArray(material) ? material : [material]
   materials.forEach((entry) => entry.dispose())
+}
+
+function disposeCameraRuntime(root: THREE.Object3D): void {
+  const guide = root.getObjectByName('CameraFrustumGuide')
+  guide?.traverse((object) => {
+    if (object instanceof THREE.Line || object instanceof THREE.LineSegments) {
+      object.geometry.dispose()
+      disposeMaterial(object.material)
+    }
+  })
 }
 
 function getContactDebugObject(model: THREE.Object3D, actorRoot: THREE.Object3D, report: ReturnType<typeof getRigDiagnosticReport>): THREE.Group | null {

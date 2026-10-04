@@ -52,6 +52,16 @@ describe('.ndblock project format', () => {
     })
   })
 
+  it('normalizes legacy V1 cameras into the serializable Camera Object foundation', () => {
+    const loaded = deserializeProject(fixture('minimum-valid.ndblock'))
+    const camera = loaded.shots[0].cameras[0]
+    expect(camera.cameraModelId).toBe('generic.camera')
+    expect(camera.sensorModeId).toBe('generic.camera.open-gate')
+    expect(camera.resolvedCapture).toMatchObject({ datasetVersion: '1.0.0', activeWidthMm: 24.89, activeHeightMm: 18.66 })
+    expect(camera.frameGuide).toEqual({ preset: 'capture' })
+    expect(() => serializeProject(loaded)).not.toThrow()
+  })
+
   it('rejects malformed format identifiers and project data', () => {
     const invalidFormat = validateProjectFile(JSON.parse(fixture('invalid-format.ndblock')))
     const malformed = validateProjectFile(JSON.parse(fixture('malformed-project.ndblock')))

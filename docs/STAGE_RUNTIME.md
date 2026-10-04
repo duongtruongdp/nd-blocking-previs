@@ -13,9 +13,22 @@ This document records the Stage-specific decisions introduced by Milestone 1.
 - resize observation
 - render scheduling
 - internal ground, grid, and illumination
+- serializable Camera object proxies and finite frustum guides
 - disposal
 
 The navigation camera is an editor viewpoint only. It is not a `CameraDocument`, is not part of selection, and is never written to `.ndblock` project data.
+
+Each filmmaking Camera is a separate registered Stage object. Its visible proxy
+contains a lightweight camera body, lens, forward marker, and finite frustum
+guide. The guide projection is derived from the CameraDocument's resolved
+active sensor dimensions and focal length; it is not an infinite line or a
+hardcoded field of view. The guide is shown for the selected Camera in Blocking
+View and is removed with the Camera.
+
+Camera height is the CameraDocument world-Y placement value. Pan, Tilt, and
+Roll are displayed in degrees at the Inspector boundary and stored as XYZ
+Euler radians. The filmmaking camera looks along local negative Z; this
+convention is independent of the navigation camera controls.
 
 React mounts `SceneRuntime` through the `Stage` component and only owns the mount element and user-facing failure state. Three.js objects are not placed in React state.
 

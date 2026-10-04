@@ -2,6 +2,7 @@ import {
   CURRENT_PROJECT_FORMAT_VERSION,
   type ActorDocument,
   type CameraDocument,
+  type CameraFrameGuide,
   type EulerRotation,
   type FrameRate,
   type FrameSettings,
@@ -17,6 +18,7 @@ import {
   type TimelineTrack,
   type Vec3,
 } from './types'
+import type { ResolvedCaptureSelection } from '../cameras/cameraData'
 import { isValidFrameRate } from '../math/frameRate'
 import { validateMarkRange } from './timeline'
 import { DEFAULT_CHARACTER_ID, getCharacterDefinition } from '../characters/characterRegistry'
@@ -247,14 +249,115 @@ function validateCamera(input: unknown, path: string, issues: ValidationIssue[])
     issues.push({ path, message: 'Camera must be an object.' })
     return undefined
   }
-  onlyKeys(input, ['id', 'name', 'placement', 'lens', 'aim'], path, issues)
+  onlyKeys(input, ['id', 'name', 'cameraModelId', 'sensorModeId', 'recordingOutputId', 'resolvedCapture', 'placement', 'lens', 'frameGuide', 'aim'], path, issues)
   requireId(input.id, `${path}.id`, issues)
   requireNonEmptyString(input.name, `${path}.name`, issues)
   const placement = validatePlacement(input.placement, `${path}.placement`, issues)
   const lens = validateLens(input.lens, `${path}.lens`, issues)
+  const resolvedCapture = input.resolvedCapture === undefined
+    ? undefined
+    : validateResolvedCapture(input.resolvedCapture, `${path}.resolvedCapture`, issues)
+  const frameGuide = input.frameGuide === undefined
+    ? { preset: 'capture' as const }
+    : validateCameraFrameGuide(input.frameGuide, `${path}.frameGuide`, issues)
   const aim = validateAim(input.aim, `${path}.aim`, issues)
-  if (!placement || !lens || !aim) return undefined
-  return { id: input.id as string, name: input.name as string, placement, lens, aim }
+  if (!placement || !lens || !aim || !frameGuide) return undefined
+  const normalizedCapture = resolvedCapture ?? legacyCaptureFromSensorFormat(lens.sensorFormat)
+  const cameraModelId = typeof input.cameraModelId === 'string' && input.cameraModelId.trim() ? input.cameraModelId : normalizedCapture.cameraId
+  const sensorModeId = typeof input.sensorModeId === 'string' && input.sensorModeId.trim() ? input.sensorModeId : normalizedCapture.recordingModeId
+  if (!cameraModelId || !sensorModeId) return undefined
+  return {
+    id: input.id as string,
+    name: input.name as string,
+    cameraModelId,
+    sensorModeId,
+    ...(typeof input.recordingOutputId === 'string' ? { recordingOutputId: input.recordingOutputId } : {}),
+    resolvedCapture: normalizedCapture,
+    placement,
+    lens,
+    frameGuide,
+    aim,
+  }
+}
+
+function validateResolvedCapture(input: unknown, path: string, issues: ValidationIssue[]): ResolvedCaptureSelection | undefined {
+  if (!isRecord(input)) {
+    issues.push({ path, message: 'resolvedCapture must be an object.' })
+    return undefined
+  }
+  onlyKeys(input, ['datasetVersion', 'cameraId', 'recordingModeId', 'physicalSensorId', 'activeWidthMm', 'activeHeightMm', 'recordingOutputId', 'recordedWidthPx', 'recordedHeightPx', 'imageContentWidthPx', 'imageContentHeightPx'], path, issues)
+  requireNonEmptyString(input.datasetVersion, `${path}.datasetVersion`, issues)
+  if (input.datasetVersion !== '1.0.0') issues.push({ path: `${path}.datasetVersion`, message: 'Unsupported camera dataset version.' })
+  requireNonEmptyString(input.cameraId, `${path}.cameraId`, issues)
+  requireNonEmptyString(input.recordingModeId, `${path}.recordingModeId`, issues)
+  requireNonEmptyString(input.physicalSensorId, `${path}.physicalSensorId`, issues)
+  const activeWidthMm = requireFinite(input.activeWidthMm, `${path}.activeWidthMm`, issues)
+  const activeHeightMm = requireFinite(input.activeHeightMm, `${path}.activeHeightMm`, issues)
+  if (activeWidthMm !== undefined && activeWidthMm <= 0) issues.push({ path: `${path}.activeWidthMm`, message: 'Active width must be greater than zero.' })
+  if (activeHeightMm !== undefined && activeHeightMm <= 0) issues.push({ path: `${path}.activeHeightMm`, message: 'Active height must be greater than zero.' })
+  const optionalPixels = ['recordedWidthPx', 'recordedHeightPx', 'imageContentWidthPx', 'imageContentHeightPx'] as const
+  optionalPixels.forEach((key) => {
+    if (input[key] !== undefined) {
+      const value = requireFinite(input[key], `${path}.${key}`, issues)
+      if (value !== undefined && value <= 0) issues.push({ path: `${path}.${key}`, message: `${key} must be greater than zero.` })
+    }
+  })
+  if (activeWidthMm === undefined || activeHeightMm === undefined || typeof input.datasetVersion !== 'string' || typeof input.cameraId !== 'string' || typeof input.recordingModeId !== 'string' || typeof input.physicalSensorId !== 'string') return undefined
+  return {
+    datasetVersion: '1.0.0',
+    cameraId: input.cameraId,
+    recordingModeId: input.recordingModeId,
+    physicalSensorId: input.physicalSensorId,
+    activeWidthMm,
+    activeHeightMm,
+    ...(typeof input.recordingOutputId === 'string' ? { recordingOutputId: input.recordingOutputId } : {}),
+    ...(typeof input.recordedWidthPx === 'number' ? { recordedWidthPx: input.recordedWidthPx } : {}),
+    ...(typeof input.recordedHeightPx === 'number' ? { recordedHeightPx: input.recordedHeightPx } : {}),
+    ...(typeof input.imageContentWidthPx === 'number' ? { imageContentWidthPx: input.imageContentWidthPx } : {}),
+    ...(typeof input.imageContentHeightPx === 'number' ? { imageContentHeightPx: input.imageContentHeightPx } : {}),
+  }
+}
+
+function validateCameraFrameGuide(input: unknown, path: string, issues: ValidationIssue[]): CameraFrameGuide | undefined {
+  if (!isRecord(input)) {
+    issues.push({ path, message: 'frameGuide must be an object.' })
+    return undefined
+  }
+  onlyKeys(input, ['preset', 'width', 'height'], path, issues)
+  const presets = ['capture', '16:9', '1.85:1', '2.00:1', '2.39:1', 'custom']
+  if (!presets.includes(input.preset as string)) {
+    issues.push({ path: `${path}.preset`, message: 'Unknown camera frame guide.' })
+    return undefined
+  }
+  if (input.preset === 'custom') {
+    const width = requireFinite(input.width, `${path}.width`, issues)
+    const height = requireFinite(input.height, `${path}.height`, issues)
+    if (width !== undefined && width <= 0) issues.push({ path: `${path}.width`, message: 'Custom guide width must be greater than zero.' })
+    if (height !== undefined && height <= 0) issues.push({ path: `${path}.height`, message: 'Custom guide height must be greater than zero.' })
+    if (width === undefined || height === undefined) return undefined
+    return { preset: 'custom', width, height }
+  }
+  return { preset: input.preset as CameraFrameGuide['preset'] }
+}
+
+function legacyCaptureFromSensorFormat(sensorFormat: SensorFormat): ResolvedCaptureSelection {
+  const dimensions = sensorFormat.kind === 'custom'
+    ? { widthMm: sensorFormat.widthMm, heightMm: sensorFormat.heightMm }
+    : sensorFormat.preset === 'full-frame'
+      ? { widthMm: 36, heightMm: 24 }
+      : sensorFormat.preset === 'super-35'
+        ? { widthMm: 24.89, heightMm: 18.66 }
+        : sensorFormat.preset === 'micro-four-thirds'
+          ? { widthMm: 17.3, heightMm: 13 }
+          : { widthMm: 21.95, heightMm: 16.1 }
+  return {
+    datasetVersion: '1.0.0',
+    cameraId: 'generic.camera',
+    recordingModeId: 'generic.camera.open-gate',
+    physicalSensorId: 'generic.camera.sensor',
+    activeWidthMm: dimensions.widthMm,
+    activeHeightMm: dimensions.heightMm,
+  }
 }
 
 function validateLight(input: unknown, path: string, issues: ValidationIssue[]): LightDocument | undefined {

@@ -365,6 +365,13 @@ p {
   background: #7f9aab;
 }
 
+.entity-dot.camera {
+  width: 8px;
+  height: 6px;
+  border-radius: 1px;
+  background: #b6c2cc;
+}
+
 .panel-footer {
   position: absolute;
   bottom: 0;
@@ -522,6 +529,10 @@ p {
   grid-template-columns: repeat(3, 1fr);
 }
 
+.two-columns {
+  grid-template-columns: repeat(2, 1fr);
+}
+
 .number-field {
   align-items: flex-start;
   flex-direction: column;
@@ -558,6 +569,21 @@ p {
   padding-top: 6px;
   color: var(--text-soft);
   font-size: 10px;
+}
+
+.camera-readout {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.camera-readout strong {
+  color: #cbd2d9;
+  font-weight: 500;
+  text-align: right;
 }
 
 .field-stack {

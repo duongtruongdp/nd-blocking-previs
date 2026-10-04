@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import {
   addActor,
+  addCamera,
   addProp,
   deleteEntity,
   renameEntity,
@@ -8,15 +9,22 @@ import {
   setActorColor,
   setActorHeight,
   setActorPose,
+  setCameraFocalLength,
+  setCameraFrameGuide,
+  setCameraLensProfile,
+  setCameraFocusDistance,
+  setCameraModel,
+  setCameraRecordingOutput,
+  setCameraSensorMode,
   setEntityPlacement,
   setPropDimensions,
   type PropType,
 } from '../domain/blockingCommands'
 import { createMinimumValidProject, findEntity } from '../domain/project'
-import type { Placement, ProjectDocument, Vec3 } from '../domain/types'
+import type { CameraFrameGuide, LensProfile, Placement, ProjectDocument, Vec3 } from '../domain/types'
 
 export type BlockingTool = 'select' | 'move' | 'rotate'
-export type BlockingEntityKind = 'actor' | 'prop'
+export type BlockingEntityKind = 'actor' | 'prop' | 'camera'
 
 export type BlockingSelection = {
   entityId: string | null
@@ -41,6 +49,7 @@ class BlockingStore {
   private readonly listeners = new Set<Listener>()
   private actorNameSequence = 0
   private readonly propNameSequences = new Map<PropType, number>()
+  private cameraNameSequence = 0
 
   getSnapshot = (): BlockingState => this.state
 
@@ -66,6 +75,8 @@ class BlockingStore {
       ? 'actor'
       : entity && 'appearance' in entity && 'dimensionsM' in entity.appearance
         ? 'prop'
+        : entity && 'lens' in entity
+          ? 'camera'
         : null
 
     if (!kind) return
@@ -89,6 +100,15 @@ class BlockingStore {
     this.update({
       project: result.project,
       selection: { entityId: result.entityId, kind: 'prop' },
+    })
+  }
+
+  addCamera(): void {
+    this.cameraNameSequence += 1
+    const result = addCamera(this.state.project, undefined, `Camera ${String(this.cameraNameSequence).padStart(2, '0')}`)
+    this.update({
+      project: result.project,
+      selection: { entityId: result.entityId, kind: 'camera' },
     })
   }
 
@@ -138,6 +158,41 @@ class BlockingStore {
     this.update({ project: setPropDimensions(this.state.project, entityId, dimensionsM) })
   }
 
+  setSelectedCameraModel(cameraModelId: string): void {
+    const entityId = this.requireSelectedCamera()
+    this.update({ project: setCameraModel(this.state.project, entityId, cameraModelId) })
+  }
+
+  setSelectedCameraSensorMode(sensorModeId: string): void {
+    const entityId = this.requireSelectedCamera()
+    this.update({ project: setCameraSensorMode(this.state.project, entityId, sensorModeId) })
+  }
+
+  setSelectedCameraRecordingOutput(recordingOutputId: string | undefined): void {
+    const entityId = this.requireSelectedCamera()
+    this.update({ project: setCameraRecordingOutput(this.state.project, entityId, recordingOutputId) })
+  }
+
+  setSelectedCameraFocalLength(focalLengthMm: number): void {
+    const entityId = this.requireSelectedCamera()
+    this.update({ project: setCameraFocalLength(this.state.project, entityId, focalLengthMm) })
+  }
+
+  setSelectedCameraFocusDistance(focusDistanceM: number): void {
+    const entityId = this.requireSelectedCamera()
+    this.update({ project: setCameraFocusDistance(this.state.project, entityId, focusDistanceM) })
+  }
+
+  setSelectedCameraLensProfile(profile: LensProfile): void {
+    const entityId = this.requireSelectedCamera()
+    this.update({ project: setCameraLensProfile(this.state.project, entityId, profile) })
+  }
+
+  setSelectedCameraFrameGuide(frameGuide: CameraFrameGuide): void {
+    const entityId = this.requireSelectedCamera()
+    this.update({ project: setCameraFrameGuide(this.state.project, entityId, frameGuide) })
+  }
+
   deleteSelected(): void {
     const entityId = this.state.selection.entityId
     if (!entityId) return
@@ -149,6 +204,12 @@ class BlockingStore {
 
   private getActiveShot() {
     return this.state.project.shots.find((shot) => shot.id === this.state.project.activeShotId)
+  }
+
+  private requireSelectedCamera(): string {
+    const entityId = this.state.selection.entityId
+    if (!entityId || this.state.selection.kind !== 'camera') throw new Error('A camera must be selected.')
+    return entityId
   }
 
   private update(patch: Partial<BlockingState>): void {

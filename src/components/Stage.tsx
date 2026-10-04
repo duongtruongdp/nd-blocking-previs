@@ -35,8 +35,8 @@ export function Stage() {
   }, [])
 
   useEffect(() => {
-    runtimeRef.current?.syncBlockingEntities(shot?.actors ?? [], shot?.props ?? [])
-  }, [shot?.actors, shot?.props])
+    runtimeRef.current?.syncBlockingEntities(shot?.actors ?? [], shot?.props ?? [], shot?.cameras ?? [])
+  }, [shot?.actors, shot?.props, shot?.cameras])
 
   useEffect(() => {
     runtimeRef.current?.setSelectedEntity(state.selection.entityId)

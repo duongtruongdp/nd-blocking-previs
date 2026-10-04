@@ -1,7 +1,7 @@
 # ND Blocking & Previs — Architecture and Implementation Plan
 
-Status: Milestone 2.5B complete: verified ARRI Batch 1 camera dataset; no camera UI or runtime camera has been added
-Scope: Phase 1 foundation, workspace shell, Actor/Prop blocking, locked Actor/Pose system, and camera data seams; camera authoring and timeline editing remain intentionally unimplemented.
+Status: Milestone 3A current: Camera Object Foundation complete; Camera View and timeline editing remain intentionally unimplemented.
+Scope: Phase 1 foundation, workspace shell, Actor/Prop blocking, locked Actor/Pose system, verified camera data, and serializable Camera objects.
 
 Milestone 0 decisions are implemented in the domain source and specified by these focused contracts:
 
@@ -17,14 +17,23 @@ Milestone 0 decisions are implemented in the domain source and specified by thes
 - [CAMERA_DATA_MODEL.md](CAMERA_DATA_MODEL.md) — versioned factual camera dataset, provenance, registry, and reproducibility snapshot
 - [CINEMATOGRAPHY_MATH.md](CINEMATOGRAPHY_MATH.md) — pure FOV, coverage, crop, anamorphic, and reference-aperture calculations
 - [CAMERA_DATA_ARRI.md](CAMERA_DATA_ARRI.md) — ARRI Batch 1 source register, sensor/output review, and known limitations
+- [PRODUCT_LANGUAGE.md](PRODUCT_LANGUAGE.md) — filmmaker-first UI terminology and internal-only vocabulary
 
-Milestone 2.5B is now locked. The production dataset contains exactly ARRI
-ALEXA Mini LF and ARRI ALEXA 35. Real ARRI documentation required the smallest
-clean schema extension: one sensor mode can own multiple recording outputs,
-each with codec, container/image-content dimensions, frame-rate conditions, and
-provenance. No camera UI, Stage camera, Camera View, lens selector, frame-rate
-control, timeline, project serialization, export, or second camera batch was
-started.
+Milestone 2.5 camera data is now locked enough for authoring. The production
+dataset contains five verified ARRI camera models: ALEXA Mini LF, ALEXA 35,
+ALEXA Mini, ALEXA LF, and AMIRA. One sensor mode can own multiple recording
+outputs, each with codec, container/image-content dimensions, frame-rate
+conditions, and provenance. The dataset remains independent from project files;
+projects persist the selected IDs plus a resolved capture snapshot.
+
+Milestone 3A adds the first real filmmaking Camera object. Cameras are created
+from a deterministic generic 36 × 24 mm default, can be selected and moved in
+the Blocking View, and expose Camera Model, Sensor Mode, Recording Format, Lens,
+Focus, Placement, and Frame Guide fields in the Inspector. The Stage displays a
+lightweight camera body, lens, forward marker, and finite frustum guide. The
+navigation camera remains an editor-only viewpoint and is never serialized.
+Camera View, delivery overlays, timeline animation, and export remain later
+milestones.
 
 ## 1. Repository audit
 
@@ -320,6 +329,14 @@ type SensorFormat =
   | 'custom'
 ```
 
+The current implementation extends this contract with stable camera-model,
+sensor-mode, and recording-output IDs, a persisted `resolvedCapture` snapshot,
+an anamorphic lens profile, and a crop-only `frameGuide`. The snapshot records
+the physical capture geometry used when the shot was authored, so a future
+dataset correction cannot silently change an existing shot's framing. New
+cameras use the generic default until a production camera is deliberately
+chosen.
+
 ### Camera behavior
 
 - Store focal length in millimeters, not field of view.
@@ -489,6 +506,24 @@ Deliverables:
 
 Exit criteria: a user can block a simple scene, select any object, and save its placement in the project document.
 
+### Milestone 3A — camera object foundation (current)
+
+Deliverables completed:
+
+- create, select, rename, move, rotate, and delete real Camera objects;
+- generic camera creation independent of the production dataset;
+- dependent Camera Model, Sensor Mode, and Recording Format selection;
+- focal length, anamorphic profile, focus distance, camera height, and
+  Pan/Tilt/Roll controls;
+- persisted resolved capture geometry and crop-only frame-guide settings;
+- lightweight Stage camera body, lens, forward marker, and finite frustum guide;
+- separate navigation camera and filmmaking CameraDocument runtime paths;
+- legacy V1 camera normalization without an unnecessary format-version bump.
+
+Exit criteria met: cameras are serializable, independently selectable and
+movable, and their Stage projection derives from persisted capture geometry and
+focal length.
+
 ### Milestone 3 — camera, lens, frame, and preview
 
 Deliverables:
@@ -641,13 +676,22 @@ Internal implementation names may use technical terms where they make the code c
 
 ## 14. Recommended next step
 
-Milestone 2I is complete. The production Actor baseline contains Male 01 and Female 01, 18 stable semantic poses (six Standing, six Sitting, six Lying), shared semantic definitions adapted through Rig Profiles, support/contact-aware Sitting and Lying, height-preserving Actor placement, and a development-only Pose Calibration tool hidden from normal use. The full Actor/Pose development phase is locked. Do not begin Cameras, Timeline, project-file UI, Lights, Export, new Props, Characters, or Poses in this pass.
+Milestone 2I is complete. The production Actor baseline contains Male 01 and Female 01, 18 stable semantic poses (six Standing, six Sitting, six Lying), shared semantic definitions adapted through Rig Profiles, support/contact-aware Sitting and Lying, height-preserving Actor placement, and a development-only Pose Calibration tool hidden from normal use. The full Actor/Pose development phase is locked.
 
-Milestone 2.5A is complete. The Camera Data Foundation now contains an
-independent dataset version, stable manufacturer/camera/mode IDs, physical
-sensor and recording-mode separation, provenance references, rational frame
-rate capabilities, a framework-independent Camera Registry, pure
-cinematography calculations, centered delivery crops, anamorphic geometry, and
-a resolved capture-selection contract for future project reproducibility. The
-next planned work is Camera Dataset Population by manufacturer using official
-documentation. Do not populate that catalog or begin Camera UI in this pass.
+Milestone 2.5A, 2.5B, 2.5B-FIX, and 2.5C are complete. The Camera Data
+Foundation contains an independent dataset version, stable manufacturer,
+camera, mode, and output IDs, physical sensor and recording-mode separation,
+provenance references, rational frame-rate capabilities, a framework-
+independent Camera Registry, pure cinematography calculations, centered
+delivery crops, anamorphic geometry, and a resolved capture-selection contract
+for project reproducibility.
+
+Milestone 3A is the current lock: Camera objects are now part of the Stage and
+project document. Do not begin Camera View, timeline animation, lighting,
+export, or WordPress integration in this pass.
+
+Milestone 3A.1 is a language-only pass over the existing shell. Normal UI uses
+filmmaking terms such as Capture Mode, Sensor Area, Capture Ratio, Lens Type,
+Position, and Facing Direction. Internal implementation names and technical
+documentation remain unchanged. Camera behavior, project fields, and runtime
+math are not altered.

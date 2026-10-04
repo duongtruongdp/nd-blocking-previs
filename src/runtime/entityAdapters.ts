@@ -1,8 +1,9 @@
 import * as THREE from 'three'
-import type { ActorDocument, PropDocument } from '../domain/types'
+import type { ActorDocument, CameraDocument, PropDocument } from '../domain/types'
+import { verticalFovRadians } from '../math/cinematography'
 import { updateActorRuntimeAppearance } from './characterAssets'
 
-export type BlockingEntity = ActorDocument | PropDocument
+export type BlockingEntity = ActorDocument | PropDocument | CameraDocument
 
 /**
  * Normalized adult mannequin proportions. The Actor root is scaled by
@@ -114,9 +115,11 @@ export function createBlockingProxy(
 ): THREE.Group {
   const group = isActorEntity(entity)
     ? createActorProxy(entity, library)
-    : createPropProxy(entity, library)
+    : isCameraEntity(entity)
+      ? createCameraProxy(entity, library)
+      : createPropProxy(entity, library)
   group.userData.entityId = entity.id
-  group.userData.entityKind = isActorEntity(entity) ? 'actor' : 'prop'
+  group.userData.entityKind = isActorEntity(entity) ? 'actor' : isCameraEntity(entity) ? 'camera' : 'prop'
   updateBlockingProxy(group, entity)
   return group
 }
@@ -130,6 +133,8 @@ export function updateBlockingProxy(
     const actor = entity
     group.scale.setScalar(actor.appearance.heightM)
     updateActorRuntimeAppearance(group, actor)
+  } else if (isCameraEntity(entity)) {
+    updateCameraProxy(group, entity)
   } else {
     const prop = entity as PropDocument
     group.scale.set(...prop.appearance.dimensionsM)
@@ -138,6 +143,91 @@ export function updateBlockingProxy(
 
 function isActorEntity(entity: BlockingEntity): entity is ActorDocument {
   return 'character' in entity
+}
+
+function isCameraEntity(entity: BlockingEntity): entity is CameraDocument {
+  return 'lens' in entity
+}
+
+function createCameraProxy(camera: CameraDocument, library: BlockingAssetLibrary): THREE.Group {
+  const group = new THREE.Group()
+  group.name = 'CameraRoot'
+  const bodyMaterial = library.material('#8d7860')
+  const lensMaterial = library.material('#b6c2cc')
+  addPart(group, library.boxGeometry, bodyMaterial, [0, 0, 0.02], [0.3, 0.2, 0.34], 'camera-body')
+  const lens = addPart(group, library.cylinderGeometry, lensMaterial, [0, 0, -0.22], [0.09, 0.14, 0.09], 'camera-lens')
+  lens.rotation.x = Math.PI / 2
+  const direction = addPart(group, library.boxGeometry, lensMaterial, [0, 0, -0.42], [0.025, 0.025, 0.22], 'camera-forward')
+  direction.userData.cameraDirection = true
+
+  const runtimeCamera = new THREE.PerspectiveCamera()
+  runtimeCamera.name = 'FilmCameraRuntime'
+  runtimeCamera.visible = false
+  runtimeCamera.userData.filmmakingCamera = true
+  group.add(runtimeCamera)
+
+  const frustum = new THREE.Group()
+  frustum.name = 'CameraFrustumGuide'
+  frustum.userData.cameraFrustum = true
+  group.add(frustum)
+  updateCameraProxy(group, camera)
+  return group
+}
+
+function updateCameraProxy(group: THREE.Group, camera: CameraDocument): void {
+  const runtimeCamera = group.getObjectByName('FilmCameraRuntime') as THREE.PerspectiveCamera | undefined
+  const frustum = group.getObjectByName('CameraFrustumGuide')
+  if (!runtimeCamera || !frustum) return
+  const activeWidth = camera.resolvedCapture.activeWidthMm
+  const activeHeight = camera.resolvedCapture.activeHeightMm
+  const verticalFov = verticalFovRadians({ activeWidthMm: activeWidth, activeHeightMm: activeHeight }, camera.lens.focalLengthMm)
+  runtimeCamera.fov = verticalFov * (180 / Math.PI)
+  runtimeCamera.aspect = activeWidth / activeHeight
+  runtimeCamera.near = 0.05
+  runtimeCamera.far = Math.max(20, camera.lens.focusDistanceM * 4)
+  runtimeCamera.updateProjectionMatrix()
+
+  while (frustum.children.length > 0) {
+    const child = frustum.children[0]
+    frustum.remove(child)
+    child.traverse((object) => {
+      if (object instanceof THREE.LineSegments || object instanceof THREE.Line) {
+        object.geometry.dispose()
+        const material = object.material
+        if (Array.isArray(material)) material.forEach((entry) => entry.dispose())
+        else material.dispose()
+      }
+    })
+  }
+  const guideDepth = Math.min(12, Math.max(1, camera.lens.focusDistanceM))
+  const halfHeight = Math.tan(verticalFov / 2) * guideDepth
+  const halfWidth = halfHeight * runtimeCamera.aspect
+  const nearDepth = Math.min(0.35, guideDepth * 0.25)
+  const nearHalfHeight = Math.tan(verticalFov / 2) * nearDepth
+  const nearHalfWidth = nearHalfHeight * runtimeCamera.aspect
+  const near = [
+    new THREE.Vector3(-nearHalfWidth, nearHalfHeight, -nearDepth),
+    new THREE.Vector3(nearHalfWidth, nearHalfHeight, -nearDepth),
+    new THREE.Vector3(nearHalfWidth, -nearHalfHeight, -nearDepth),
+    new THREE.Vector3(-nearHalfWidth, -nearHalfHeight, -nearDepth),
+  ]
+  const far = [
+    new THREE.Vector3(-halfWidth, halfHeight, -guideDepth),
+    new THREE.Vector3(halfWidth, halfHeight, -guideDepth),
+    new THREE.Vector3(halfWidth, -halfHeight, -guideDepth),
+    new THREE.Vector3(-halfWidth, -halfHeight, -guideDepth),
+  ]
+  const points = [
+    ...near, near[0],
+    ...far, far[0],
+    near[0], far[0], near[1], far[1], near[2], far[2], near[3], far[3],
+  ]
+  const guide = new THREE.LineSegments(
+    new THREE.BufferGeometry().setFromPoints(points),
+    new THREE.LineBasicMaterial({ color: '#d3a56c', transparent: true, opacity: 0.62 }),
+  )
+  guide.name = 'CameraFrustumLines'
+  frustum.add(guide)
 }
 
 function createActorProxy(actor: ActorDocument, library: BlockingAssetLibrary): THREE.Group {

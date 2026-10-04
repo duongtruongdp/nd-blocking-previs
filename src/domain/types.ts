@@ -1,6 +1,8 @@
 export const CURRENT_PROJECT_FORMAT_VERSION = 1 as const
 export const CURRENT_PROJECT_SCHEMA_VERSION = 1 as const
 
+import type { ResolvedCaptureSelection } from '../cameras/cameraData'
+
 export type ProjectFormatVersion = typeof CURRENT_PROJECT_FORMAT_VERSION
 export type ProjectSchemaVersion = typeof CURRENT_PROJECT_SCHEMA_VERSION
 
@@ -62,11 +64,23 @@ export type CameraAim =
       mode: 'look-at'
       targetEntityId?: string
       targetPoint?: Vec3
-    }
+  }
+
+export type CameraFrameGuidePreset = 'capture' | '16:9' | '1.85:1' | '2.00:1' | '2.39:1' | 'custom'
+
+export type CameraFrameGuide = {
+  preset: CameraFrameGuidePreset
+  width?: number
+  height?: number
+}
 
 export type CameraDocument = {
   id: string
   name: string
+  cameraModelId: string
+  sensorModeId: string
+  recordingOutputId?: string
+  resolvedCapture: ResolvedCaptureSelection
   placement: Placement
   lens: {
     focalLengthMm: number
@@ -74,6 +88,7 @@ export type CameraDocument = {
     profile: LensProfile
     focusDistanceM: number
   }
+  frameGuide: CameraFrameGuide
   aim: CameraAim
 }
 

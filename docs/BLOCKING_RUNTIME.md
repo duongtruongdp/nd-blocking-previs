@@ -1,20 +1,32 @@
 # Blocking Runtime
 
-This document records the Milestone 2 Actor/Prop runtime boundary.
+This document records the Milestone 2 Actor/Prop and Milestone 3A Camera
+runtime boundary.
 
 ## Domain/runtime mapping
 
-The `ProjectDocument` remains authoritative. `ActorDocument` and `PropDocument` are plain serializable values; the Stage keeps a direct registry from entity ID to its runtime proxy root.
+The `ProjectDocument` remains authoritative. `ActorDocument`, `PropDocument`,
+and `CameraDocument` are plain serializable values; the Stage keeps a direct
+registry from entity ID to its runtime proxy root.
 
 ```text
-ActorDocument / PropDocument
+ActorDocument / PropDocument / CameraDocument
           ↕ stable entity ID
 RuntimeRegistry
           ↕
 Three.js proxy group and child meshes
 ```
 
-Compound proxies register every visible child against the same parent entity ID. A raycast against an arm, table leg, chair back, or other child therefore resolves to the Actor or Prop row the filmmaker sees in the Scene panel.
+Compound proxies register every visible child against the same parent entity ID. A raycast against an arm, table leg, chair back, camera body, lens, or other child therefore resolves to the Actor, Prop, or Camera row the filmmaker sees in the Scene panel.
+
+## Camera runtime
+
+The Camera proxy is a lightweight blocking representation, not a second source
+of camera data. Its hidden perspective camera derives vertical field of view,
+aspect ratio, and finite guide depth from the persisted resolved capture and
+focal length. The editor navigation camera remains separate and is never
+serialized. Camera selection, Move, Rotate, Inspector edits, and deletion use
+the same stable-ID command path as other blocking objects.
 
 ## Actor character runtime
 

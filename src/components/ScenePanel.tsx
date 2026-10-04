@@ -2,11 +2,6 @@ import { useState } from 'react'
 import { blockingStore, useBlockingSelector } from '../state/blockingStore'
 import type { PropType } from '../domain/blockingCommands'
 
-const futureCategories = [
-  { label: 'Cameras', empty: 'No cameras yet' },
-  { label: 'Lights', empty: 'No lights yet' },
-]
-
 const propOptions: Array<{ label: string; value: PropType }> = [
   { label: 'Cube', value: 'cube' },
   { label: 'Cylinder', value: 'cylinder' },
@@ -22,6 +17,7 @@ export function ScenePanel() {
   const shot = state.project.shots.find((entry) => entry.id === state.project.activeShotId)
   const actors = shot?.actors ?? []
   const props = shot?.props ?? []
+  const cameras = shot?.cameras ?? []
 
   return (
     <aside className="side-panel scene-panel" aria-label="Scene">
@@ -38,6 +34,7 @@ export function ScenePanel() {
             {addMenuOpen ? (
               <div className="add-menu" role="menu">
                 <button type="button" role="menuitem" onClick={() => { blockingStore.addActor(); setAddMenuOpen(false) }}>Actor</button>
+                <button type="button" role="menuitem" onClick={() => { blockingStore.addCamera(); setAddMenuOpen(false) }}>Camera</button>
                 <div className="add-menu-label">SET &amp; PROPS</div>
                 {propOptions.map((option) => (
                   <button key={option.value} type="button" role="menuitem" onClick={() => { blockingStore.addProp(option.value); setAddMenuOpen(false) }}>
@@ -58,19 +55,21 @@ export function ScenePanel() {
           <div className="category-heading"><span>Props</span><span className="category-count">{props.length}</span></div>
           {props.length === 0 ? <p className="empty-line">No props yet</p> : props.map((prop) => <EntityRow key={prop.id} id={prop.id} name={prop.name} kind="prop" selected={state.selection.entityId === prop.id} />)}
         </section>
-        {futureCategories.map((category) => (
-          <section className="scene-category" key={category.label}>
-            <div className="category-heading"><span>{category.label}</span><span className="category-count">0</span></div>
-            <p className="empty-line">{category.empty}</p>
-          </section>
-        ))}
+        <section className="scene-category">
+          <div className="category-heading"><span>Cameras</span><span className="category-count">{cameras.length}</span></div>
+          {cameras.length === 0 ? <p className="empty-line">No cameras yet</p> : cameras.map((camera) => <EntityRow key={camera.id} id={camera.id} name={camera.name} kind="camera" selected={state.selection.entityId === camera.id} />)}
+        </section>
+        <section className="scene-category">
+          <div className="category-heading"><span>Lights</span><span className="category-count">0</span></div>
+          <p className="empty-line">No lights yet</p>
+        </section>
       </div>
       <div className="panel-footer">{state.selection.entityId ? 'Selected in Stage' : 'Nothing selected'}</div>
     </aside>
   )
 }
 
-function EntityRow({ id, name, kind, selected }: { id: string; name: string; kind: 'actor' | 'prop'; selected: boolean }) {
+function EntityRow({ id, name, kind, selected }: { id: string; name: string; kind: 'actor' | 'prop' | 'camera'; selected: boolean }) {
   return (
     <button type="button" className={`entity-row ${selected ? 'is-selected' : ''}`} aria-pressed={selected} onClick={() => blockingStore.selectEntity(id)}>
       <span className={`entity-dot ${kind}`} aria-hidden="true" />

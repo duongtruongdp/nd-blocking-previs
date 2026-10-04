@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   ACTOR_HEIGHT_RANGE_M,
+  addCamera,
   DEFAULT_ACTOR_HEIGHT_M,
   DEFAULT_PROP_DIMENSIONS_M,
   addActor,
@@ -11,6 +12,13 @@ import {
   setActorColor,
   setActorHeight,
   setActorPose,
+  setCameraFocalLength,
+  setCameraFocusDistance,
+  setCameraFrameGuide,
+  setCameraLensProfile,
+  setCameraModel,
+  setCameraRecordingOutput,
+  setCameraSensorMode,
   setEntityPlacement,
   setPropDimensions,
 } from '../domain/blockingCommands'
@@ -122,5 +130,72 @@ describe('blocking domain commands', () => {
     expect(renamed.shots[0].actors[0].name).toBe('Lead')
     expect(renamed.shots[0].actors[0].placement).toEqual(placement)
     expect(deleteEntity(renamed, actor.entityId).shots[0].actors).toHaveLength(0)
+  })
+
+  it('creates deterministic generic cameras with a valid frozen capture snapshot', () => {
+    const first = addCamera(project(), () => 'camera-1')
+    const second = addCamera(first.project, () => 'camera-2')
+    expect(second.project.shots[0].cameras.map((camera) => camera.name)).toEqual(['Camera 01', 'Camera 02'])
+    expect(second.project.shots[0].activeCameraId).toBe('camera-1')
+    expect(first.project.shots[0].cameras[0]).toMatchObject({
+      cameraModelId: 'generic.camera',
+      sensorModeId: 'generic.camera.open-gate',
+      resolvedCapture: { datasetVersion: '1.0.0', activeWidthMm: 36, activeHeightMm: 24 },
+      lens: { focalLengthMm: 50, focusDistanceM: 5 },
+      frameGuide: { preset: 'capture' },
+    })
+    expect(() => serializeProject(first.project)).not.toThrow()
+  })
+
+  it('resolves model, sensor mode, and recording format dependencies without stale IDs', () => {
+    const added = addCamera(project(), () => 'camera-1')
+    const model = setCameraModel(added.project, added.entityId, 'arri.alexa-lf')
+    const camera = model.shots[0].cameras[0]
+    expect(camera.cameraModelId).toBe('arri.alexa-lf')
+    expect(camera.sensorModeId).toBe('arri.alexa-lf.open-gate')
+    expect(camera.recordingOutputId).toBe('arri.alexa-lf.open-gate.arriraw')
+    expect(() => setCameraSensorMode(model, added.entityId, 'arri.alexa-mini-lf.4_5k-lf-open-gate')).toThrow()
+
+    const mode = setCameraSensorMode(model, added.entityId, 'arri.alexa-lf.16_9')
+    const output = setCameraRecordingOutput(mode, added.entityId, 'arri.alexa-lf.16_9.prores-hd')
+    expect(output.shots[0].cameras[0]).toMatchObject({
+      sensorModeId: 'arri.alexa-lf.16_9',
+      recordingOutputId: 'arri.alexa-lf.16_9.prores-hd',
+      resolvedCapture: { activeWidthMm: 31.68, activeHeightMm: 17.82 },
+    })
+  })
+
+  it('validates camera lens, focus, anamorphic, and frame-guide controls', () => {
+    const added = addCamera(project(), () => 'camera-1')
+    expect(() => setCameraFocalLength(added.project, added.entityId, 0)).toThrow()
+    expect(() => setCameraFocusDistance(added.project, added.entityId, Number.NaN)).toThrow()
+    const lens = setCameraLensProfile(added.project, added.entityId, { type: 'anamorphic', preset: '2.0', squeezeFactor: 2 })
+    const guide = setCameraFrameGuide(lens, added.entityId, { preset: '2.39:1' })
+    expect(guide.shots[0].cameras[0].lens.profile).toEqual({ type: 'anamorphic', preset: '2.0', squeezeFactor: 2 })
+    expect(guide.shots[0].cameras[0].frameGuide).toEqual({ preset: '2.39:1' })
+    expect(setCameraFocalLength(guide, added.entityId, 85).shots[0].cameras[0].lens.focalLengthMm).toBe(85)
+  })
+
+  it('keeps Camera Height mapped to the canonical Y placement value', () => {
+    const added = addCamera(project(), () => 'camera-1')
+    const updated = setEntityPlacement(added.project, added.entityId, {
+      position: [2, 2.4, -1],
+      rotation: { order: 'XYZ', radians: [0, 0, 0] },
+    })
+    expect(updated.shots[0].cameras[0].placement.position).toEqual([2, 2.4, -1])
+    expect(updated.shots[0].cameras[0].placement.position[1]).toBe(2.4)
+  })
+
+  it('keeps multiple camera placement and capture settings independent and deletes safely', () => {
+    const first = addCamera(project(), () => 'camera-1')
+    const second = addCamera(first.project, () => 'camera-2')
+    const changed = setCameraModel(second.project, 'camera-2', 'arri.amira')
+    const independent = setEntityPlacement(changed, 'camera-1', { position: [4, 2, 1], rotation: { order: 'XYZ', radians: [0.1, 0.2, 0.3] } })
+    expect(independent.shots[0].cameras[0].placement.position).toEqual([4, 2, 1])
+    expect(independent.shots[0].cameras[1].placement.position).toEqual([0, 1.5, 4])
+    expect(independent.shots[0].cameras[1].cameraModelId).toBe('arri.amira')
+    const deleted = deleteEntity(independent, 'camera-1')
+    expect(deleted.shots[0].cameras.map((camera) => camera.id)).toEqual(['camera-2'])
+    expect(deleted.shots[0].activeCameraId).toBeNull()
   })
 })

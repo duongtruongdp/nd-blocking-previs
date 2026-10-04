@@ -36,7 +36,7 @@ Project
 
 Each shot owns its blocking data in V1. `activeShotId` must reference a real project shot. `activeCameraId` references a real camera when a shot has cameras and is `null` while the shot is still empty. Entity IDs must be unique within a shot. Props use an explicit `propType` for blocking proxy identity; older V1 props without that field are inferred from their representation during validation.
 
-Actors now persist stable `character.characterId` and `pose.poseId` values alongside color, height, and placement. Existing V1 Actor records that do not yet contain `character` or `pose` are deliberately normalized during validation to `male-01` and `standing-neutral`; the format version remains V1 because this is a backward-compatible additive default, not a reinterpretation of existing fields. Newly serialized files always include the normalized Actor fields.
+Actors now persist stable `character.characterId` and `pose.poseId` values alongside color, height, and placement. Cameras persist stable catalog-selection IDs, a resolved capture snapshot, lens profile, focus distance, placement, aim, and frame guide. Existing V1 Actor and Camera records that do not yet contain these additive fields are normalized during validation; the format version remains V1 because this is a backward-compatible default, not a reinterpretation of existing fields. Newly serialized files always include the normalized fields.
 
 ## Serialization API
 
@@ -51,7 +51,7 @@ Malformed data is rejected. Errors use `ProjectFileError` with a stable code and
 
 ## Migration policy
 
-V1 is the current format. Its validation seam performs only documented additive defaults for older Actor and Prop records. A future incompatible release should add explicit functions such as `migrateV1ToV2`, apply them in order, and validate the migrated result. A newer unknown `formatVersion` is rejected; it is never silently treated as V1.
+V1 is the current format. Its validation seam performs only documented additive defaults for older Actor, Prop, and Camera records. Legacy cameras receive a generic or sensor-format-derived resolved capture snapshot and a Capture frame guide; they do not silently adopt a current production catalog selection. A future incompatible release should add explicit functions such as `migrateV1ToV2`, apply them in order, and validate the migrated result. A newer unknown `formatVersion` is rejected; it is never silently treated as V1.
 
 ## Portability policy
 

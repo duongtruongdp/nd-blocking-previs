@@ -1,10 +1,11 @@
 # Camera and Framing Model
 
-This is the authoritative V1 camera contract. Milestone 2.5A adds the
+This is the authoritative V1 camera contract. Milestone 2.5 adds the
 framework-independent factual dataset and calculation contracts described in
 [CAMERA_DATA_MODEL.md](CAMERA_DATA_MODEL.md) and
-[CINEMATOGRAPHY_MATH.md](CINEMATOGRAPHY_MATH.md). Camera UI and Stage camera
-runtime remain later work.
+[CINEMATOGRAPHY_MATH.md](CINEMATOGRAPHY_MATH.md). Milestone 3A makes the
+Camera a real serializable Stage object while keeping Camera View and timeline
+animation for later work.
 
 ## Filmmaker-facing decisions
 
@@ -15,6 +16,7 @@ The user chooses:
 - Focal Length
 - Focus Distance
 - Delivery Frame / Aspect Ratio
+- Frame Guide
 
 The application derives projection values. Field of view is calculated, not the primary camera control.
 
@@ -73,3 +75,26 @@ desqueezed aspect = squeezed aspect × squeeze factor
 ```
 
 Optical artifacts—flare, oval bokeh, distortion, chromatic aberration, and breathing—are deliberately outside Milestone 0.
+
+## Camera object foundation
+
+The persisted Camera object keeps stable catalog-selection IDs together with a
+`resolvedCapture` snapshot. The snapshot records the dataset version, selected
+camera/mode/output IDs, and resolved physical active width and height (plus
+available image dimensions). The project does not duplicate the camera catalog;
+the snapshot exists so future dataset corrections cannot silently change an
+authored shot's framing.
+
+New cameras use a generic 36 × 24 mm capture default and do not depend on the
+production dataset. The Inspector can then switch to a registry camera and
+select its valid dependent sensor mode and recording format. Stale dependent
+IDs are invalidated rather than retained.
+
+`frameGuide` is a crop-only presentation choice: Capture, 16:9, 1.85:1,
+2.00:1, 2.39:1, or Custom. It does not alter focal length, capture geometry,
+camera placement, or the persisted resolved snapshot.
+
+The Stage filmmaking camera is separate from the navigation camera. The
+filmmaking camera is derived from the Camera object and looks along local -Z;
+the navigation camera only orbits, pans, and zooms the Blocking View and is
+never serialized.

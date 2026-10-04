@@ -1,7 +1,7 @@
 # ND Blocking & Previs — Architecture and Implementation Plan
 
-Status: Milestone 2H-C implemented: complete Standing, Sitting, and Lying pose library reconstructed; live visual review remains pending
-Scope: Phase 1 foundation, workspace shell, Actor/Prop blocking, and character/pose seams; camera authoring and timeline editing remain intentionally unimplemented.
+Status: Milestone 2.5B complete: verified ARRI Batch 1 camera dataset; no camera UI or runtime camera has been added
+Scope: Phase 1 foundation, workspace shell, Actor/Prop blocking, locked Actor/Pose system, and camera data seams; camera authoring and timeline editing remain intentionally unimplemented.
 
 Milestone 0 decisions are implemented in the domain source and specified by these focused contracts:
 
@@ -14,6 +14,17 @@ Milestone 0 decisions are implemented in the domain source and specified by thes
 - [CHARACTER_ASSET_SPEC.md](CHARACTER_ASSET_SPEC.md) — authored GLB requirements, licensing, budgets, and grounding
 - [CHARACTER_RIG_DIAGNOSTICS.md](CHARACTER_RIG_DIAGNOSTICS.md) — production rig findings, reconstruction, symmetry, and contact decisions
 - [ANATOMICAL_POSE_SOLVER.md](ANATOMICAL_POSE_SOLVER.md) — anatomical intent, rig-specific quaternion solving, references, and contact boundary
+- [CAMERA_DATA_MODEL.md](CAMERA_DATA_MODEL.md) — versioned factual camera dataset, provenance, registry, and reproducibility snapshot
+- [CINEMATOGRAPHY_MATH.md](CINEMATOGRAPHY_MATH.md) — pure FOV, coverage, crop, anamorphic, and reference-aperture calculations
+- [CAMERA_DATA_ARRI.md](CAMERA_DATA_ARRI.md) — ARRI Batch 1 source register, sensor/output review, and known limitations
+
+Milestone 2.5B is now locked. The production dataset contains exactly ARRI
+ALEXA Mini LF and ARRI ALEXA 35. Real ARRI documentation required the smallest
+clean schema extension: one sensor mode can own multiple recording outputs,
+each with codec, container/image-content dimensions, frame-rate conditions, and
+provenance. No camera UI, Stage camera, Camera View, lens selector, frame-rate
+control, timeline, project serialization, export, or second camera batch was
+started.
 
 ## 1. Repository audit
 
@@ -56,7 +67,7 @@ This is a shot-blocking and cinematography planning tool, not a general-purpose 
 
 ### Explicitly out of scope initially
 
-- Full artist-facing pose authoring, animation retargeting, facial performance, or cloth simulation. The query-gated calibration overlay is a development diagnostic only; the three reference poses are auto-calibrated but not artist-reviewed.
+- Full artist-facing pose authoring, animation retargeting, facial performance, or cloth simulation. Pose Calibration is a development diagnostic only; all 18 shipped semantic poses are production-locked.
 - Photoreal materials, physically accurate lighting, and a general asset marketplace.
 - Arbitrary geometry modeling, sculpting, or scene-graph editing.
 - Multi-user collaboration, WordPress APIs, accounts, or server-side project storage.
@@ -630,4 +641,13 @@ Internal implementation names may use technical terms where they make the code c
 
 ## 14. Recommended next step
 
-Milestone 2G.6 is now implemented: production character diagnostics, protected Standing/Sitting references, deterministic Male/Female supine reconstruction, normalized visible-bounds longitudinal validation, semantic joint audits, arm-chain validation, internal contact solving, development pose guides, facing-tick suppression during pose review, selection bounds refresh, and regression coverage for direct pose and asset transitions. Live visual review of Male/Female Supine remains required before the next milestone. The exact recommendation for the next milestone remains production Camera authoring and camera-aware framing only after that review; do not begin timeline animation, `.ndblock` Open/Save UI, lighting authoring, or export in that pass.
+Milestone 2I is complete. The production Actor baseline contains Male 01 and Female 01, 18 stable semantic poses (six Standing, six Sitting, six Lying), shared semantic definitions adapted through Rig Profiles, support/contact-aware Sitting and Lying, height-preserving Actor placement, and a development-only Pose Calibration tool hidden from normal use. The full Actor/Pose development phase is locked. Do not begin Cameras, Timeline, project-file UI, Lights, Export, new Props, Characters, or Poses in this pass.
+
+Milestone 2.5A is complete. The Camera Data Foundation now contains an
+independent dataset version, stable manufacturer/camera/mode IDs, physical
+sensor and recording-mode separation, provenance references, rational frame
+rate capabilities, a framework-independent Camera Registry, pure
+cinematography calculations, centered delivery crops, anamorphic geometry, and
+a resolved capture-selection contract for future project reproducibility. The
+next planned work is Camera Dataset Population by manufacturer using official
+documentation. Do not populate that catalog or begin Camera UI in this pass.

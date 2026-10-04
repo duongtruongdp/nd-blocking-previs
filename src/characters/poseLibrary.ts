@@ -28,11 +28,11 @@ export type PoseDefinition = {
   label: string
   category: PoseCategory
   rigProfile: 'humanoid-v1'
-  status: 'temporary' | 'auto-calibrated' | 'artist-reviewed'
+  status: 'production' | 'temporary' | 'auto-calibrated' | 'artist-reviewed'
   bones: Partial<Record<SemanticJoint, PoseJointTransform>>
   grounding: PoseGrounding
   metadata: {
-    source: 'temporary-development' | 'auto-diagnosed' | 'blender-authored'
+    source: 'semantic-production' | 'temporary-development' | 'auto-diagnosed' | 'blender-authored'
     calibrated: boolean
   }
   rootOffset?: Vec3
@@ -83,10 +83,10 @@ function pose(
     label,
     category,
     rigProfile: 'humanoid-v1',
-    status: 'temporary',
+    status: 'production',
     bones,
     grounding: groundingFor(category),
-    metadata: { source: 'temporary-development', calibrated: false },
+    metadata: { source: 'semantic-production', calibrated: true },
     ...(rootRotationRadians ? { rootRotationQuaternion: quaternionFromEuler(rootRotationRadians) } : {}),
   }
 }

@@ -6,8 +6,11 @@ import { TimelinePanel } from '../components/TimelinePanel'
 import { TopBar } from '../components/TopBar'
 import { PoseCalibrationPanel } from '../components/PoseCalibrationPanel'
 import { blockingStore } from '../state/blockingStore'
+import { isPoseCalibrationMode } from '../state/poseCalibrationStore'
 
 export function AppShell() {
+  const poseCalibrationEnabled = isPoseCalibrationMode()
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target
@@ -28,7 +31,7 @@ export function AppShell() {
       <Stage />
       <Inspector />
       <TimelinePanel />
-      <PoseCalibrationPanel />
+      {poseCalibrationEnabled ? <PoseCalibrationPanel /> : null}
     </main>
   )
 }

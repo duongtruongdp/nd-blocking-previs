@@ -56,7 +56,7 @@ The three locked reference poses remain production-facing:
 - `sitting-neutral`: thighs forward/down, lower legs down/forward, arms relaxed, and seat contact at a pelvis reference;
 - `lying-supine`: body rotated horizontal around diagnosed character right, arms relaxed, legs extended with a slight bend, and back contact.
 
-They are marked `auto-calibrated`. They are structural starting points and still require visual artist review before being treated as final authored poses.
+They are production semantic definitions generated per Rig Profile. The 18-pose library passed browser visual review; the development calibration overlay remains available only for future controlled diagnostics.
 
 Milestone 2H-B reconstructs the remaining Standing and Sitting definitions from those references rather than reviving raw quaternion constants:
 

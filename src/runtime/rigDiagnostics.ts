@@ -542,7 +542,7 @@ function poseFromDirections(
     label,
     category,
     rigProfile: 'humanoid-v1',
-    status: 'auto-calibrated',
+    status: 'production',
     bones,
     grounding,
     metadata: { source: 'auto-diagnosed', calibrated: true },

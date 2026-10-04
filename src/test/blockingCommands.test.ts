@@ -57,6 +57,35 @@ describe('blocking domain commands', () => {
     expect(() => setActorColor(posed, actor.entityId, 'gold')).toThrow()
   })
 
+  it('switches character without changing the Actor identity or blocking state', () => {
+    const actor = addActor(project(), () => 'actor-1')
+    const posed = setActorPose(
+      setActorHeight(
+        setActorColor(
+          setEntityPlacement(actor.project, actor.entityId, {
+            position: [2, 0, -3],
+            rotation: { order: 'XYZ', radians: [0, 0.7, 0] },
+          }),
+          actor.entityId,
+          '#336699',
+        ),
+        actor.entityId,
+        1.92,
+      ),
+      actor.entityId,
+      'lying-supine',
+    )
+    const before = posed.shots[0].actors[0]
+    const switched = setActorCharacter(posed, actor.entityId, 'female-01').shots[0].actors[0]
+
+    expect(switched.id).toBe(before.id)
+    expect(switched.name).toBe(before.name)
+    expect(switched.character).toEqual({ characterId: 'female-01' })
+    expect(switched.appearance).toEqual(before.appearance)
+    expect(switched.pose).toEqual(before.pose)
+    expect(switched.placement).toEqual(before.placement)
+  })
+
   it('adds all blocking prop types with practical defaults', () => {
     const propTypes = ['cube', 'cylinder', 'wall', 'floor', 'table', 'chair'] as const
     let current = project()

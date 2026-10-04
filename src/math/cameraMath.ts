@@ -1,4 +1,9 @@
 import type { SensorFormat } from '../domain/types'
+import {
+  centeredDeliveryAperture,
+  captureAspectRatio,
+  fieldOfViewRadians as calculateFieldOfViewRadians,
+} from './cinematography'
 
 export type SensorDefinition = {
   id: Exclude<SensorFormat, { kind: 'custom' }>['preset']
@@ -58,7 +63,7 @@ export function resolveSensorFormat(format: SensorFormat): ResolvedSensor {
     return {
       widthMm: format.widthMm,
       heightMm: format.heightMm,
-      aspectRatio: format.widthMm / format.heightMm,
+      aspectRatio: captureAspectRatio({ activeWidthMm: format.widthMm, activeHeightMm: format.heightMm }),
     }
   }
 
@@ -68,14 +73,12 @@ export function resolveSensorFormat(format: SensorFormat): ResolvedSensor {
   return {
     widthMm: preset.widthMm,
     heightMm: preset.heightMm,
-    aspectRatio: preset.widthMm / preset.heightMm,
+    aspectRatio: captureAspectRatio({ activeWidthMm: preset.widthMm, activeHeightMm: preset.heightMm }),
   }
 }
 
 export function fieldOfViewRadians(sensorDimensionMm: number, focalLengthMm: number): number {
-  assertPositiveFinite(sensorDimensionMm, 'Sensor dimension')
-  assertPositiveFinite(focalLengthMm, 'Focal length')
-  return 2 * Math.atan(sensorDimensionMm / (2 * focalLengthMm))
+  return calculateFieldOfViewRadians(sensorDimensionMm, focalLengthMm)
 }
 
 export function computeDeliveryFrameCrop(
@@ -85,45 +88,18 @@ export function computeDeliveryFrameCrop(
   assertPositiveFinite(deliveryFrame.width, 'Delivery frame width')
   assertPositiveFinite(deliveryFrame.height, 'Delivery frame height')
 
-  const deliveryAspectRatio = deliveryFrame.width / deliveryFrame.height
-  const sensorAspectRatio = sensor.aspectRatio
-
-  if (deliveryAspectRatio < sensorAspectRatio) {
-    const visibleSensorHeightMm = sensor.heightMm
-    const visibleSensorWidthMm = visibleSensorHeightMm * deliveryAspectRatio
-    return {
-      sensorAspectRatio,
-      deliveryAspectRatio,
-      visibleSensorWidthMm,
-      visibleSensorHeightMm,
-      cropHorizontalFraction: 1 - visibleSensorWidthMm / sensor.widthMm,
-      cropVerticalFraction: 0,
-      mode: 'crop-horizontal',
-    }
-  }
-
-  if (deliveryAspectRatio > sensorAspectRatio) {
-    const visibleSensorWidthMm = sensor.widthMm
-    const visibleSensorHeightMm = visibleSensorWidthMm / deliveryAspectRatio
-    return {
-      sensorAspectRatio,
-      deliveryAspectRatio,
-      visibleSensorWidthMm,
-      visibleSensorHeightMm,
-      cropHorizontalFraction: 0,
-      cropVerticalFraction: 1 - visibleSensorHeightMm / sensor.heightMm,
-      mode: 'crop-vertical',
-    }
-  }
-
+  const aperture = centeredDeliveryAperture(
+    { activeWidthMm: sensor.widthMm, activeHeightMm: sensor.heightMm },
+    deliveryFrame.width / deliveryFrame.height,
+  )
   return {
-    sensorAspectRatio,
-    deliveryAspectRatio,
-    visibleSensorWidthMm: sensor.widthMm,
-    visibleSensorHeightMm: sensor.heightMm,
-    cropHorizontalFraction: 0,
-    cropVerticalFraction: 0,
-    mode: 'none',
+    sensorAspectRatio: aperture.captureAspectRatio,
+    deliveryAspectRatio: aperture.deliveryAspectRatio,
+    visibleSensorWidthMm: aperture.activeWidthMm,
+    visibleSensorHeightMm: aperture.activeHeightMm,
+    cropHorizontalFraction: aperture.cropHorizontalFraction,
+    cropVerticalFraction: aperture.cropVerticalFraction,
+    mode: aperture.cropAxis === 'horizontal' ? 'crop-horizontal' : aperture.cropAxis === 'vertical' ? 'crop-vertical' : 'none',
   }
 }
 

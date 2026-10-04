@@ -1,6 +1,6 @@
 # Character Pose Pipeline
 
-Milestones 2E–2H-C establish the pose boundary, automatic rig analysis, anatomical reference-pose solver, and complete semantic pose library for production characters.
+Milestones 2E–2I establish the pose boundary, automatic rig analysis, anatomical reference-pose solver, and production semantic pose library for the two shipped characters.
 
 ## Canonical pose contract
 
@@ -12,7 +12,7 @@ Each pose is a serializable `PoseDefinition` with:
 - optional local position offsets for authored corrections;
 - optional root offset or root rotation;
 - grounding metadata: `feet`, `seat`, `body`, or `back`;
-- status and metadata identifying whether the definition is temporary, auto-calibrated, or artist-reviewed.
+- production status and metadata identifying the semantic source; development calibration edits remain runtime-only.
 
 The semantic IDs are the stable contract. Production bone names remain inside the Rig Profile and are never exposed to the filmmaking UI or persisted project documents.
 
@@ -22,7 +22,7 @@ The imported GLB is normalized and oriented once. Every runtime character instan
 
 Actor world placement is separate from pose data. Pose application does not change the persisted Actor position, facing, or height. Grounding may move only the internal character model: feet for standing, a hips/seat reference plus calibrated foot support surfaces for sitting, and the posed support surface for lying.
 
-The reference poses are generated from the diagnosed rig through anatomical intent: `standing-neutral`, `sitting-neutral`, and `lying-supine`. Milestone 2H-B reconstructed the Standing and Sitting variants. Milestone 2H-C completes the Lying family with `lying-prone`, `lying-left-side`, `lying-right-side`, `lying-reclined`, and `lying-curled`. Each definition is generated from semantic anatomy and marked `auto-calibrated`, not artist-reviewed. See [ANATOMICAL_POSE_SOLVER.md](ANATOMICAL_POSE_SOLVER.md).
+The reference poses are generated from the diagnosed rig through shared semantic anatomy. Standing, Sitting, and Lying each contain six accepted production poses. Male 01 and Female 01 resolve the same 18 stable IDs through their Rig Profiles; character-specific proportions are not stored as separate quaternion dumps. All 18 poses passed browser visual review. See [ANATOMICAL_POSE_SOLVER.md](ANATOMICAL_POSE_SOLVER.md).
 
 ## Authored workflow
 
@@ -37,7 +37,7 @@ GLTF `AnimationClip` data is not the canonical source for this static blocking-p
 
 ## Development calibration
 
-The calibration facility is intentionally query-gated and is not part of the normal Inspector. Open the app with `?poseCalibration=1`, select an Actor, choose a semantic joint, edit local rotation in degrees, and use **Copy Pose JSON**. Changes are runtime-only until the copied definition is reviewed and committed to the authored pose library.
+The calibration facility is intentionally development-only and is not mounted in the normal Inspector. During `npm run dev`, open the app with `?poseCalibration=1`, select an Actor, choose a semantic joint, edit local rotation in degrees, and use **Copy Pose JSON**. Production builds ignore the query flag. Changes are runtime-only until the copied definition is reviewed and committed to the authored pose library.
 
 This facility is for rig calibration and authored-pose extraction, not a general-purpose character editor. It exposes only filmmaking-relevant joint labels and never mutates the Actor domain placement.
 

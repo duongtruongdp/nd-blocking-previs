@@ -1,6 +1,10 @@
 # Camera and Framing Model
 
-This is the authoritative V1 camera contract.
+This is the authoritative V1 camera contract. Milestone 2.5A adds the
+framework-independent factual dataset and calculation contracts described in
+[CAMERA_DATA_MODEL.md](CAMERA_DATA_MODEL.md) and
+[CINEMATOGRAPHY_MATH.md](CINEMATOGRAPHY_MATH.md). Camera UI and Stage camera
+runtime remain later work.
 
 ## Filmmaker-facing decisions
 

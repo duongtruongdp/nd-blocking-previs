@@ -833,7 +833,7 @@ function getContactDebugObject(model: THREE.Object3D, actorRoot: THREE.Object3D,
 }
 
 function mergeCalibrationPose(generated: PoseDefinition, source: PoseDefinition | undefined, edited: PoseDefinition): PoseDefinition {
-  if (!source || edited.metadata.source !== 'temporary-development') return edited
+  if (!source) return edited
   const bones = { ...generated.bones }
   Object.entries(edited.bones).forEach(([joint, transform]) => {
     const sourceTransform = source.bones[joint as keyof typeof source.bones]

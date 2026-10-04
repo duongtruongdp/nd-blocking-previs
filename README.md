@@ -2,7 +2,7 @@
 
 ND Blocking & Previs is a browser-based cinematography blocking and previsualization workspace built with React, TypeScript, Three.js, and Vite.
 
-Milestone 2H-C completes the current 18-pose library through shared semantic anatomical intent. Standing and Sitting remain locked; the five remaining Lying variants now use coherent Prone, Left Side, Right Side, Reclined, and Curled anatomy with explicit support-frame diagnostics. Runtime definitions are generated for both Male 01 and Female 01. Production cameras, timeline editing, project file controls, and preview export remain reserved for later milestones.
+Milestone 2I locks the production Actor system: Male 01 and Female 01 share 18 accepted semantic poses—six Standing, six Sitting, and six Lying—adapted through Rig Profiles with support/contact-aware blocking and preserved Actor height/placement. Pose Calibration is development-only and hidden from normal use. Production cameras, timeline editing, project file controls, and preview export remain reserved for later milestones.
 
 ## Development
 

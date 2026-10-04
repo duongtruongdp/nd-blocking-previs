@@ -93,5 +93,7 @@ export function usePoseCalibrationSelector<T>(selector: (state: PoseCalibrationS
 }
 
 export function isPoseCalibrationMode(): boolean {
-  return typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('poseCalibration') === '1'
+  return import.meta.env.DEV
+    && typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('poseCalibration') === '1'
 }

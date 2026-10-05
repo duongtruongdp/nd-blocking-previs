@@ -14,7 +14,7 @@ export function V2TopBar({ view, onViewChange }: V2TopBarProps) {
       <div className="v2-topbar-actions">
         <div className="v2-segmented" aria-label="View mode">
           <button className={view === 'blocking' ? 'is-active' : ''} onClick={() => onViewChange('blocking')}>Blocking View</button>
-          <button className={view === 'camera' ? 'is-active' : ''} disabled title="Camera work is paused during Stage recovery">Camera View</button>
+          <button className={view === 'camera' ? 'is-active' : ''} onClick={() => onViewChange('camera')}>Camera View</button>
         </div>
         <button className="v2-button v2-button-primary" disabled title="Scene export arrives in a later milestone">Export</button>
       </div>

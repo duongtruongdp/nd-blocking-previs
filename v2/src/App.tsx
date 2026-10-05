@@ -80,7 +80,7 @@ export function V2App() {
       ...before,
       metadata: { ...before.metadata, updatedAt: new Date().toISOString() },
       cameras: [...before.cameras, camera],
-      activeCameraId: camera.id,
+      activeCameraId: before.activeCameraId ?? camera.id,
     }
     recordAction(`Add ${camera.name}`, before, selectedEntityIdRef.current, after, camera.id)
     applyEditorSnapshot({ document: after, selectedEntityId: camera.id })
@@ -125,7 +125,7 @@ export function V2App() {
     if (!transaction) return
     const before = transaction.before
     const after = applySceneEntityTransform(sceneDocumentRef.current, change)
-    const entity = [...after.actors, ...after.props].find((item) => item.id === change.entityId)
+    const entity = [...after.actors, ...after.props, ...after.cameras].find((item) => item.id === change.entityId)
     const action = transformTool === 'rotate' ? 'Rotate' : 'Move'
     recordAction(`${action} ${entity?.name ?? change.entityId}`, before, transaction.beforeSelection, after, change.entityId)
     applyEditorSnapshot({ document: after, selectedEntityId: change.entityId })
@@ -179,8 +179,11 @@ export function V2App() {
       <V2TopBar view={view} onViewChange={setView} />
       <V2ScenePanel actors={sceneDocument.actors} props={sceneDocument.props} cameras={sceneDocument.cameras} activeCameraId={sceneDocument.activeCameraId} selectedEntityId={selectedEntityId} onAddActor={addActor} onAddCamera={addCamera} onSetActiveCamera={setActiveCamera} onSelectEntity={handleSelectionChange} />
       <V2Stage
+        view={view}
         actors={sceneDocument.actors}
         props={sceneDocument.props}
+        cameras={sceneDocument.cameras}
+        activeCameraId={sceneDocument.activeCameraId}
         selectedEntityId={selectedEntityId}
         tool={transformTool}
         onSelectionChange={handleSelectionChange}

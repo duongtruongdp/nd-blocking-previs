@@ -38,7 +38,7 @@ export function V2ScenePanel({ actors, props, cameras, activeCameraId, selectedE
           {addOpen ? (
             <div className="v2-add-menu">
               <button onClick={addActor} type="button"><span className="v2-menu-icon">○</span>Actor</button>
-              <button disabled onClick={addCamera} type="button" title="Camera work is paused during Stage recovery"><span className="v2-menu-icon">▣</span>Camera</button>
+              <button onClick={addCamera} type="button"><span className="v2-menu-icon">▣</span>Camera</button>
               <span className="v2-add-menu-label">Props</span>
               <button disabled type="button">Cube</button>
               <button disabled type="button">Sphere</button>
@@ -97,11 +97,11 @@ export function V2ScenePanel({ actors, props, cameras, activeCameraId, selectedE
             <div className="v2-entity-list">
               {cameras.map((camera) => (
                 <div className={`v2-camera-row${selectedEntityId === camera.id ? ' is-selected' : ''}`} key={camera.id}>
-                  <button className="v2-camera-select" disabled onClick={() => onSelectEntity(camera.id)} type="button" title="Camera work is paused during Stage recovery">
+                  <button className="v2-camera-select" onClick={() => onSelectEntity(camera.id)} type="button">
                     <span className="v2-entity-swatch v2-camera-swatch" />
                     <span>{camera.name}</span>
                   </button>
-                  <button className={`v2-camera-active${activeCameraId === camera.id ? ' is-active' : ''}`} disabled onClick={() => onSetActiveCamera(camera.id)} type="button" title="Camera work is paused during Stage recovery">
+                  <button className={`v2-camera-active${activeCameraId === camera.id ? ' is-active' : ''}`} onClick={() => onSetActiveCamera(camera.id)} type="button" title={activeCameraId === camera.id ? 'Active Camera' : 'Set Active Camera'}>
                     {activeCameraId === camera.id ? 'A' : '·'}
                   </button>
                 </div>

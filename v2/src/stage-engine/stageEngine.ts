@@ -10,7 +10,7 @@ const GIZMO_AXIS_COLORS = { x: 0xe5484d, y: 0x62d16e, z: 0x4d8ff0 } as const
 
 type AxisName = keyof typeof GIZMO_AXIS_COLORS
 
-export type StageEntityType = 'Prop' | 'Actor'
+export type StageEntityType = 'Prop' | 'Actor' | 'Camera'
 
 export type StageEntity = {
   id: string

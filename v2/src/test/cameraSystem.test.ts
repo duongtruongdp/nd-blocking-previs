@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { CAMERA_DATABASE } from '../core/cameraDatabase'
-import { createCameraDocument, createEmptySceneDocument } from '../core/sceneDocument'
+import { applySceneEntityTransform, createCameraDocument, createEmptySceneDocument } from '../core/sceneDocument'
 import { cameraDisplayAspect, cameraProjectionForDocument, horizontalFovDegrees, letterboxRect, verticalFovDegrees } from '../runtime/cameraMath'
 import { ProceduralCameraRuntime } from '../runtime/cameraRuntime'
 
@@ -19,6 +19,19 @@ describe('V2 Camera system foundation', () => {
     expect(next.cameras[0]).not.toHaveProperty('productionCamera')
     expect(JSON.stringify(next)).not.toContain('PerspectiveCamera')
     expect(next.activeCameraId).toBe(camera.id)
+  })
+
+  it('keeps active-camera state independent from the selected camera entity and transforms', () => {
+    const definition = CAMERA_DATABASE[0]
+    const mode = definition.captureModes[0]
+    const first = createCameraDocument('camera-01', 'Camera 01', [2, 2, 4], [0, 0.5, 0], definition.id, mode.id)
+    const second = createCameraDocument('camera-02', 'Camera 02', [-2, 2, 4], [0, -0.5, 0], definition.id, mode.id)
+    const scene = { ...createEmptySceneDocument(), cameras: [first, second], activeCameraId: first.id }
+    const activated = { ...scene, activeCameraId: second.id }
+    const transformed = applySceneEntityTransform(activated, { entityId: first.id, position: [3, 1, 2], rotation: [0.2, 0.4, 0] })
+    expect(transformed.activeCameraId).toBe(second.id)
+    expect(transformed.cameras.find((camera) => camera.id === second.id)).toEqual(second)
+    expect(transformed.cameras.find((camera) => camera.id === first.id)?.position).toEqual([3, 1, 2])
   })
 
   it('derives projection FOV from active capture area rather than sensor label', () => {
@@ -49,6 +62,20 @@ describe('V2 Camera system foundation', () => {
     expect(direction.z).toBeCloseTo(-1, 8)
     expect(runtime.selectableMeshes.length).toBeGreaterThan(10)
     expect(runtime.selectableMeshes.every((mesh) => mesh.userData.entityId === camera.id)).toBe(true)
+    runtime.dispose()
+  })
+
+  it('keeps the generic Stage representation when capture model data changes', () => {
+    const firstDefinition = CAMERA_DATABASE[0]
+    const secondDefinition = CAMERA_DATABASE[1]
+    const camera = createCameraDocument('camera-01', 'Camera 01', [0, 1, 3], [0, 0, 0], firstDefinition.id, firstDefinition.captureModes[0].id)
+    const runtime = new ProceduralCameraRuntime(camera)
+    const proxyMeshes = [...runtime.selectableMeshes]
+    const proxyNames = proxyMeshes.map((mesh) => mesh.name)
+    runtime.applyDocument({ ...camera, cameraDefinitionId: secondDefinition.id, captureModeId: secondDefinition.captureModes[0].id })
+    expect(runtime.selectableMeshes).toEqual(proxyMeshes)
+    expect(runtime.selectableMeshes.map((mesh) => mesh.name)).toEqual(proxyNames)
+    expect(runtime.root.position.toArray()).toEqual(camera.position)
     runtime.dispose()
   })
 

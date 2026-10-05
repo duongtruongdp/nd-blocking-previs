@@ -87,6 +87,9 @@ h2 { margin: 3px 0 0; font-size: 16px; letter-spacing: -0.02em; }
 .v2-stage-panel { grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; }
 .v2-stage-viewport { position: relative; width: 100%; height: 100%; overflow: hidden; border: 1px solid rgba(91, 98, 128, 0.12); border-radius: var(--radius-large); background: #d9deef; box-shadow: var(--shadow-float); }
 .v2-stage-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+.v2-camera-view-canvas { position: absolute; z-index: 1; inset: 0; display: none; width: 100%; height: 100%; pointer-events: none; }
+.v2-view-camera .v2-stage-canvas { visibility: hidden; }
+.v2-view-camera .v2-camera-view-canvas { display: block; }
 .v2-stage-header, .v2-stage-footer { position: absolute; z-index: 2; display: flex; align-items: center; gap: 10px; color: rgba(55, 62, 84, 0.72); font-size: 11px; font-weight: 600; pointer-events: none; }
 .v2-stage-header { top: 18px; left: 20px; }
 .v2-stage-pill { padding: 7px 10px; border-radius: 9px; background: rgba(255, 255, 255, 0.72); color: var(--accent); box-shadow: 3px 3px 10px rgba(93, 101, 133, 0.14); }
@@ -106,7 +109,7 @@ h2 { margin: 3px 0 0; font-size: 16px; letter-spacing: -0.02em; }
 .v2-camera-view-overlay { position: absolute; z-index: 2; inset: 0; display: grid; place-items: center; pointer-events: none; }
 .v2-camera-view-readout { position: absolute; top: 18px; left: 20px; display: grid; gap: 3px; padding: 8px 10px; border-radius: 8px; background: rgba(16, 21, 31, 0.72); color: rgba(255, 255, 255, 0.72); font-size: 10px; }
 .v2-camera-view-readout strong { color: #fff; font-size: 11px; }
-.v2-camera-frame-guide { width: min(82%, 900px); max-height: 76%; border: 1px solid rgba(240, 184, 102, 0.86); box-shadow: 0 0 0 9999px rgba(10, 14, 22, 0.12); }
+.v2-camera-frame-guide { width: min(82%, 900px); max-width: 82%; max-height: 76%; border: 1px solid rgba(240, 184, 102, 0.86); box-shadow: 0 0 0 9999px rgba(10, 14, 22, 0.12); }
 
 .v2-details-panel h2 { margin-bottom: var(--space-6); }
 .v2-details-empty { display: grid; justify-items: center; gap: 10px; padding: 30px 10px; text-align: center; }

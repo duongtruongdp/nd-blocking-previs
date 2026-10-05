@@ -1,6 +1,6 @@
 # ND Blocking & Previs — Architecture and Implementation Plan
 
-Status: Milestone 3A current: Camera Object Foundation complete; Camera View and timeline editing remain intentionally unimplemented.
+Status: V2 Camera Integration B current: generic Camera registration, active-camera state, production Camera View rendering, and Camera Inspector synchronization are implemented through the frozen V2 StageEngine API; manual browser acceptance remains required; timeline editing remains intentionally unimplemented.
 Scope: Phase 1 foundation, workspace shell, Actor/Prop blocking, locked Actor/Pose system, verified camera data, and serializable Camera objects.
 
 Milestone 0 decisions are implemented in the domain source and specified by these focused contracts:
@@ -32,8 +32,7 @@ the Blocking View, and expose Camera Model, Sensor Mode, Recording Format, Lens,
 Focus, Placement, and Frame Guide fields in the Inspector. The Stage displays a
 lightweight camera body, lens, forward marker, and finite frustum guide. The
 navigation camera remains an editor-only viewpoint and is never serialized.
-Camera View, delivery overlays, timeline animation, and export remain later
-milestones.
+Camera View, timeline animation, and export remain later milestones.
 
 ## 1. Repository audit
 
@@ -676,6 +675,34 @@ Internal implementation names may use technical terms where they make the code c
 
 ## 14. Recommended next step
 
+### V2.4 Camera System Foundation
+
+V2.4 adds the first production Camera workflow to the V2 editor. Camera
+definitions and provenance live in `v2/src/core/cameraDatabase.ts`; scenes
+store stable camera and capture-mode IDs plus lens, squeeze, delivery-frame,
+and transform values. Runtime projection uses the selected mode's active
+capture area, while recording resolution and physical sensor dimensions stay
+separate.
+
+The Stage creates a lightweight generic procedural cinema-camera proxy and a
+separate production `PerspectiveCamera`. Blocking View continues to use its
+existing navigation camera and state. Camera View switches only the render
+camera, applies capture-aspect letterboxing (and display desqueeze for
+anamorphic lenses), and draws a compact delivery Frame Guide. Selection,
+Move, Rotate, framing, and history use the existing V2 entity pathways.
+
+The initial verified seed set and source notes are documented in
+`v2/docs/CAMERA_DATA.md`. Timeline, Camera View image effects, project file
+serialization, and video export remain later milestones.
+
+V2 Camera Integration B reconnects this workflow through the frozen V2
+StageEngine entity API. Cameras are registered as ordinary selectable Stage
+entities, while `activeCameraId` remains independent from `selectedEntityId`.
+Blocking View keeps the editor camera and all existing interaction algorithms;
+Camera View uses a separate read-only render adapter with the production camera,
+capture letterboxing, and delivery-frame guides. Camera settings and completed
+Camera transforms continue through the existing SceneDocument and history paths.
+
 Milestone 2I is complete. The production Actor baseline contains Male 01 and Female 01, 18 stable semantic poses (six Standing, six Sitting, six Lying), shared semantic definitions adapted through Rig Profiles, support/contact-aware Sitting and Lying, height-preserving Actor placement, and a development-only Pose Calibration tool hidden from normal use. The full Actor/Pose development phase is locked.
 
 Milestone 2.5A, 2.5B, 2.5B-FIX, and 2.5C are complete. The Camera Data
@@ -686,12 +713,60 @@ independent Camera Registry, pure cinematography calculations, centered
 delivery crops, anamorphic geometry, and a resolved capture-selection contract
 for project reproducibility.
 
-Milestone 3A is the current lock: Camera objects are now part of the Stage and
-project document. Do not begin Camera View, timeline animation, lighting,
-export, or WordPress integration in this pass.
+Milestone 3A established the Camera object as part of the Stage and project
+document. Its navigation camera remained editor-only and Camera data stayed
+independent from Stage representation.
 
 Milestone 3A.1 is a language-only pass over the existing shell. Normal UI uses
 filmmaking terms such as Capture Mode, Sensor Area, Capture Ratio, Lens Type,
 Position, and Facing Direction. Internal implementation names and technical
 documentation remain unchanged. Camera behavior, project fields, and runtime
 math are not altered.
+
+Milestone 3A.2 established the generic Camera proxy as a lightweight
+procedural cinema-camera symbol with a
+graphite body, compact front-to-back top handle, stepped lens, shallow matte-
+box frame, side details, and lens-aligned finite FOV guide. It remains
+manufacturer-independent; Camera Model selection changes capture behavior only
+and never swaps the Stage representation.
+
+Milestone 3B adds the first Camera View foundation. Camera View reuses the
+existing Stage renderer and selected filmmaking Camera runtime, preserves the
+Blocking View navigation state, centers the capture image at its desqueezed
+display aspect, and overlays the selected delivery Frame Guide without
+changing capture geometry. Timeline, depth of field, and other image-making
+effects remain out of scope.
+
+Milestone 3B.1 restores direct Stage selection and subject manipulation on
+top of that Camera View foundation. Blocking View and Camera View now share
+owner-aware hit testing, helper exclusion, click-versus-orbit-drag handling,
+and the existing authoritative placement commit path. Camera View uses the
+actual centered capture rectangle for pointer coordinates and permits Move or
+Rotate only for Actors and Props; the viewed Camera remains hidden and the
+view remains locked. Timeline, new Camera behavior, and image-making effects
+remain out of scope.
+
+Milestone 3B.2 adds a compact Stage-only View Cube for Blocking View. It uses
+a DOM/CSS orientation cube with explicit face controls, follows the navigation
+camera orientation, and snaps FRONT/BACK/LEFT/RIGHT/TOP/BOTTOM while
+preserving the current orbit target and working distance. It provides a
+navigation-only Home action and is isolated from Stage entity selection,
+project serialization, Camera View, and the event-driven render policy.
+
+Milestone 3B.5 makes Stage input explicit and professional. One Stage Gesture
+Router arbitrates pending left clicks, Orbit drags, and TransformControls
+priority before native OrbitControls receives a gesture. Orbit drags used
+OrbitControls' public rotation semantics, while right-drag and wheel remained
+native. The DOM View Cube exposed semantic face, edge, and corner zones for all
+26 directions, supported cube dragging, and preserved target/distance on snap.
+
+Milestone 3B.6 rebases Blocking View interaction around one deterministic
+navigation state instead of OrbitControls. The state contains target, distance,
+azimuth, and polar; the PerspectiveCamera is derived from it. A 5 CSS-pixel
+pending gesture threshold routes left click selection on pointerup, left drag
+orbit, right drag pan, and wheel zoom without a competing native click listener.
+TransformControls retains highest priority for Move/Rotate gizmo drags. Camera
+View and the existing DOM View Cube remain compatibility seams, while all
+Blocking View navigation updates preserve selection and use invalidate-on-demand
+rendering. `?interactionDebug=1` remains available for manual browser
+acceptance.

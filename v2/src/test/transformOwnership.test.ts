@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { createActorDocument, createCameraDocument, createEmptySceneDocument } from '../core/sceneDocument'
 import { CAMERA_DATABASE } from '../core/cameraDatabase'
 import { createDefaultProps } from '../scene/testEntities'
-import { shouldApplyTimelineEvaluation, commitTimelineTransform, timelineEditingEnabled } from '../timeline/transformOwnership'
+import { captureTimelineValue, shouldApplyTimelineEvaluation, commitTimelineTransform, timelineEditingEnabled } from '../timeline/transformOwnership'
 import { upsertTimelineKeyframe } from '../timeline/timelineMath'
 
 const change = (entityId: string) => ({ entityId, position: [2, 0, -3] as [number, number, number], rotation: [0.1, 0.8, 0] as [number, number, number] })
 
-describe('V2.5A timeline transform ownership', () => {
+describe('V2.6B timeline transform ownership and keyframe capture', () => {
   it('commits an unanimated Actor move to base SceneDocument state', () => {
     const actor = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
     const result = commitTimelineTransform({ ...createEmptySceneDocument(), actors: [actor] }, change(actor.id))
@@ -16,15 +16,16 @@ describe('V2.5A timeline transform ownership', () => {
     expect(result.suspendEvaluation).toBe(false)
   })
 
-  it('updates an existing exact Actor keyframe without duplicating it', () => {
+  it('keeps an existing keyframe unchanged until the diamond explicitly captures the override', () => {
     const actor = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
     let timeline = createEmptySceneDocument().timeline
     timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 0, [0, 0, 0])
     const result = commitTimelineTransform({ ...createEmptySceneDocument(), actors: [actor], timeline }, change(actor.id))
     expect(result.document.timeline.tracks[0].keyframes).toHaveLength(1)
-    expect(result.document.timeline.tracks[0].keyframes[0].value).toEqual([2, 0, -3])
-    expect(result.document.actors[0].position).toEqual([0, 0, 0])
-    expect(result.changedKeyframe).toBe(true)
+    expect(result.document.timeline.tracks[0].keyframes[0].value).toEqual([0, 0, 0])
+    expect(result.document.actors[0].position).toEqual([2, 0, -3])
+    expect(result.changedKeyframe).toBe(false)
+    expect(result.suspendEvaluation).toBe(true)
   })
 
   it('commits base state but suspends immediate evaluation when a track lacks a current-frame keyframe', () => {
@@ -56,5 +57,33 @@ describe('V2.5A timeline transform ownership', () => {
     const propResult = commitTimelineTransform({ ...createEmptySceneDocument(), props: [prop] }, change(prop.id))
     expect(cameraResult.document.cameras[0].position).toEqual([2, 0, -3])
     expect(propResult.document.props[0].position).toEqual([2, 0, -3])
+  })
+
+  it('captures the current visible Actor value when creating a first keyframe', () => {
+    const actor = createActorDocument('actor-01', 'Actor 01', [2, 0, -3])
+    const value = captureTimelineValue(actor, 'position')
+    const timeline = upsertTimelineKeyframe(createEmptySceneDocument().timeline, actor.id, 'Actor', 'position', 0, value!)
+    expect(timeline.tracks[0].keyframes[0].value).toEqual([2, 0, -3])
+  })
+
+  it('captures a user override instead of the evaluated value when a track already exists', () => {
+    const actor = createActorDocument('actor-01', 'Actor 01', [2, 0, -3])
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 0, [0, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 48, [8, 0, 0])
+    const value = captureTimelineValue(actor, 'position')
+    const next = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 24, value!)
+    expect(next.tracks[0].keyframes.find((keyframe) => keyframe.frame === 24)?.value).toEqual([2, 0, -3])
+  })
+
+  it('captures the current Camera focal length without creating duplicate same-frame keys', () => {
+    const definition = CAMERA_DATABASE[0]
+    const camera = createCameraDocument('camera-01', 'Camera 01', [0, 1, 5], [0, 0, 0], definition.id, definition.captureModes[0].id)
+    const visibleCamera = { ...camera, focalLengthMm: 47.5 }
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, camera.id, 'Camera', 'focalLengthMm', 0, 24)
+    timeline = upsertTimelineKeyframe(timeline, camera.id, 'Camera', 'focalLengthMm', 0, captureTimelineValue(visibleCamera, 'focalLengthMm')!)
+    expect(timeline.tracks[0].keyframes).toHaveLength(1)
+    expect(timeline.tracks[0].keyframes[0].value).toBe(47.5)
   })
 })

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RationalFrameRate, TimelineDocument, TimelineProperty, TimelineTrack } from '../core/sceneDocument'
-import { TIMELINE_FRAME_RATES, clampTimelineFrame, frameRateLabel } from '../timeline/timelineMath'
+import { TIMELINE_FRAME_RATES, clampTimelineFrame, frameRateLabel, frameToTimelinePercent } from '../timeline/timelineMath'
 
 type V2TimelineProps = {
   timeline: TimelineDocument
@@ -24,11 +24,6 @@ const propertyLabels: Record<TimelineProperty, string> = {
   heading: 'Heading',
   rotation: 'Rotation',
   focalLengthMm: 'Focal Length',
-}
-
-function framePercent(frame: number, timeline: TimelineDocument): number {
-  const range = Math.max(1, timeline.endFrame - timeline.startFrame)
-  return ((frame - timeline.startFrame) / range) * 100
 }
 
 function frameFromPointer(clientX: number, element: HTMLDivElement, timeline: TimelineDocument): number {
@@ -92,15 +87,23 @@ export function V2Timeline({ timeline, tracks, entityNames, selectedEntityId, is
       </div>
       <div className="v2-timeline-track-area">
         <div className="v2-track-label">Tracks</div>
+        <div className="v2-timeline-range-layer" aria-hidden="true">
+          <div className="v2-timeline-range-outside" style={{ left: 0, width: `${frameToTimelinePercent(timeline.markIn, timeline)}%` }} />
+          <div className="v2-timeline-range-outside" style={{ left: `${frameToTimelinePercent(timeline.markOut, timeline)}%`, right: 0 }} />
+          <div className="v2-timeline-range-active" style={{ left: `${frameToTimelinePercent(timeline.markIn, timeline)}%`, width: `${Math.max(0, frameToTimelinePercent(timeline.markOut, timeline) - frameToTimelinePercent(timeline.markIn, timeline))}%` }} />
+        </div>
         <div className="v2-ruler" ref={rulerRef} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); onScrubEnd() }} onPointerCancel={onScrubEnd}>
-          {ticks.map((frame) => <span key={frame} style={{ left: `${framePercent(frame, timeline)}%` }}>{String(frame).padStart(2, '0')}</span>)}
-          <div className="v2-timeline-playhead" style={{ left: `${framePercent(timeline.currentFrame, timeline)}%` }} aria-hidden="true" />
+          <div className="v2-timeline-ruler-range" style={{ left: `${frameToTimelinePercent(timeline.markIn, timeline)}%`, width: `${Math.max(0, frameToTimelinePercent(timeline.markOut, timeline) - frameToTimelinePercent(timeline.markIn, timeline))}%` }} aria-hidden="true" />
+          <div className="v2-timeline-mark v2-timeline-mark-in" style={{ left: `${frameToTimelinePercent(timeline.markIn, timeline)}%` }}><span>IN</span></div>
+          <div className="v2-timeline-mark v2-timeline-mark-out" style={{ left: `${frameToTimelinePercent(timeline.markOut, timeline)}%` }}><span>OUT</span></div>
+          {ticks.map((frame) => <span key={frame} style={{ left: `${frameToTimelinePercent(frame, timeline)}%` }}>{String(frame).padStart(2, '0')}</span>)}
+          <div className="v2-timeline-playhead" style={{ left: `${frameToTimelinePercent(timeline.currentFrame, timeline)}%` }} aria-hidden="true" />
         </div>
         <div className="v2-timeline-tracks">
           {tracks.map((track) => <div className={`v2-timeline-track${track.entityId === selectedEntityId ? ' is-selected' : ''}`} key={track.id}>
             <span className="v2-timeline-track-name">{trackTitle(track, entityNames)}</span>
             <div className="v2-timeline-track-lane">
-              {track.keyframes.map((keyframe) => <button className={`v2-timeline-keyframe${keyframe.frame === timeline.currentFrame ? ' is-current' : ''}${selectedKeyframe?.trackId === track.id && selectedKeyframe.keyframeId === keyframe.id ? ' is-selected' : ''}`} key={keyframe.id} style={{ left: `${framePercent(keyframe.frame, timeline)}%` }} title={`${trackTitle(track, entityNames)} · frame ${keyframe.frame}`} aria-label={`Select ${trackTitle(track, entityNames)} keyframe at frame ${keyframe.frame}`} onClick={() => setSelectedKeyframe({ trackId: track.id, keyframeId: keyframe.id })} type="button" />)}
+              {track.keyframes.map((keyframe) => <button className={`v2-timeline-keyframe${keyframe.frame === timeline.currentFrame ? ' is-current' : ''}${selectedKeyframe?.trackId === track.id && selectedKeyframe.keyframeId === keyframe.id ? ' is-selected' : ''}`} key={keyframe.id} style={{ left: `${frameToTimelinePercent(keyframe.frame, timeline)}%` }} title={`${trackTitle(track, entityNames)} · frame ${keyframe.frame}`} aria-label={`Select ${trackTitle(track, entityNames)} keyframe at frame ${keyframe.frame}`} onClick={() => setSelectedKeyframe({ trackId: track.id, keyframeId: keyframe.id })} type="button" />)}
             </div>
           </div>)}
         </div>

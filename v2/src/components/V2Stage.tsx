@@ -170,14 +170,17 @@ export function V2Stage({ view, actors, props, cameras, activeCameraId, selected
   }, [selectedEntityId])
 
   useEffect(() => {
-    const evaluatedActors = actors.map((actor) => evaluatedEntities[actor.id] ? { ...actor, ...evaluatedEntities[actor.id] } : actor)
-    const evaluatedCameras = cameras.map((camera) => evaluatedEntities[camera.id] ? { ...camera, ...evaluatedEntities[camera.id], focalLengthMm: evaluatedEntities[camera.id].focalLengthMm ?? camera.focalLengthMm } : camera)
+    const evaluatedActors = actors.map((actor) => shouldApplyTimelineEvaluation(actor.id, transformingEntityId, suspendedTimelineEntityIds) && evaluatedEntities[actor.id] ? { ...actor, ...evaluatedEntities[actor.id] } : actor)
+    const evaluatedCameras = cameras.map((camera) => shouldApplyTimelineEvaluation(camera.id, transformingEntityId, suspendedTimelineEntityIds) && evaluatedEntities[camera.id] ? { ...camera, ...evaluatedEntities[camera.id], focalLengthMm: evaluatedEntities[camera.id].focalLengthMm ?? camera.focalLengthMm } : camera)
     const activeCamera = evaluatedCameras.find((camera) => camera.id === activeCameraId) ?? null
     cameraViewRef.current?.setDocuments(evaluatedActors, props, activeCamera)
     cameraViewRef.current?.setVisible(view === 'camera' && activeCamera !== null)
-  }, [view, actors, props, cameras, activeCameraId, evaluatedEntities])
+  }, [view, actors, props, cameras, activeCameraId, evaluatedEntities, suspendedTimelineEntityIds, transformingEntityId])
 
-  const activeCamera = cameras.find((camera) => camera.id === activeCameraId) ?? null
+  const activeCameraBase = cameras.find((camera) => camera.id === activeCameraId) ?? null
+  const activeCamera = activeCameraBase && shouldApplyTimelineEvaluation(activeCameraBase.id, transformingEntityId, suspendedTimelineEntityIds) && evaluatedEntities[activeCameraBase.id]
+    ? { ...activeCameraBase, ...evaluatedEntities[activeCameraBase.id], focalLengthMm: evaluatedEntities[activeCameraBase.id].focalLengthMm ?? activeCameraBase.focalLengthMm }
+    : activeCameraBase
   const renderCamera = view === 'camera' && activeCamera ? 'PRODUCTION' : 'EDITOR'
 
   return (

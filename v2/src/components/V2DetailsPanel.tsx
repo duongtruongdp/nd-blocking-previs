@@ -48,7 +48,7 @@ function CameraInspector({ camera, activeCameraId, timeline, onCameraChange, onS
       </select>
       <span className="v2-eyebrow v2-inspector-subsection">Lens</span>
       <div className="v2-inspector-inline-fields">
-        <NumericCameraInput label="Focal length" value={camera.focalLengthMm} unit="mm" min={0.1} max={1000} step={0.1} keyframe={{ active: hasTimelineKeyframe(timeline, camera.id, 'focalLengthMm'), onClick: () => onAddKeyframe(camera.id, 'focalLengthMm') }} onCommit={(value) => onCameraChange(camera.id, { focalLengthMm: value })} />
+        <NumericCameraInput label="Focal length" value={camera.focalLengthMm} unit="mm" min={0.1} max={1000} step={0.1} keyframe={{ active: hasTimelineKeyframe(timeline, camera.id, 'focalLengthMm'), hasTrack: hasTimelineTrack(timeline, camera.id, 'focalLengthMm'), onClick: () => onAddKeyframe(camera.id, 'focalLengthMm') }} onCommit={(value) => onCameraChange(camera.id, { focalLengthMm: value })} />
         <label>Type<select className="v2-inspector-select" value={camera.lensType} onChange={(event) => onCameraChange(camera.id, { lensType: event.target.value as CameraDocument['lensType'], anamorphicSqueeze: event.target.value === 'Spherical' ? 1 : camera.anamorphicSqueeze === 1 ? 1.33 : camera.anamorphicSqueeze })}><option value="Spherical">Spherical</option><option value="Anamorphic">Anamorphic</option></select></label>
       </div>
       {camera.lensType === 'Anamorphic' ? <label className="v2-inspector-label">Squeeze<select className="v2-inspector-select" value={camera.anamorphicSqueeze} onChange={(event) => onCameraChange(camera.id, { anamorphicSqueeze: Number(event.target.value) as CameraDocument['anamorphicSqueeze'] })}>{[1.33, 1.5, 1.8, 2].map((value) => <option key={value} value={value}>{value}:1</option>)}</select></label> : null}
@@ -68,7 +68,7 @@ function CameraInspector({ camera, activeCameraId, timeline, onCameraChange, onS
       <span className="v2-eyebrow v2-inspector-subsection">Delivery</span>
       <select className="v2-inspector-select" value={camera.deliveryAspectRatio} onChange={(event) => onCameraChange(camera.id, { deliveryAspectRatio: event.target.value as CameraDocument['deliveryAspectRatio'] })}><option value="sensor">Sensor / Native</option><option value="16:9">16:9</option><option value="1.85">1.85</option><option value="2.00">2.00</option><option value="2.39">2.39</option></select>
       <span className="v2-eyebrow v2-inspector-subsection">Transform</span>
-      <span className="v2-eyebrow v2-inspector-field-label v2-inspector-keyframe-label">Position <KeyframeButton active={hasTimelineKeyframe(timeline, camera.id, 'position')} onClick={() => onAddKeyframe(camera.id, 'position')} label="Add Camera Position keyframe" /></span>
+      <span className="v2-eyebrow v2-inspector-field-label v2-inspector-keyframe-label">Position <KeyframeButton active={hasTimelineKeyframe(timeline, camera.id, 'position')} hasTrack={hasTimelineTrack(timeline, camera.id, 'position')} onClick={() => onAddKeyframe(camera.id, 'position')} label="Add Camera Position keyframe" /></span>
       <div className="v2-editable-vector">
         {(['X', 'Y', 'Z'] as const).map((label, index) => <NumericCameraInput key={label} label={label} value={camera.position[index]} unit="m" min={-1000} max={1000} step={0.01} onCommit={(value) => {
           const position = [...camera.position] as [number, number, number]
@@ -76,7 +76,7 @@ function CameraInspector({ camera, activeCameraId, timeline, onCameraChange, onS
           onCameraChange(camera.id, { position })
         }} />)}
       </div>
-      <span className="v2-eyebrow v2-inspector-field-label v2-inspector-keyframe-label">Orientation <KeyframeButton active={hasTimelineKeyframe(timeline, camera.id, 'rotation')} onClick={() => onAddKeyframe(camera.id, 'rotation')} label="Add Camera Rotation keyframe" /></span>
+      <span className="v2-eyebrow v2-inspector-field-label v2-inspector-keyframe-label">Orientation <KeyframeButton active={hasTimelineKeyframe(timeline, camera.id, 'rotation')} hasTrack={hasTimelineTrack(timeline, camera.id, 'rotation')} onClick={() => onAddKeyframe(camera.id, 'rotation')} label="Add Camera Rotation keyframe" /></span>
       <div className="v2-editable-vector">
         {(['Pitch', 'Heading', 'Roll'] as const).map((label, index) => <NumericCameraInput key={label} label={label} value={radiansToDegrees(camera.rotation[index])} unit="°" min={-360} max={360} step={0.1} onCommit={(value) => {
           const rotation = [...camera.rotation] as [number, number, number]
@@ -90,7 +90,7 @@ function CameraInspector({ camera, activeCameraId, timeline, onCameraChange, onS
 }
 
 function ActorInspector({ actor, timeline, onAddKeyframe }: { actor: ActorDocument; timeline: TimelineDocument; onAddKeyframe: V2DetailsPanelProps['onAddKeyframe'] }) {
-  return <EntityInspector eyebrow="Actor" name={actor.name} position={actor.position} rotation={actor.rotation} positionKeyframe={<KeyframeButton active={hasTimelineKeyframe(timeline, actor.id, 'position')} onClick={() => onAddKeyframe(actor.id, 'position')} label="Add Actor Position keyframe" />} rotationKeyframe={<KeyframeButton active={hasTimelineKeyframe(timeline, actor.id, 'heading')} onClick={() => onAddKeyframe(actor.id, 'heading')} label="Add Actor Heading keyframe" />}><span className="v2-eyebrow v2-inspector-subsection">Pose</span><span className="v2-readonly-value">Standing</span></EntityInspector>
+  return <EntityInspector eyebrow="Actor" name={actor.name} position={actor.position} rotation={actor.rotation} positionKeyframe={<KeyframeButton active={hasTimelineKeyframe(timeline, actor.id, 'position')} hasTrack={hasTimelineTrack(timeline, actor.id, 'position')} onClick={() => onAddKeyframe(actor.id, 'position')} label="Add Actor Position keyframe" />} rotationKeyframe={<KeyframeButton active={hasTimelineKeyframe(timeline, actor.id, 'heading')} hasTrack={hasTimelineTrack(timeline, actor.id, 'heading')} onClick={() => onAddKeyframe(actor.id, 'heading')} label="Add Actor Heading keyframe" />}><span className="v2-eyebrow v2-inspector-subsection">Pose</span><span className="v2-readonly-value">Standing</span></EntityInspector>
 }
 
 function PropInspector({ prop }: { prop: PropDocument }) {
@@ -109,7 +109,7 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="v2-camera-metric"><span>{label}</span><strong>{value}</strong></div>
 }
 
-function NumericCameraInput({ label, value, unit, min, max, step, keyframe, onCommit }: { label: string; value: number; unit: string; min: number; max: number; step: number; keyframe?: { active: boolean; onClick: () => void }; onCommit: (value: number) => void }) {
+function NumericCameraInput({ label, value, unit, min, max, step, keyframe, onCommit }: { label: string; value: number; unit: string; min: number; max: number; step: number; keyframe?: { active: boolean; hasTrack: boolean; onClick: () => void }; onCommit: (value: number) => void }) {
   const [draft, setDraft] = useState(() => formatCameraNumber(value))
   const [editing, setEditing] = useState(false)
 
@@ -138,15 +138,20 @@ function NumericCameraInput({ label, value, unit, min, max, step, keyframe, onCo
     }
   }
 
-  return <label className="v2-editable-number"><span className="v2-inspector-keyframe-label">{label}{keyframe ? <KeyframeButton active={keyframe.active} onClick={keyframe.onClick} label={`Add ${label} keyframe`} /> : null}</span><span className="v2-editable-number-field"><input type="number" inputMode="decimal" step={step} min={min} max={max} value={editing ? draft : formatCameraNumber(value)} onFocus={() => { setDraft(formatCameraNumber(value)); setEditing(true) }} onChange={(event) => { setEditing(true); setDraft(event.target.value) }} onBlur={commit} onKeyDown={handleKeyDown} /><small>{unit}</small></span></label>
+  return <label className="v2-editable-number"><span className="v2-inspector-keyframe-label">{label}{keyframe ? <KeyframeButton active={keyframe.active} hasTrack={keyframe.hasTrack} onClick={keyframe.onClick} label={`Add ${label} keyframe`} /> : null}</span><span className="v2-editable-number-field"><input type="number" inputMode="decimal" step={step} min={min} max={max} value={editing ? draft : formatCameraNumber(value)} onFocus={() => { setDraft(formatCameraNumber(value)); setEditing(true) }} onChange={(event) => { setEditing(true); setDraft(event.target.value) }} onBlur={commit} onKeyDown={handleKeyDown} /><small>{unit}</small></span></label>
 }
 
 function hasTimelineKeyframe(timeline: TimelineDocument, entityId: string, property: TimelineProperty): boolean {
   return timeline.tracks.some((track) => track.entityId === entityId && track.property === property && track.keyframes.some((keyframe) => keyframe.frame === timeline.currentFrame))
 }
 
-function KeyframeButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
-  return <button className={`v2-keyframe-button${active ? ' is-active' : ''}`} aria-label={label} title={label} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onClick() }} type="button">{active ? '◆' : '◇'}</button>
+function hasTimelineTrack(timeline: TimelineDocument, entityId: string, property: TimelineProperty): boolean {
+  return timeline.tracks.some((track) => track.entityId === entityId && track.property === property)
+}
+
+function KeyframeButton({ active, hasTrack, onClick, label }: { active: boolean; hasTrack: boolean; onClick: () => void; label: string }) {
+  const actionLabel = active ? label.replace(/^Add /, 'Update ') : hasTrack ? `${label} using current value` : label
+  return <button className={`v2-keyframe-button${active ? ' is-active' : ''}${hasTrack ? ' has-track' : ''}`} aria-label={actionLabel} title={actionLabel} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onClick() }} type="button">{active ? '◆' : '◇'}</button>
 }
 
 function EmptyInspector() {

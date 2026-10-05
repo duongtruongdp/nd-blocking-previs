@@ -32,6 +32,11 @@ export function clampTimelineFrame(frame: number, startFrame: number, endFrame: 
   return Math.min(endFrame, Math.max(startFrame, Math.round(frame)))
 }
 
+export function frameToTimelinePercent(frame: number, timeline: Pick<TimelineDocument, 'startFrame' | 'endFrame'>): number {
+  const range = Math.max(1, timeline.endFrame - timeline.startFrame)
+  return Math.min(100, Math.max(0, ((frame - timeline.startFrame) / range) * 100))
+}
+
 export function setTimelineMark(timeline: TimelineDocument, kind: 'in' | 'out', frame: number): TimelineDocument {
   const nextFrame = clampTimelineFrame(frame, timeline.startFrame, timeline.endFrame)
   return kind === 'in'

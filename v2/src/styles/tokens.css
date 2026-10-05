@@ -1,0 +1,25 @@
+:root {
+  --app-background: #e5e8f4;
+  --surface: #f5f6fc;
+  --surface-raised: #ffffff;
+  --surface-inset: #e3e6f1;
+  --text-primary: #2c3040;
+  --text-secondary: #697087;
+  --text-muted: #9aa1b6;
+  --accent: #7669c9;
+  --accent-hover: #6659b8;
+  --accent-soft: #e9e7fb;
+  --line-soft: rgba(91, 98, 128, 0.13);
+  --shadow-raised: 10px 10px 24px rgba(116, 123, 157, 0.16), -8px -8px 20px rgba(255, 255, 255, 0.78);
+  --shadow-inset: inset 3px 3px 8px rgba(126, 133, 164, 0.13), inset -3px -3px 8px rgba(255, 255, 255, 0.75);
+  --shadow-float: 0 18px 42px rgba(101, 108, 145, 0.2);
+  --radius-small: 10px;
+  --radius-medium: 16px;
+  --radius-large: 24px;
+  --space-1: 6px;
+  --space-2: 10px;
+  --space-3: 14px;
+  --space-4: 18px;
+  --space-5: 24px;
+  --space-6: 32px;
+}

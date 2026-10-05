@@ -1,0 +1,2 @@
+export { StageEngine, type StageAxisDragDebug, type StageEngineDebugSnapshot, type StageEngineOptions, type StageEntity, type StageEntityType, type StagePropDefinition, type StageTransform } from './stageEngine'
+export { stageCameraSpaceDepth, stageMovedBeyondThreshold, stageNdcFromEvent, stagePointerDeltaAlongAxis, stageProjectToClient, stageProjectWorldAxisToScreen, stageToolForKey, stageWorldUnitsPerPixelAlongAxis, stageWorldUnitsPerPixelAtDepth, stageZoomDistance, type StageTool, type StagePointerMode } from './stageEngineMath'

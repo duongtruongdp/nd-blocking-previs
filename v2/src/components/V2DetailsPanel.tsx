@@ -1,7 +1,8 @@
-import type { ReactNode } from 'react'
+import { useState, type KeyboardEvent, type ReactNode } from 'react'
 import type { ActorDocument, CameraDocument, PropDocument } from '../core/sceneDocument'
 import { CAMERA_DATABASE, resolveCameraDefinition } from '../core/cameraDatabase'
-import { cameraProjectionForDocument, horizontalFovDegrees, verticalFovDegrees } from '../runtime/cameraMath'
+import { activeCaptureAspect, cameraProjectionForDocument, horizontalFovDegrees, verticalFovDegrees } from '../runtime/cameraMath'
+import { degreesToRadians, formatCameraNumber, parseCameraNumber, radiansToDegrees } from '../runtime/cameraInputMath'
 
 type V2DetailsPanelProps = {
   actor: ActorDocument | null
@@ -11,8 +12,6 @@ type V2DetailsPanelProps = {
   onCameraChange: (cameraId: string, changes: Partial<CameraDocument>) => void
   onSetActiveCamera: (cameraId: string) => void
 }
-
-const FOCAL_LENGTHS = [14, 18, 21, 24, 28, 32, 35, 40, 50, 65, 75, 85, 100, 135]
 
 export function V2DetailsPanel({ actor, prop, camera, activeCameraId, onCameraChange, onSetActiveCamera }: V2DetailsPanelProps) {
   return (
@@ -47,23 +46,41 @@ function CameraInspector({ camera, activeCameraId, onCameraChange, onSetActiveCa
       </select>
       <span className="v2-eyebrow v2-inspector-subsection">Lens</span>
       <div className="v2-inspector-inline-fields">
-        <label>Focal length<select className="v2-inspector-select" value={camera.focalLengthMm} onChange={(event) => onCameraChange(camera.id, { focalLengthMm: Number(event.target.value) })}>{FOCAL_LENGTHS.map((value) => <option key={value} value={value}>{value}mm</option>)}</select></label>
+        <NumericCameraInput label="Focal length" value={camera.focalLengthMm} unit="mm" min={0.1} max={1000} step={0.1} onCommit={(value) => onCameraChange(camera.id, { focalLengthMm: value })} />
         <label>Type<select className="v2-inspector-select" value={camera.lensType} onChange={(event) => onCameraChange(camera.id, { lensType: event.target.value as CameraDocument['lensType'], anamorphicSqueeze: event.target.value === 'Spherical' ? 1 : camera.anamorphicSqueeze === 1 ? 1.33 : camera.anamorphicSqueeze })}><option value="Spherical">Spherical</option><option value="Anamorphic">Anamorphic</option></select></label>
       </div>
       {camera.lensType === 'Anamorphic' ? <label className="v2-inspector-label">Squeeze<select className="v2-inspector-select" value={camera.anamorphicSqueeze} onChange={(event) => onCameraChange(camera.id, { anamorphicSqueeze: Number(event.target.value) as CameraDocument['anamorphicSqueeze'] })}>{[1.33, 1.5, 1.8, 2].map((value) => <option key={value} value={value}>{value}:1</option>)}</select></label> : null}
-      <span className="v2-eyebrow v2-inspector-subsection">Delivery Frame</span>
+      <span className="v2-eyebrow v2-inspector-subsection">Format</span>
+      <div className="v2-camera-metrics v2-camera-format-metrics">
+        <Metric label="Active Area" value={captureMode ? `${captureMode.activeWidthMm.toFixed(2)} × ${captureMode.activeHeightMm.toFixed(2)} mm` : '—'} />
+        <Metric label="Resolution" value={captureMode ? `${captureMode.recordingWidthPx} × ${captureMode.recordingHeightPx}` : '—'} />
+        <Metric label="Capture" value={captureMode ? `${activeCaptureAspect(captureMode).toFixed(2)}:1` : '—'} />
+      </div>
+      <div className="v2-camera-fov-section">
+        <span className="v2-eyebrow">Field of View</span>
+        <div className="v2-camera-metrics v2-camera-fov-metrics">
+          <Metric label="Horizontal" value={captureMode ? `${horizontalFovDegrees(camera.focalLengthMm, captureMode).toFixed(1)}°` : '—'} />
+          <Metric label="Vertical" value={captureMode ? `${verticalFovDegrees(camera.focalLengthMm, captureMode).toFixed(1)}°` : '—'} />
+        </div>
+      </div>
+      <span className="v2-eyebrow v2-inspector-subsection">Delivery</span>
       <select className="v2-inspector-select" value={camera.deliveryAspectRatio} onChange={(event) => onCameraChange(camera.id, { deliveryAspectRatio: event.target.value as CameraDocument['deliveryAspectRatio'] })}><option value="sensor">Sensor / Native</option><option value="16:9">16:9</option><option value="1.85">1.85</option><option value="2.00">2.00</option><option value="2.39">2.39</option></select>
-      <span className="v2-eyebrow v2-inspector-subsection">Position</span>
-      <ReadonlyVector values={camera.position} suffix="m" labels={['X', 'Y', 'Z']} />
-      <span className="v2-eyebrow v2-inspector-subsection">Orientation</span>
-      <ReadonlyVector values={camera.rotation.map((value) => Math.round((value * 180) / Math.PI)) as [number, number, number]} suffix="°" labels={['Pitch', 'Heading', 'Roll']} />
-      <span className="v2-eyebrow v2-inspector-subsection">Capture</span>
-      <div className="v2-camera-metrics">
-        <Metric label="Active area" value={captureMode ? `${captureMode.activeWidthMm.toFixed(2)} × ${captureMode.activeHeightMm.toFixed(2)} mm` : '—'} />
-        <Metric label="Recording" value={captureMode ? `${captureMode.recordingWidthPx} × ${captureMode.recordingHeightPx}` : '—'} />
-        <Metric label="Capture aspect" value={captureMode ? `${(captureMode.activeWidthMm / captureMode.activeHeightMm).toFixed(2)}:1` : '—'} />
-        <Metric label="Horizontal FOV" value={captureMode ? `${horizontalFovDegrees(camera.focalLengthMm, captureMode).toFixed(1)}°` : '—'} />
-        <Metric label="Vertical FOV" value={captureMode ? `${verticalFovDegrees(camera.focalLengthMm, captureMode).toFixed(1)}°` : '—'} />
+      <span className="v2-eyebrow v2-inspector-subsection">Transform</span>
+      <span className="v2-eyebrow v2-inspector-field-label">Position</span>
+      <div className="v2-editable-vector">
+        {(['X', 'Y', 'Z'] as const).map((label, index) => <NumericCameraInput key={label} label={label} value={camera.position[index]} unit="m" min={-1000} max={1000} step={0.01} onCommit={(value) => {
+          const position = [...camera.position] as [number, number, number]
+          position[index] = value
+          onCameraChange(camera.id, { position })
+        }} />)}
+      </div>
+      <span className="v2-eyebrow v2-inspector-field-label">Orientation</span>
+      <div className="v2-editable-vector">
+        {(['Pitch', 'Heading', 'Roll'] as const).map((label, index) => <NumericCameraInput key={label} label={label} value={radiansToDegrees(camera.rotation[index])} unit="°" min={-360} max={360} step={0.1} onCommit={(value) => {
+          const rotation = [...camera.rotation] as [number, number, number]
+          rotation[index] = degreesToRadians(value)
+          onCameraChange(camera.id, { rotation })
+        }} />)}
       </div>
       <p className="v2-inspector-note">{definition?.manufacturer} {definition?.model}. Capture geometry is resolved from the selected production mode.</p>
     </div>
@@ -88,6 +105,38 @@ function ReadonlyVector({ values, suffix, labels }: { values: [number, number, n
 
 function Metric({ label, value }: { label: string; value: string }) {
   return <div className="v2-camera-metric"><span>{label}</span><strong>{value}</strong></div>
+}
+
+function NumericCameraInput({ label, value, unit, min, max, step, onCommit }: { label: string; value: number; unit: string; min: number; max: number; step: number; onCommit: (value: number) => void }) {
+  const [draft, setDraft] = useState(() => formatCameraNumber(value))
+  const [editing, setEditing] = useState(false)
+
+  const commit = () => {
+    const parsed = parseCameraNumber(draft, min, max)
+    if (parsed === null) {
+      setDraft(formatCameraNumber(value))
+      setEditing(false)
+      return
+    }
+    setDraft(formatCameraNumber(parsed))
+    setEditing(false)
+    if (parsed !== value) onCommit(parsed)
+  }
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      event.stopPropagation()
+      commit()
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      setDraft(formatCameraNumber(value))
+      event.currentTarget.blur()
+    }
+  }
+
+  return <label className="v2-editable-number"><span>{label}</span><span className="v2-editable-number-field"><input type="number" inputMode="decimal" step={step} min={min} max={max} value={editing ? draft : formatCameraNumber(value)} onFocus={() => { setDraft(formatCameraNumber(value)); setEditing(true) }} onChange={(event) => { setEditing(true); setDraft(event.target.value) }} onBlur={commit} onKeyDown={handleKeyDown} /><small>{unit}</small></span></label>
 }
 
 function EmptyInspector() {

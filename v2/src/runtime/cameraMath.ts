@@ -29,10 +29,10 @@ export function cameraDisplayAspect(document: CameraDocument): number {
 }
 
 export function cameraRotationLookingAt(position: [number, number, number], target: [number, number, number]): [number, number, number] {
-  const object = new THREE.Object3D()
-  object.position.set(...position)
-  object.lookAt(new THREE.Vector3(...target))
-  return [object.rotation.x, object.rotation.y, object.rotation.z]
+  const camera = new THREE.PerspectiveCamera()
+  camera.position.set(...position)
+  camera.lookAt(new THREE.Vector3(...target))
+  return [camera.rotation.x, camera.rotation.y, camera.rotation.z]
 }
 
 export function letterboxRect(width: number, height: number, aspect: number): { x: number; y: number; width: number; height: number } {
@@ -44,4 +44,3 @@ export function letterboxRect(width: number, height: number, aspect: number): { 
   const nextHeight = width / aspect
   return { x: 0, y: (height - nextHeight) / 2, width, height: nextHeight }
 }
-

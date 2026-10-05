@@ -8,6 +8,7 @@ import { webPlatformAdapter } from './platform/platformAdapter'
 import { createDefaultProps } from './scene/testEntities'
 import { applySceneEntityTransform, createActorDocument, createCameraDocument, createEmptySceneDocument, type CameraDocument, type SceneDocument } from './core/sceneDocument'
 import { CAMERA_DATABASE } from './core/cameraDatabase'
+import { defaultCameraPlacement } from './core/cameraPlacement'
 import { cameraRotationLookingAt } from './runtime/cameraMath'
 import { createEditorClipboard, pasteEditorClipboard, type EditorClipboard } from './core/editorClipboard'
 import { EditorHistory, type EditorHistorySnapshot } from './core/editorHistory'
@@ -67,12 +68,12 @@ export function V2App() {
     const nextIndex = Math.max(0, ...before.cameras.map((camera) => Number(/camera-(\d+)/.exec(camera.id)?.[1] ?? 0))) + 1
     const definition = CAMERA_DATABASE[0]
     const captureMode = definition.captureModes[0]
-    const position: [number, number, number] = [3.8, 2.2, 4.6]
+    const placement = defaultCameraPlacement(nextIndex)
     const camera = createCameraDocument(
       `camera-${String(nextIndex).padStart(2, '0')}`,
       `Camera ${String(nextIndex).padStart(2, '0')}`,
-      position,
-      cameraRotationLookingAt(position, [0, 0.85, 0]),
+      placement.position,
+      cameraRotationLookingAt(placement.position, placement.target),
       definition.id,
       captureMode.id,
     )

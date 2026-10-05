@@ -9,6 +9,8 @@
   --accent: #7669c9;
   --accent-hover: #6659b8;
   --accent-soft: #e9e7fb;
+  --camera-fov-accent: #5947c7;
+  --camera-fov-accent-strong: #4937ad;
   --line-soft: rgba(91, 98, 128, 0.13);
   --shadow-raised: 10px 10px 24px rgba(116, 123, 157, 0.16), -8px -8px 20px rgba(255, 255, 255, 0.78);
   --shadow-inset: inset 3px 3px 8px rgba(126, 133, 164, 0.13), inset -3px -3px 8px rgba(255, 255, 255, 0.75);

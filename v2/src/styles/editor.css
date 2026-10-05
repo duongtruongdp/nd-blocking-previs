@@ -98,6 +98,7 @@ h2 { margin: 3px 0 0; font-size: 16px; letter-spacing: -0.02em; }
 .v2-stage-tools button span { display: grid; place-items: center; width: 15px; height: 15px; border-radius: 4px; background: var(--surface-inset); color: var(--text-muted); font-size: 9px; font-weight: 800; }
 .v2-stage-tools button.is-active { background: var(--accent); color: #fff; box-shadow: 2px 2px 6px rgba(112, 119, 151, 0.16); }
 .v2-stage-tools button.is-active span { background: rgba(255, 255, 255, 0.22); color: #fff; }
+.v2-stage-tools button:disabled { cursor: default; opacity: .45; }
 .v2-stage-footer { right: 20px; bottom: 18px; }
 .v2-stage-hint { position: absolute; z-index: 2; left: 20px; bottom: 18px; color: rgba(55, 62, 84, 0.64); font-size: 11px; pointer-events: none; }
 .v2-stage-empty { position: absolute; z-index: 2; top: 50%; left: 50%; display: grid; gap: 7px; width: min(270px, calc(100% - 40px)); transform: translate(-50%, -50%); text-align: center; pointer-events: none; }
@@ -153,15 +154,32 @@ h2 { margin: 3px 0 0; font-size: 16px; letter-spacing: -0.02em; }
 .v2-timeline-toolbar h2 { font-size: 14px; }
 .v2-transport { gap: 5px; margin-left: var(--space-4); }
 .v2-transport button { width: 30px; height: 28px; background: var(--surface-inset); box-shadow: var(--shadow-inset); color: var(--text-secondary); }
-.v2-frame-readout { padding: 8px 13px; border-radius: 9px; background: var(--surface-inset); color: var(--text-secondary); box-shadow: var(--shadow-inset); }
-.v2-frame-readout strong { margin-left: 6px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.v2-frame-rate { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.v2-frame-rate select { padding: 7px 8px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--surface-inset); color: var(--text-secondary); font: inherit; letter-spacing: normal; text-transform: none; }
+.v2-frame-readout { display: flex; align-items: center; gap: 6px; padding: 7px 9px 7px 13px; border-radius: 9px; background: var(--surface-inset); color: var(--text-secondary); box-shadow: var(--shadow-inset); }
+.v2-frame-readout input { width: 52px; padding: 1px 0; border: 0; background: transparent; color: var(--accent); font-family: inherit; font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.v2-frame-readout input:focus { outline: 1px solid rgba(118, 105, 201, .45); border-radius: 3px; }
 .v2-timeline-marks { gap: 8px; margin-left: auto; }
 .v2-timeline-marks button { padding: 8px 12px; background: var(--surface-inset); box-shadow: var(--shadow-inset); }
 .v2-timeline-track-area { position: relative; height: calc(100% - 62px); min-height: 92px; }
 .v2-track-label { position: absolute; top: 15px; left: 20px; color: var(--text-muted); font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
-.v2-ruler { position: absolute; top: 0; right: 20px; left: 104px; height: 38px; border-bottom: 1px solid var(--line-soft); }
+.v2-ruler { position: absolute; z-index: 2; top: 0; right: 20px; left: 104px; height: 38px; border-bottom: 1px solid var(--line-soft); cursor: pointer; }
 .v2-ruler span { position: absolute; top: 14px; color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; transform: translateX(-50%); }
+.v2-timeline-playhead { position: absolute; z-index: 4; top: 0; bottom: -1000px; width: 1px; background: var(--accent); pointer-events: none; }
+.v2-timeline-playhead::before { position: absolute; top: 4px; left: -4px; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); content: ''; }
+.v2-timeline-tracks { position: absolute; top: 38px; right: 20px; bottom: 0; left: 0; display: grid; align-content: start; }
+.v2-timeline-track { display: grid; grid-template-columns: 104px minmax(0, 1fr); min-height: 28px; border-bottom: 1px solid rgba(112, 119, 151, .08); }
+.v2-timeline-track.is-selected .v2-timeline-track-name { color: var(--accent); font-weight: 700; }
+.v2-timeline-track-name { overflow: hidden; padding: 8px 8px 7px 20px; color: var(--text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.v2-timeline-track-lane { position: relative; min-width: 0; background: rgba(245, 246, 252, .34); }
+.v2-timeline-keyframe { position: absolute; top: 9px; width: 10px; height: 10px; margin: 0 0 0 -5px; padding: 0; transform: rotate(45deg); border: 1px solid var(--accent); border-radius: 2px; background: var(--surface-raised); cursor: pointer; }
+.v2-timeline-keyframe.is-current { background: var(--accent); box-shadow: 0 0 0 2px rgba(118, 105, 201, .16); }
+.v2-timeline-keyframe.is-selected { outline: 2px solid rgba(73, 55, 173, .42); outline-offset: 2px; }
 .v2-timeline-empty { position: absolute; top: 58px; right: 20px; left: 104px; color: var(--text-muted); text-align: center; }
+.v2-playback-shield { position: absolute; z-index: 5; inset: 0; cursor: default; }
+.v2-keyframe-button { margin-left: 5px; padding: 0; border: 0; background: transparent; color: var(--text-muted); font-size: 12px; line-height: 1; cursor: pointer; }
+.v2-keyframe-button:hover, .v2-keyframe-button.is-active { color: var(--accent); }
+.v2-inspector-keyframe-label { display: inline-flex; align-items: center; justify-content: space-between; gap: 4px; }
 
 @media (max-width: 980px) {
   body { overflow: auto; }

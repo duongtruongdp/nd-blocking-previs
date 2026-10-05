@@ -30,6 +30,36 @@ export type PropShape = 'cube' | 'sphere' | 'cylinder'
 export type CameraLensType = 'Spherical' | 'Anamorphic'
 export type CameraDeliveryFrame = 'sensor' | '16:9' | '1.85' | '2.00' | '2.39'
 
+export type TimelineEntityType = 'Actor' | 'Camera'
+export type TimelineProperty = 'position' | 'heading' | 'rotation' | 'focalLengthMm'
+export type TimelineInterpolation = 'linear' | 'hold'
+export type TimelineValue = number | ActorVector3
+
+export type TimelineKeyframe = {
+  id: string
+  frame: number
+  value: TimelineValue
+  interpolation: TimelineInterpolation
+}
+
+export type TimelineTrack = {
+  id: string
+  entityId: string
+  entityType: TimelineEntityType
+  property: TimelineProperty
+  keyframes: TimelineKeyframe[]
+}
+
+export type TimelineDocument = {
+  currentFrame: number
+  startFrame: number
+  endFrame: number
+  markIn: number
+  markOut: number
+  frameRate: RationalFrameRate
+  tracks: TimelineTrack[]
+}
+
 export type CameraDocument = {
   id: string
   name: string
@@ -79,12 +109,7 @@ export type SceneDocument = {
   cameras: CameraDocument[]
   activeCameraId: string | null
   lights: unknown[]
-  timeline: {
-    currentFrame: number
-    markIn: number
-    markOut: number
-    frameRate: RationalFrameRate
-  }
+  timeline: TimelineDocument
 }
 
 export type SceneTransformCommit = {
@@ -165,9 +190,12 @@ export function createEmptySceneDocument(): SceneDocument {
     lights: [],
     timeline: {
       currentFrame: 0,
+      startFrame: 0,
+      endFrame: 120,
       markIn: 0,
       markOut: 120,
       frameRate: { numerator: 24, denominator: 1 },
+      tracks: [],
     },
   }
 }

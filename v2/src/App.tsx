@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { V2DetailsPanel } from './components/V2DetailsPanel'
 import { V2ScenePanel } from './components/V2ScenePanel'
-import { V2Stage } from './components/V2Stage'
+import { V2Stage, type V2TransformDebugState } from './components/V2Stage'
 import { V2Timeline } from './components/V2Timeline'
 import { V2TopBar } from './components/V2TopBar'
 import { webPlatformAdapter } from './platform/platformAdapter'
 import { createDefaultProps } from './scene/testEntities'
-import { applySceneEntityTransform, createActorDocument, createCameraDocument, createEmptySceneDocument, type CameraDocument, type SceneDocument } from './core/sceneDocument'
+import { applySceneEntityTransform, createActorDocument, createCameraDocument, createEmptySceneDocument, type ActorDocument, type CameraDocument, type RationalFrameRate, type SceneDocument, type TimelineProperty } from './core/sceneDocument'
 import { CAMERA_DATABASE } from './core/cameraDatabase'
 import { defaultCameraPlacement } from './core/cameraPlacement'
 import { cameraRotationLookingAt } from './runtime/cameraMath'
@@ -14,21 +14,38 @@ import { createEditorClipboard, pasteEditorClipboard, type EditorClipboard } fro
 import { EditorHistory, type EditorHistorySnapshot } from './core/editorHistory'
 import { editorShortcutForKey } from './core/editorShortcuts'
 import type { StageTool, StageTransform } from './stage-engine'
+import { evaluateTimeline } from './timeline/timelineEvaluator'
+import { createPlaybackClock, playbackFrameAt, playbackReachedMarkOut, type PlaybackClock } from './timeline/playbackClock'
+import { clampTimelineFrame, removeTimelineKeyframe, setTimelineMark, trackHasKeyframe, upsertTimelineKeyframe } from './timeline/timelineMath'
+import { commitTimelineTransform, type TimelineTransformCommit } from './timeline/transformOwnership'
 
 export function V2App() {
   const [view, setView] = useState<'blocking' | 'camera'>('blocking')
   const [sceneDocument, setSceneDocument] = useState(() => ({ ...createEmptySceneDocument(), props: createDefaultProps() }))
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null)
   const [transformTool, setTransformTool] = useState<StageTool>('select')
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [isScrubbing, setIsScrubbing] = useState(false)
+  const [transformingEntityId, setTransformingEntityId] = useState<string | null>(null)
+  const [suspendedTimelineEntityIds, setSuspendedTimelineEntityIds] = useState<ReadonlySet<string>>(new Set())
+  const [lastTransformDebug, setLastTransformDebug] = useState<V2TransformDebugState | null>(null)
   const sceneDocumentRef = useRef<SceneDocument>(sceneDocument)
   const selectedEntityIdRef = useRef<string | null>(selectedEntityId)
   const clipboardRef = useRef<EditorClipboard | null>(null)
   const historyRef = useRef<EditorHistory>(new EditorHistory(100))
   const transformTransactionRef = useRef<{ before: SceneDocument; beforeSelection: string | null } | null>(null)
+  const playbackRef = useRef<PlaybackClock | null>(null)
+  const playbackFrameRequestRef = useRef<number | null>(null)
   void webPlatformAdapter
-  const selectedActor = sceneDocument.actors.find((actor) => actor.id === selectedEntityId) ?? null
+  const evaluatedEntities = evaluateTimeline(sceneDocument, sceneDocument.timeline.currentFrame)
+  const selectedActorBase = sceneDocument.actors.find((actor) => actor.id === selectedEntityId) ?? null
   const selectedProp = sceneDocument.props.find((prop) => prop.id === selectedEntityId) ?? null
-  const selectedCamera = sceneDocument.cameras.find((camera) => camera.id === selectedEntityId) ?? null
+  const selectedCameraBase = sceneDocument.cameras.find((camera) => camera.id === selectedEntityId) ?? null
+  const selectedActor = selectedActorBase ? { ...selectedActorBase, ...(evaluatedEntities[selectedActorBase.id] ?? {}) } as ActorDocument : null
+  const selectedCamera = selectedCameraBase ? { ...selectedCameraBase, ...(evaluatedEntities[selectedCameraBase.id] ?? {}) } as CameraDocument : null
+  const entityNames = Object.fromEntries([...sceneDocument.actors, ...sceneDocument.cameras].map((entity) => [entity.id, entity.name]))
+
+  const formatTransform = (position: [number, number, number], rotation: [number, number, number]) => `P(${position.map((value) => value.toFixed(2)).join(',')}) R(${rotation.map((value) => value.toFixed(2)).join(',')})`
 
   useEffect(() => {
     sceneDocumentRef.current = sceneDocument
@@ -40,6 +57,18 @@ export function V2App() {
     selectedEntityIdRef.current = snapshot.selectedEntityId
     setSceneDocument(snapshot.document)
     setSelectedEntityId(snapshot.selectedEntityId)
+    setSuspendedTimelineEntityIds(new Set())
+  }
+
+  const setCurrentFrame = (frame: number) => {
+    if (isPlaying) return
+    const before = sceneDocumentRef.current
+    const currentFrame = clampTimelineFrame(frame, before.timeline.startFrame, before.timeline.endFrame)
+    if (currentFrame === before.timeline.currentFrame) return
+    const after = { ...before, timeline: { ...before.timeline, currentFrame } }
+    setSuspendedTimelineEntityIds(new Set())
+    sceneDocumentRef.current = after
+    setSceneDocument(after)
   }
 
   const recordAction = (label: string, before: SceneDocument, beforeSelection: string | null, after: SceneDocument, afterSelection: string | null) => {
@@ -99,12 +128,42 @@ export function V2App() {
     const before = sceneDocumentRef.current
     const camera = before.cameras.find((item) => item.id === cameraId)
     if (!camera) return
+    let timeline = before.timeline
+    const nextChanges = { ...changes }
+    if (changes.position && trackHasKeyframe(before.timeline, cameraId, 'position', before.timeline.currentFrame)) {
+      timeline = upsertTimelineKeyframe(timeline, cameraId, 'Camera', 'position', before.timeline.currentFrame, changes.position)
+      delete nextChanges.position
+    }
+    if (changes.rotation && trackHasKeyframe(before.timeline, cameraId, 'rotation', before.timeline.currentFrame)) {
+      timeline = upsertTimelineKeyframe(timeline, cameraId, 'Camera', 'rotation', before.timeline.currentFrame, changes.rotation)
+      delete nextChanges.rotation
+    }
+    if (changes.focalLengthMm !== undefined && trackHasKeyframe(before.timeline, cameraId, 'focalLengthMm', before.timeline.currentFrame)) {
+      timeline = upsertTimelineKeyframe(timeline, cameraId, 'Camera', 'focalLengthMm', before.timeline.currentFrame, changes.focalLengthMm)
+      delete nextChanges.focalLengthMm
+    }
     const after = {
       ...before,
       metadata: { ...before.metadata, updatedAt: new Date().toISOString() },
-      cameras: before.cameras.map((item) => item.id === cameraId ? { ...item, ...changes } : item),
+      cameras: before.cameras.map((item) => item.id === cameraId ? { ...item, ...nextChanges } : item),
+      timeline,
     }
     recordAction(`Update ${camera.name}`, before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
+    applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current })
+  }
+
+  const addKeyframe = (entityId: string, property: TimelineProperty) => {
+    const before = sceneDocumentRef.current
+    const evaluated = evaluateTimeline(before, before.timeline.currentFrame)[entityId]
+    const actor = before.actors.find((item) => item.id === entityId)
+    const camera = before.cameras.find((item) => item.id === entityId)
+    const entity = actor ?? camera
+    if (!entity || !evaluated) return
+    const value = property === 'position' ? evaluated.position : property === 'heading' ? evaluated.rotation[1] : property === 'rotation' ? evaluated.rotation : evaluated.focalLengthMm
+    if (value === undefined) return
+    const nextTimeline = upsertTimelineKeyframe(before.timeline, entityId, camera ? 'Camera' : 'Actor', property, before.timeline.currentFrame, value)
+    const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, timeline: nextTimeline }
+    recordAction(`Add ${entity.name} ${property} keyframe`, before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
     applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current })
   }
 
@@ -114,6 +173,7 @@ export function V2App() {
   }
 
   const handleTransformStart = (_change: StageTransform) => {
+    setTransformingEntityId(_change.entityId)
     transformTransactionRef.current = {
       before: sceneDocumentRef.current,
       beforeSelection: selectedEntityIdRef.current,
@@ -123,14 +183,100 @@ export function V2App() {
   const handleTransformEnd = (change: StageTransform) => {
     const transaction = transformTransactionRef.current
     transformTransactionRef.current = null
+    setTransformingEntityId(null)
     if (!transaction) return
     const before = transaction.before
+    const actor = before.actors.find((item) => item.id === change.entityId)
+    const camera = before.cameras.find((item) => item.id === change.entityId)
+    if (actor || camera) {
+      const result = commitTimelineTransform(before, change as TimelineTransformCommit)
+      const after = { ...result.document, metadata: { ...result.document.metadata, updatedAt: new Date().toISOString() } }
+      const finalEntity = [...after.actors, ...after.cameras].find((item) => item.id === change.entityId)
+      const evaluatedAfter = evaluateTimeline(after, before.timeline.currentFrame)[change.entityId]
+      setLastTransformDebug({ entityId: change.entityId, runtimeFinal: formatTransform(change.position, change.rotation), baseDocumentFinal: finalEntity ? formatTransform(finalEntity.position, finalEntity.rotation) : '—', timelineEvaluated: evaluatedAfter ? formatTransform(evaluatedAfter.position, evaluatedAfter.rotation) : '—', valueAppliedAfterTransform: result.suspendEvaluation ? 'BASE (TIMELINE SUSPENDED)' : result.changedKeyframe ? 'KEYFRAME' : 'BASE' })
+      recordAction(`${result.changedKeyframe ? 'Update' : 'Move'} ${actor?.name ?? camera?.name ?? change.entityId}${result.changedKeyframe ? ' keyframe' : ''}`, before, transaction.beforeSelection, after, change.entityId)
+      applyEditorSnapshot({ document: after, selectedEntityId: change.entityId })
+      if (result.suspendEvaluation) setSuspendedTimelineEntityIds(new Set([change.entityId]))
+      return
+    }
     const after = applySceneEntityTransform(sceneDocumentRef.current, change)
     const entity = [...after.actors, ...after.props, ...after.cameras].find((item) => item.id === change.entityId)
     const action = transformTool === 'rotate' ? 'Rotate' : 'Move'
+    setLastTransformDebug({ entityId: change.entityId, runtimeFinal: formatTransform(change.position, change.rotation), baseDocumentFinal: formatTransform(after.props.find((item) => item.id === change.entityId)?.position ?? change.position, after.props.find((item) => item.id === change.entityId)?.rotation ?? change.rotation), timelineEvaluated: '—', valueAppliedAfterTransform: 'BASE' })
     recordAction(`${action} ${entity?.name ?? change.entityId}`, before, transaction.beforeSelection, after, change.entityId)
     applyEditorSnapshot({ document: after, selectedEntityId: change.entityId })
   }
+
+  const changeFrameRate = (frameRate: RationalFrameRate) => {
+    const before = sceneDocumentRef.current
+    const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, timeline: { ...before.timeline, frameRate } }
+    recordAction('Change Frame Rate', before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
+    applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current })
+  }
+
+  const changeMark = (kind: 'in' | 'out') => {
+    const before = sceneDocumentRef.current
+    const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, timeline: setTimelineMark(before.timeline, kind, before.timeline.currentFrame) }
+    recordAction(kind === 'in' ? 'Set Mark In' : 'Set Mark Out', before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
+    applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current })
+  }
+
+  const deleteKeyframe = (trackId: string, keyframeId: string) => {
+    const before = sceneDocumentRef.current
+    const track = before.timeline.tracks.find((item) => item.id === trackId)
+    if (!track?.keyframes.some((keyframe) => keyframe.id === keyframeId)) return
+    const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, timeline: removeTimelineKeyframe(before.timeline, trackId, keyframeId) }
+    recordAction('Delete Keyframe', before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
+    applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current })
+  }
+
+  const stepFrame = (amount: number) => setCurrentFrame(sceneDocumentRef.current.timeline.currentFrame + amount)
+
+  const togglePlayback = () => {
+    if (isPlaying) {
+      setIsPlaying(false)
+      playbackRef.current = null
+      return
+    }
+    const timeline = sceneDocumentRef.current.timeline
+    const startFrame = timeline.currentFrame < timeline.markIn || timeline.currentFrame >= timeline.markOut ? timeline.markIn : timeline.currentFrame
+    if (startFrame !== timeline.currentFrame) {
+      const after = { ...sceneDocumentRef.current, timeline: { ...timeline, currentFrame: startFrame } }
+      sceneDocumentRef.current = after
+      setSceneDocument(after)
+    }
+    setSuspendedTimelineEntityIds(new Set())
+    playbackRef.current = createPlaybackClock(startFrame, performance.now())
+    setIsPlaying(true)
+  }
+
+  useEffect(() => {
+    if (!isPlaying) {
+      if (playbackFrameRequestRef.current !== null) window.cancelAnimationFrame(playbackFrameRequestRef.current)
+      playbackFrameRequestRef.current = null
+      return
+    }
+    const tick = (now: number) => {
+      const clock = playbackRef.current
+      if (!clock) return
+      const timeline = sceneDocumentRef.current.timeline
+      const frame = playbackFrameAt(clock, now, timeline.frameRate, timeline.markOut)
+      if (frame !== timeline.currentFrame) {
+        const after = { ...sceneDocumentRef.current, timeline: { ...timeline, currentFrame: frame } }
+        sceneDocumentRef.current = after
+        setSceneDocument(after)
+      }
+      if (playbackReachedMarkOut(clock, now, timeline.frameRate, timeline.markOut)) {
+        playbackRef.current = null
+        setIsPlaying(false)
+        playbackFrameRequestRef.current = null
+        return
+      }
+      playbackFrameRequestRef.current = window.requestAnimationFrame(tick)
+    }
+    playbackFrameRequestRef.current = window.requestAnimationFrame(tick)
+    return () => { if (playbackFrameRequestRef.current !== null) window.cancelAnimationFrame(playbackFrameRequestRef.current) }
+  }, [isPlaying])
 
   const copySelection = (): boolean => {
     const selected = [...sceneDocumentRef.current.actors, ...sceneDocumentRef.current.props].find((entity) => entity.id === selectedEntityIdRef.current)
@@ -191,9 +337,16 @@ export function V2App() {
         onToolChange={setTransformTool}
         onTransformStart={handleTransformStart}
         onTransformEnd={handleTransformEnd}
+        evaluatedEntities={evaluatedEntities}
+        isPlaying={isPlaying}
+        transformingEntityId={transformingEntityId}
+        suspendedTimelineEntityIds={suspendedTimelineEntityIds}
+        timeline={sceneDocument.timeline}
+        isScrubbing={isScrubbing}
+        lastTransformDebug={lastTransformDebug}
       />
-      <V2DetailsPanel actor={selectedActor} prop={selectedProp} camera={selectedCamera} onCameraChange={updateCamera} onSetActiveCamera={setActiveCamera} activeCameraId={sceneDocument.activeCameraId} />
-      <V2Timeline />
+      <V2DetailsPanel actor={selectedActor} prop={selectedProp} camera={selectedCamera} timeline={sceneDocument.timeline} onCameraChange={updateCamera} onSetActiveCamera={setActiveCamera} onAddKeyframe={addKeyframe} activeCameraId={sceneDocument.activeCameraId} />
+      <V2Timeline timeline={sceneDocument.timeline} tracks={sceneDocument.timeline.tracks} entityNames={entityNames} selectedEntityId={selectedEntityId} isPlaying={isPlaying} onFrameChange={setCurrentFrame} onFrameRateChange={changeFrameRate} onTogglePlayback={togglePlayback} onStepFrame={stepFrame} onMarkIn={() => changeMark('in')} onMarkOut={() => changeMark('out')} onDeleteKeyframe={deleteKeyframe} onScrubStart={() => setIsScrubbing(true)} onScrubEnd={() => setIsScrubbing(false)} />
     </main>
   )
 }

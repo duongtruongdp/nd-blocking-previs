@@ -27,6 +27,7 @@ export function V2App() {
   const [view, setView] = useState<'blocking' | 'camera'>('blocking')
   const [sceneDocument, setSceneDocument] = useState(() => ({ ...createEmptySceneDocument(), props: createDefaultProps() }))
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null)
+  const [selectedFrameGuideId, setSelectedFrameGuideId] = useState<string | null>(null)
   const [transformTool, setTransformTool] = useState<StageTool>('select')
   const [isPlaying, setIsPlaying] = useState(false)
   const [isScrubbing, setIsScrubbing] = useState(false)
@@ -129,6 +130,7 @@ export function V2App() {
   const setActiveCamera = (cameraId: string) => {
     const before = sceneDocumentRef.current
     if (before.activeCameraId === cameraId) return
+    setSelectedFrameGuideId(before.cameras.find((camera) => camera.id === cameraId)?.frameGuides[0]?.id ?? null)
     const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, activeCameraId: cameraId }
     recordAction('Set Active Camera', before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
     applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current })
@@ -177,6 +179,8 @@ export function V2App() {
   const handleSelectionChange = (entityId: string | null) => {
     selectedEntityIdRef.current = entityId
     setSelectedEntityId(entityId)
+    const camera = entityId ? sceneDocumentRef.current.cameras.find((item) => item.id === entityId) : null
+    setSelectedFrameGuideId(camera?.frameGuides[0]?.id ?? null)
   }
 
   const handleTransformStart = (_change: StageTransform) => {
@@ -417,8 +421,9 @@ export function V2App() {
         timeline={sceneDocument.timeline}
         isScrubbing={isScrubbing}
         lastTransformDebug={lastTransformDebug}
+        selectedFrameGuideId={selectedFrameGuideId}
       />
-      <V2DetailsPanel actor={selectedActor} prop={selectedProp} camera={selectedCamera} timeline={sceneDocument.timeline} onCameraChange={updateCamera} onSetActiveCamera={setActiveCamera} onAddKeyframe={addKeyframe} activeCameraId={sceneDocument.activeCameraId} />
+      <V2DetailsPanel actor={selectedActor} prop={selectedProp} camera={selectedCamera} timeline={sceneDocument.timeline} onCameraChange={updateCamera} onSetActiveCamera={setActiveCamera} onAddKeyframe={addKeyframe} activeCameraId={sceneDocument.activeCameraId} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={setSelectedFrameGuideId} />
       <V2Timeline timeline={sceneDocument.timeline} tracks={sceneDocument.timeline.tracks} entityNames={entityNames} selectedEntityId={selectedEntityId} isPlaying={isPlaying} onFrameChange={setCurrentFrame} onFrameRateChange={changeFrameRate} onTogglePlayback={togglePlayback} onStepFrame={stepFrame} onMarkIn={() => changeMark('in')} onMarkOut={() => changeMark('out')} onDeleteKeyframe={deleteKeyframe} onScrubStart={() => setIsScrubbing(true)} onScrubEnd={() => setIsScrubbing(false)} />
       {exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'finalizing' ? <div className="v2-export-lock" aria-hidden="true" /> : null}
       {exportOpen ? <V2ExportModal document={sceneDocument} settings={exportSettings} status={exportStatus} progress={exportProgress} error={exportError} onSettingsChange={setExportSettings} onExport={startExport} onCancel={cancelExport} onClose={() => setExportOpen(false)} /> : null}

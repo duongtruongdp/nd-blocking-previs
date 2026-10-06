@@ -49,13 +49,14 @@ navigation state, or transform tools.
 
 The runtime projection uses the CameraDocument's resolved active capture width
 and height with the stored focal length. Vertical FOV remains the physical
-capture FOV. Spherical lenses display at the capture aspect; anamorphic lenses
-use the existing squeeze calculation once to produce the desqueezed display
-aspect. The runtime camera's viewport is then centered inside the Stage with
-scissor rendering, so letterboxing and pillarboxing never stretch the image.
+capture FOV. The shared camera projection helper applies the marked squeeze
+only to horizontal optical coverage (`focalLength / squeeze`), then exposes the
+desqueezed display aspect to the runtime camera. The runtime camera's viewport
+is centered with scissor rendering, so letterboxing and pillarboxing never
+stretch the image.
 
 Frame Guide is a centered delivery overlay, not a replacement for capture
-geometry. Capture leaves the full captured image visible. A delivery guide
+geometry. Capture leaves the full desqueezed image visible. A delivery guide
 uses the existing centered-aperture calculation and subtly shades the area
 outside the selected 16:9, 1.85:1, 2.00:1, 2.39:1, or Custom frame while
 leaving that captured image visible for Open Gate composition.
@@ -143,6 +144,37 @@ Camera proxy geometry and materials are disposed with the Stage runtime. The
 runtime keeps the camera document, proxy, production camera, and active-camera
 selection as separate concerns so multiple Cameras can coexist without shared
 transform or projection state.
+
+### V2.7A capture and anamorphic projection
+
+The capture database is a per-camera, per-image-window dataset with official
+provenance. Capture modes describe physical active area and recording raster;
+codec variants stay as mode metadata. Sony FX5 monitor desqueeze factors are
+stored as optional camera metadata, while lens squeeze remains a separate shot
+property. Blocking FOV guides, Camera View, and video export all consume the
+same `cameraProjectionForDocument` result, so a 2x anamorphic lens widens
+horizontal coverage and display aspect without changing vertical FOV or sensor
+dimensions. Delivery crop is applied after desqueeze.
+
+### V2.7B multi-frame guides
+
+Camera View keeps the Delivery Frame as the primary warm outline and can show
+multiple additional Frame Guides at the same time. Each guide is stored on its
+own CameraDocument as plain serializable data; no Three.js helper is persisted
+and no guide collection is shared between Cameras. The Inspector supports the
+Cinema/Broadcast presets, Social/Digital presets, custom decimal aspects,
+visibility, line style, custom `#RRGGBB` color, opacity, line weight, safe
+margin, and an optional selected-guide outside shade.
+
+The overlay uses the displayed image rectangle already established by Camera
+View. Delivery and Frame Guides both call the same pure normalized
+`fitAspectInsideSource` calculation, so a matching Delivery and Guide aspect
+share exactly the same centered rectangle. Anamorphic shots calculate against
+the desqueezed display aspect, not the physical sensor aspect. Guides do not
+alter the production camera, FOV, capture crop, Delivery Frame, timeline, or
+preview export. They are not shown in Blocking View and are never burned into
+exported video. Guide edits are committed through the existing camera
+document/history update path.
 
 The empty Stage uses invalidate-on-demand rendering. A frame is requested when:
 

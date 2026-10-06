@@ -3,7 +3,7 @@ import { CAMERA_DATABASE } from '../core/cameraDatabase'
 import { createActorDocument, createCameraDocument, createEmptySceneDocument } from '../core/sceneDocument'
 import { cameraRotationLookingAt } from '../runtime/cameraMath'
 import { evaluateExportFrame } from '../export/exportEvaluation'
-import { centeredCrop, deliveryAspectForCamera, dimensionsForDeliveryAspect, exportDurationSeconds, exportFilename, exportFrameRange, formatExportDuration, frameTimestampMicroseconds, physicalCaptureAspect, rationalFrameDuration, sanitizeExportFilename, validateExportRequest } from '../export/exportMath'
+import { centeredCrop, deliveryAspectForCamera, desqueezedCaptureAspect, dimensionsForDeliveryAspect, exportDurationSeconds, exportFilename, exportFrameRange, formatExportDuration, frameTimestampMicroseconds, physicalCaptureAspect, rationalFrameDuration, sanitizeExportFilename, validateExportRequest } from '../export/exportMath'
 import { preferredExportFormat } from '../export/formatSupport'
 import { selectWebmMimeType, supportedWebmMimeTypes } from '../export/mediaRecorder'
 import { frameToTimelinePercent, upsertTimelineKeyframe } from '../timeline/timelineMath'
@@ -91,6 +91,21 @@ describe('V2.6 video export logic', () => {
     expect(physical).toBeCloseTo(27.99 / 19.22)
     expect(deliveryAspectForCamera('2.39', camera.id, document)).toBe(2.39)
     expect(physicalCaptureAspect(document, camera.id)).toBe(physical)
+  })
+
+  it('desqueezes the source before applying the delivery crop', () => {
+    const base = createCameraDocument('camera-01', 'Camera 01', [0, 2, 4], cameraRotationLookingAt([0, 2, 4], [0, 1, 0]), CAMERA_DATABASE[0].id, CAMERA_DATABASE[0].captureModes[0].id)
+    const camera = { ...base, lensType: 'Anamorphic' as const, anamorphicSqueeze: 2 as const, deliveryAspectRatio: '2.39' as const }
+    const document = { ...createEmptySceneDocument(), cameras: [camera], activeCameraId: camera.id }
+    const physical = physicalCaptureAspect(document, camera.id)!
+    const desqueezed = desqueezedCaptureAspect(document, camera.id)!
+    expect(desqueezed).toBeCloseTo(physical * 2, 8)
+    expect(deliveryAspectForCamera(camera.deliveryAspectRatio, camera.id, document)).toBe(2.39)
+    const source = dimensionsForDeliveryAspect(1920, desqueezed)
+    const crop = centeredCrop(source.width, source.height, 2.39)
+    expect(source.width / source.height).toBeCloseTo(desqueezed, 2)
+    expect(crop.width / crop.height).toBeCloseTo(2.39, 8)
+    expect(dimensionsForDeliveryAspect(1920, 2.39)).toEqual({ width: 1920, height: 804 })
   })
 
   it('evaluates export frames through the existing Timeline evaluator', () => {

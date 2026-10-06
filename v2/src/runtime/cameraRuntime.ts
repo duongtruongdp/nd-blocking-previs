@@ -54,7 +54,7 @@ export class ProceduralCameraRuntime {
     this.root.rotation.set(...document.rotation)
     const projection = cameraProjectionForDocument(document)
     if (projection) {
-      this.productionCamera.aspect = projection.aspect
+      this.productionCamera.aspect = projection.displayAspect
       this.productionCamera.fov = projection.fov
     }
     this.productionCamera.updateProjectionMatrix()

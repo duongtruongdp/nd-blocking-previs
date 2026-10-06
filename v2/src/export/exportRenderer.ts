@@ -4,7 +4,7 @@ import { cameraProjectionForDocument } from '../runtime/cameraMath'
 import { ProceduralActorRuntime } from '../runtime/actor/proceduralActor'
 import { createV2TestGeometry } from '../scene/testEntities'
 import { evaluateExportFrame } from './exportEvaluation'
-import { centeredCrop, dimensionsForDeliveryAspect, deliveryAspectForCamera, physicalCaptureAspect } from './exportMath'
+import { centeredCrop, desqueezedCaptureAspect, dimensionsForDeliveryAspect, deliveryAspectForCamera } from './exportMath'
 import type { VideoExportSettings } from './exportTypes'
 
 type PropRuntime = {
@@ -46,7 +46,7 @@ export class VideoExportRenderer {
     if (!outputContext) throw new Error('The browser could not create an export canvas.')
     this.outputContext = outputContext
 
-    const captureAspect = physicalCaptureAspect(sceneDocument, settings.cameraId) ?? 16 / 9
+    const captureAspect = desqueezedCaptureAspect(sceneDocument, settings.cameraId) ?? 16 / 9
     this.sourceWidth = outputDimensions.width
     this.sourceHeight = dimensionsForDeliveryAspect(outputDimensions.width, captureAspect).height
     this.sourceCanvas = window.document.createElement('canvas')
@@ -82,7 +82,7 @@ export class VideoExportRenderer {
     if (!projection) throw new Error('The active Camera has no valid capture mode.')
     this.cameraMount.position.set(...cameraDocument.position)
     this.cameraMount.rotation.set(...cameraDocument.rotation)
-    this.camera.aspect = projection.aspect
+    this.camera.aspect = projection.displayAspect
     this.camera.fov = projection.fov
     this.camera.updateProjectionMatrix()
     this.cameraMount.updateMatrixWorld(true)

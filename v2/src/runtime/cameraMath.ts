@@ -6,26 +6,32 @@ export function activeCaptureAspect(captureMode: CaptureModeDefinition): number 
   return captureMode.activeWidthMm / captureMode.activeHeightMm
 }
 
-export function horizontalFovDegrees(focalLengthMm: number, captureMode: CaptureModeDefinition): number {
-  return THREE.MathUtils.radToDeg(2 * Math.atan(captureMode.activeWidthMm / (2 * Math.max(0.1, focalLengthMm))))
+export function lensSqueezeForDocument(document: CameraDocument): number {
+  return document.lensType === 'Anamorphic' ? Math.max(1, document.anamorphicSqueeze) : 1
+}
+
+export function horizontalFovDegrees(focalLengthMm: number, captureMode: CaptureModeDefinition, squeeze = 1): number {
+  const effectiveFocalLength = Math.max(0.1, focalLengthMm) / Math.max(1, squeeze)
+  return THREE.MathUtils.radToDeg(2 * Math.atan(captureMode.activeWidthMm / (2 * effectiveFocalLength)))
 }
 
 export function verticalFovDegrees(focalLengthMm: number, captureMode: CaptureModeDefinition): number {
   return THREE.MathUtils.radToDeg(2 * Math.atan(captureMode.activeHeightMm / (2 * Math.max(0.1, focalLengthMm))))
 }
 
-export function cameraProjectionForDocument(document: CameraDocument): { definition: CameraDefinition; captureMode: CaptureModeDefinition; aspect: number; fov: number } | null {
+export function cameraProjectionForDocument(document: CameraDocument): { definition: CameraDefinition; captureMode: CaptureModeDefinition; aspect: number; displayAspect: number; squeeze: number; fov: number; horizontalFov: number } | null {
   const definition = resolveCameraDefinition(document.cameraDefinitionId)
   if (!definition) return null
   const captureMode = resolveCaptureMode(definition, document.captureModeId)
-  return { definition, captureMode, aspect: activeCaptureAspect(captureMode), fov: verticalFovDegrees(document.focalLengthMm, captureMode) }
+  const aspect = activeCaptureAspect(captureMode)
+  const squeeze = lensSqueezeForDocument(document)
+  return { definition, captureMode, aspect, displayAspect: aspect * squeeze, squeeze, fov: verticalFovDegrees(document.focalLengthMm, captureMode), horizontalFov: horizontalFovDegrees(document.focalLengthMm, captureMode, squeeze) }
 }
 
 export function cameraDisplayAspect(document: CameraDocument): number {
   const projection = cameraProjectionForDocument(document)
   if (!projection) return 16 / 9
-  const squeeze = document.lensType === 'Anamorphic' ? Math.max(1, document.anamorphicSqueeze) : 1
-  return projection.aspect * squeeze
+  return projection.displayAspect
 }
 
 export function cameraRotationLookingAt(position: [number, number, number], target: [number, number, number]): [number, number, number] {

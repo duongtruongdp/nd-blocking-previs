@@ -1,6 +1,8 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ActorDocument, CameraDocument, PropDocument } from '../core/sceneDocument'
-import { cameraDisplayAspect } from '../runtime/cameraMath'
+import { cameraDisplayAspect, letterboxRect } from '../runtime/cameraMath'
+import { deliveryAspectValue, fitAspectInsideSource, insetFrameGuideRect } from '../runtime/frameGuideMath'
+import type { FrameGuide } from '../core/sceneDocument'
 import { CameraViewRuntime } from '../runtime/cameraViewRuntime'
 import { ProceduralActorRuntime } from '../runtime/actor/proceduralActor'
 import { StageEngine, type StagePropDefinition, type StageTool, type StageTransform } from '../stage-engine'
@@ -36,6 +38,7 @@ type V2StageProps = {
   timeline: TimelineDocument
   isScrubbing: boolean
   lastTransformDebug: V2TransformDebugState | null
+  selectedFrameGuideId: string | null
 }
 
 function syncActors(engine: StageEngine, actors: readonly ActorDocument[], runtimes: Map<string, ProceduralActorRuntime>): void {
@@ -81,11 +84,10 @@ function syncCameras(engine: StageEngine, cameras: readonly CameraDocument[], ru
 }
 
 function deliveryAspect(camera: CameraDocument): number {
-  if (camera.deliveryAspectRatio === 'sensor') return cameraDisplayAspect(camera)
-  return Number(camera.deliveryAspectRatio)
+  return deliveryAspectValue(camera.deliveryAspectRatio, cameraDisplayAspect(camera))
 }
 
-export function V2Stage({ view, actors, props, cameras, activeCameraId, selectedEntityId, tool, onSelectionChange, onToolChange, onTransformStart, onTransformEnd, evaluatedEntities, isPlaying, transformingEntityId, suspendedTimelineEntityIds, timeline, isScrubbing, lastTransformDebug }: V2StageProps) {
+export function V2Stage({ view, actors, props, cameras, activeCameraId, selectedEntityId, tool, onSelectionChange, onToolChange, onTransformStart, onTransformEnd, evaluatedEntities, isPlaying, transformingEntityId, suspendedTimelineEntityIds, timeline, isScrubbing, lastTransformDebug, selectedFrameGuideId }: V2StageProps) {
   const stageRef = useRef<HTMLDivElement>(null)
   const engineRef = useRef<StageEngine | null>(null)
   const cameraViewRef = useRef<CameraViewRuntime | null>(null)
@@ -93,6 +95,7 @@ export function V2Stage({ view, actors, props, cameras, activeCameraId, selected
   const cameraRuntimesRef = useRef(new Map<string, ProceduralCameraRuntime>())
   const initialStageRef = useRef({ actors, props, cameras, selectedEntityId, tool })
   const initialToolRef = useRef(tool)
+  const [viewportSize, setViewportSize] = useState({ width: 1, height: 1 })
   const callbacksRef = useRef({ onSelectionChange, onToolChange, onTransformStart, onTransformEnd })
   const debugEnabled = import.meta.env.DEV && new URLSearchParams(window.location.search).get('interactionDebug') === '1'
 
@@ -129,6 +132,22 @@ export function V2Stage({ view, actors, props, cameras, activeCameraId, selected
       actorRuntimes.clear()
       cameraRuntimes.clear()
     }
+  }, [])
+
+  useEffect(() => {
+    const updateSize = () => {
+      const rect = stageRef.current?.getBoundingClientRect()
+      if (rect) setViewportSize({ width: Math.max(1, rect.width), height: Math.max(1, rect.height) })
+    }
+    updateSize()
+    const ResizeObserverClass = window.ResizeObserver
+    if (ResizeObserverClass && stageRef.current) {
+      const observer = new ResizeObserverClass(updateSize)
+      observer.observe(stageRef.current)
+      return () => observer.disconnect()
+    }
+    window.addEventListener('resize', updateSize)
+    return () => window.removeEventListener('resize', updateSize)
   }, [])
 
   useEffect(() => {
@@ -182,6 +201,9 @@ export function V2Stage({ view, actors, props, cameras, activeCameraId, selected
     ? { ...activeCameraBase, ...evaluatedEntities[activeCameraBase.id], focalLengthMm: evaluatedEntities[activeCameraBase.id].focalLengthMm ?? activeCameraBase.focalLengthMm }
     : activeCameraBase
   const renderCamera = view === 'camera' && activeCamera ? 'PRODUCTION' : 'EDITOR'
+  const imageAspect = activeCamera ? cameraDisplayAspect(activeCamera) : 16 / 9
+  const imageRect = letterboxRect(viewportSize.width, viewportSize.height, imageAspect)
+  const imageStyle = { left: `${(imageRect.x / viewportSize.width) * 100}%`, top: `${(imageRect.y / viewportSize.height) * 100}%`, width: `${(imageRect.width / viewportSize.width) * 100}%`, height: `${(imageRect.height / viewportSize.height) * 100}%` }
 
   return (
     <section className="v2-stage-panel" aria-label="Stage">
@@ -204,7 +226,10 @@ export function V2Stage({ view, actors, props, cameras, activeCameraId, selected
         ) : activeCamera ? (
           <div className="v2-camera-view-overlay" aria-hidden="true">
             <div className="v2-camera-view-readout"><strong>{activeCamera.name}</strong><span>{activeCamera.focalLengthMm}mm · {activeCamera.deliveryAspectRatio === 'sensor' ? 'Sensor / Native' : activeCamera.deliveryAspectRatio}</span></div>
-            <div className="v2-camera-frame-guide" style={{ aspectRatio: String(deliveryAspect(activeCamera)) }} />
+            <div className="v2-camera-image-area" style={imageStyle}>
+              <FrameOverlay label={`Delivery ${activeCamera.deliveryAspectRatio === 'sensor' ? 'Native' : activeCamera.deliveryAspectRatio}`} aspectRatio={deliveryAspect(activeCamera)} sourceAspect={imageAspect} delivery />
+              {activeCamera.frameGuides.filter((guide) => guide.enabled).map((guide) => <FrameOverlay key={guide.id} guide={guide} selected={guide.id === selectedFrameGuideId} sourceAspect={imageAspect} />)}
+            </div>
           </div>
         ) : (
           <div className="v2-stage-empty"><div className="v2-stage-empty-mark">◇</div><strong>No active Camera</strong><span>Add a Camera and set it active to view the shot.</span></div>
@@ -238,4 +263,16 @@ export function V2Stage({ view, actors, props, cameras, activeCameraId, selected
       </div>
     </section>
   )
+}
+
+function FrameOverlay({ guide, aspectRatio, sourceAspect, selected = false, delivery = false, label }: { guide?: FrameGuide; aspectRatio?: number; sourceAspect?: number; selected?: boolean; delivery?: boolean; label?: string }) {
+  const actualAspect = guide?.aspectRatio ?? aspectRatio ?? 16 / 9
+  const rect = insetFrameGuideRect(fitAspectInsideSource(sourceAspect ?? 16 / 9, actualAspect), guide?.safeMarginPercent ?? 0)
+  const color = delivery ? 'delivery' : 'custom'
+  const lineStyle = guide?.lineStyle ?? 'solid'
+  const opacity = delivery ? 0.92 : guide?.opacity ?? 0.82
+  const lineWeight = delivery ? 2 : selected ? Math.max(guide?.lineWeight ?? 1, 2) : guide?.lineWeight ?? 1
+  const shade = selected && guide?.shadeOutside ? { boxShadow: `0 0 0 9999px rgba(10, 14, 22, ${guide.shadeOpacity})` } : undefined
+  const customColor = delivery ? undefined : guide?.color
+  return <div className={`v2-frame-overlay v2-frame-overlay-${color} v2-frame-overlay-${lineStyle}${selected ? ' is-selected' : ''}${delivery ? ' is-delivery' : ''}`} style={{ left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.width * 100}%`, height: `${rect.height * 100}%`, borderWidth: `${lineWeight}px`, borderColor: customColor, color: customColor, opacity, ...shade }}>{label || guide?.name ? <span>{label ?? guide?.name}</span> : null}</div>
 }

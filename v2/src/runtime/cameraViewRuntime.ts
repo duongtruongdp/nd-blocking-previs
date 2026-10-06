@@ -144,7 +144,7 @@ export class CameraViewRuntime {
     }
     if (!this.cameraRuntime) this.cameraRuntime = new ProceduralCameraRuntime(camera)
     this.cameraRuntime.applyDocument(camera)
-    this.captureAspect = cameraProjectionForDocument(camera)?.aspect ?? this.captureAspect
+    this.captureAspect = cameraProjectionForDocument(camera)?.displayAspect ?? this.captureAspect
   }
 
   private createEnvironment(): void {

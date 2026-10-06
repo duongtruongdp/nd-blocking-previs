@@ -1,8 +1,9 @@
 import { useState, type KeyboardEvent, type ReactNode } from 'react'
 import type { ActorDocument, CameraDocument, PropDocument, TimelineDocument, TimelineProperty } from '../core/sceneDocument'
-import { CAMERA_DATABASE, resolveCameraDefinition } from '../core/cameraDatabase'
-import { activeCaptureAspect, cameraProjectionForDocument, horizontalFovDegrees, verticalFovDegrees } from '../runtime/cameraMath'
+import { CAMERA_DATABASE, CAMERA_MANUFACTURERS, camerasForManufacturer, defaultCaptureModeForDefinition, resolveCameraDefinition } from '../core/cameraDatabase'
+import { activeCaptureAspect, cameraProjectionForDocument } from '../runtime/cameraMath'
 import { degreesToRadians, formatCameraNumber, parseCameraNumber, radiansToDegrees } from '../runtime/cameraInputMath'
+import { FrameGuideInspector } from './FrameGuideInspector'
 
 type V2DetailsPanelProps = {
   actor: ActorDocument | null
@@ -13,19 +14,21 @@ type V2DetailsPanelProps = {
   onCameraChange: (cameraId: string, changes: Partial<CameraDocument>) => void
   onSetActiveCamera: (cameraId: string) => void
   onAddKeyframe: (entityId: string, property: TimelineProperty) => void
+  selectedFrameGuideId: string | null
+  onFrameGuideSelection: (guideId: string | null) => void
 }
 
-export function V2DetailsPanel({ actor, prop, camera, activeCameraId, timeline, onCameraChange, onSetActiveCamera, onAddKeyframe }: V2DetailsPanelProps) {
+export function V2DetailsPanel({ actor, prop, camera, activeCameraId, timeline, onCameraChange, onSetActiveCamera, onAddKeyframe, selectedFrameGuideId, onFrameGuideSelection }: V2DetailsPanelProps) {
   return (
     <aside className="v2-panel v2-details-panel" aria-label="Details">
       <span className="v2-eyebrow">Details</span>
       <h2>Inspector</h2>
-      {camera ? <CameraInspector camera={camera} activeCameraId={activeCameraId} timeline={timeline} onCameraChange={onCameraChange} onSetActiveCamera={onSetActiveCamera} onAddKeyframe={onAddKeyframe} /> : actor ? <ActorInspector actor={actor} timeline={timeline} onAddKeyframe={onAddKeyframe} /> : prop ? <PropInspector prop={prop} /> : <EmptyInspector />}
+      {camera ? <CameraInspector camera={camera} activeCameraId={activeCameraId} timeline={timeline} onCameraChange={onCameraChange} onSetActiveCamera={onSetActiveCamera} onAddKeyframe={onAddKeyframe} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={onFrameGuideSelection} /> : actor ? <ActorInspector actor={actor} timeline={timeline} onAddKeyframe={onAddKeyframe} /> : prop ? <PropInspector prop={prop} /> : <EmptyInspector />}
     </aside>
   )
 }
 
-function CameraInspector({ camera, activeCameraId, timeline, onCameraChange, onSetActiveCamera, onAddKeyframe }: { camera: CameraDocument; activeCameraId: string | null; timeline: TimelineDocument; onCameraChange: V2DetailsPanelProps['onCameraChange']; onSetActiveCamera: V2DetailsPanelProps['onSetActiveCamera']; onAddKeyframe: V2DetailsPanelProps['onAddKeyframe'] }) {
+function CameraInspector({ camera, activeCameraId, timeline, onCameraChange, onSetActiveCamera, onAddKeyframe, selectedFrameGuideId, onFrameGuideSelection }: { camera: CameraDocument; activeCameraId: string | null; timeline: TimelineDocument; onCameraChange: V2DetailsPanelProps['onCameraChange']; onSetActiveCamera: V2DetailsPanelProps['onSetActiveCamera']; onAddKeyframe: V2DetailsPanelProps['onAddKeyframe']; selectedFrameGuideId: string | null; onFrameGuideSelection: V2DetailsPanelProps['onFrameGuideSelection'] }) {
   const definition = resolveCameraDefinition(camera.cameraDefinitionId)
   const projection = cameraProjectionForDocument(camera)
   const captureMode = projection?.captureMode
@@ -35,12 +38,19 @@ function CameraInspector({ camera, activeCameraId, timeline, onCameraChange, onS
       <h3>{camera.name}</h3>
       <button className={`v2-inspector-action${activeCameraId === camera.id ? ' is-active' : ''}`} onClick={() => onSetActiveCamera(camera.id)} type="button">{activeCameraId === camera.id ? 'Active Camera' : 'Set Active Camera'}</button>
       <div className="v2-inspector-divider" />
-      <span className="v2-eyebrow">Camera Model</span>
+      <span className="v2-eyebrow">Manufacturer</span>
+      <select className="v2-inspector-select" value={definition?.manufacturer ?? CAMERA_MANUFACTURERS[0]} onChange={(event) => {
+        const next = camerasForManufacturer(event.target.value)[0] ?? CAMERA_DATABASE[0]
+        onCameraChange(camera.id, { cameraDefinitionId: next.id, captureModeId: defaultCaptureModeForDefinition(next).id })
+      }}>
+        {CAMERA_MANUFACTURERS.map((manufacturer) => <option key={manufacturer} value={manufacturer}>{manufacturer}</option>)}
+      </select>
+      <span className="v2-eyebrow v2-inspector-subsection">Camera Model</span>
       <select className="v2-inspector-select" value={camera.cameraDefinitionId} onChange={(event) => {
         const next = CAMERA_DATABASE.find((item) => item.id === event.target.value) ?? CAMERA_DATABASE[0]
-        onCameraChange(camera.id, { cameraDefinitionId: next.id, captureModeId: next.captureModes[0].id })
+        onCameraChange(camera.id, { cameraDefinitionId: next.id, captureModeId: defaultCaptureModeForDefinition(next).id })
       }}>
-        {CAMERA_DATABASE.map((item) => <option key={item.id} value={item.id}>{item.manufacturer} · {item.model}</option>)}
+        {camerasForManufacturer(definition?.manufacturer ?? CAMERA_MANUFACTURERS[0]).map((item) => <option key={item.id} value={item.id}>{item.model}</option>)}
       </select>
       <span className="v2-eyebrow v2-inspector-subsection">Capture Mode</span>
       <select className="v2-inspector-select" value={camera.captureModeId} onChange={(event) => onCameraChange(camera.id, { captureModeId: event.target.value })}>
@@ -51,22 +61,25 @@ function CameraInspector({ camera, activeCameraId, timeline, onCameraChange, onS
         <NumericCameraInput label="Focal length" value={camera.focalLengthMm} unit="mm" min={0.1} max={1000} step={0.1} keyframe={{ active: hasTimelineKeyframe(timeline, camera.id, 'focalLengthMm'), hasTrack: hasTimelineTrack(timeline, camera.id, 'focalLengthMm'), onClick: () => onAddKeyframe(camera.id, 'focalLengthMm') }} onCommit={(value) => onCameraChange(camera.id, { focalLengthMm: value })} />
         <label>Type<select className="v2-inspector-select" value={camera.lensType} onChange={(event) => onCameraChange(camera.id, { lensType: event.target.value as CameraDocument['lensType'], anamorphicSqueeze: event.target.value === 'Spherical' ? 1 : camera.anamorphicSqueeze === 1 ? 1.33 : camera.anamorphicSqueeze })}><option value="Spherical">Spherical</option><option value="Anamorphic">Anamorphic</option></select></label>
       </div>
-      {camera.lensType === 'Anamorphic' ? <label className="v2-inspector-label">Squeeze<select className="v2-inspector-select" value={camera.anamorphicSqueeze} onChange={(event) => onCameraChange(camera.id, { anamorphicSqueeze: Number(event.target.value) as CameraDocument['anamorphicSqueeze'] })}>{[1.33, 1.5, 1.8, 2].map((value) => <option key={value} value={value}>{value}:1</option>)}</select></label> : null}
+      {camera.lensType === 'Anamorphic' ? <label className="v2-inspector-label">Squeeze<select className="v2-inspector-select" value={camera.anamorphicSqueeze} onChange={(event) => onCameraChange(camera.id, { anamorphicSqueeze: Number(event.target.value) as CameraDocument['anamorphicSqueeze'] })}>{[1.3, 1.33, 1.5, 1.6, 1.8, 2].map((value) => <option key={value} value={value}>{value}:1</option>)}</select></label> : null}
       <span className="v2-eyebrow v2-inspector-subsection">Format</span>
       <div className="v2-camera-metrics v2-camera-format-metrics">
         <Metric label="Active Area" value={captureMode ? `${captureMode.activeWidthMm.toFixed(2)} × ${captureMode.activeHeightMm.toFixed(2)} mm` : '—'} />
         <Metric label="Resolution" value={captureMode ? `${captureMode.recordingWidthPx} × ${captureMode.recordingHeightPx}` : '—'} />
         <Metric label="Capture" value={captureMode ? `${activeCaptureAspect(captureMode).toFixed(2)}:1` : '—'} />
+        {projection && projection.squeeze > 1 ? <Metric label="Desqueezed" value={`${projection.displayAspect.toFixed(2)}:1`} /> : null}
+        <Metric label="Mount" value={definition?.lensMounts?.join(' / ') ?? '—'} />
       </div>
       <div className="v2-camera-fov-section">
         <span className="v2-eyebrow">Field of View</span>
         <div className="v2-camera-metrics v2-camera-fov-metrics">
-          <Metric label="Horizontal" value={captureMode ? `${horizontalFovDegrees(camera.focalLengthMm, captureMode).toFixed(1)}°` : '—'} />
-          <Metric label="Vertical" value={captureMode ? `${verticalFovDegrees(camera.focalLengthMm, captureMode).toFixed(1)}°` : '—'} />
+          <Metric label="Horizontal" value={projection ? `${projection.horizontalFov.toFixed(1)}°` : '—'} />
+          <Metric label="Vertical" value={projection ? `${projection.fov.toFixed(1)}°` : '—'} />
         </div>
       </div>
       <span className="v2-eyebrow v2-inspector-subsection">Delivery</span>
       <select className="v2-inspector-select" value={camera.deliveryAspectRatio} onChange={(event) => onCameraChange(camera.id, { deliveryAspectRatio: event.target.value as CameraDocument['deliveryAspectRatio'] })}><option value="sensor">Sensor / Native</option><option value="16:9">16:9</option><option value="1.85">1.85</option><option value="2.00">2.00</option><option value="2.39">2.39</option></select>
+      <FrameGuideInspector camera={camera} selectedGuideId={selectedFrameGuideId} onSelectGuide={onFrameGuideSelection} onCameraChange={onCameraChange} />
       <span className="v2-eyebrow v2-inspector-subsection">Transform</span>
       <span className="v2-eyebrow v2-inspector-field-label v2-inspector-keyframe-label">Position <KeyframeButton active={hasTimelineKeyframe(timeline, camera.id, 'position')} hasTrack={hasTimelineTrack(timeline, camera.id, 'position')} onClick={() => onAddKeyframe(camera.id, 'position')} label="Add Camera Position keyframe" /></span>
       <div className="v2-editable-vector">

@@ -703,6 +703,41 @@ Camera View uses a separate read-only render adapter with the production camera,
 capture letterboxing, and delivery-frame guides. Camera settings and completed
 Camera transforms continue through the existing SceneDocument and history paths.
 
+### V2.7A Complete Capture Modes and Real Anamorphic Desqueeze
+
+V2.7A expands the professional capture dataset to 120 geometry-changing modes
+across the existing 40 camera bodies and records a per-body official-source
+audit in `docs/CAMERA_DATABASE_SOURCES.md`. The Sony FX5 includes its seven
+documented FF/FFc/S35 imager modes, with X-OCN compatibility attached to the
+Open Gate mode rather than represented as duplicate geometry.
+
+`v2/src/runtime/cameraMath.ts` is the authoritative projection boundary. It
+keeps physical capture aspect and FOV separate from the desqueezed display
+aspect, applies anamorphic squeeze to horizontal optical coverage only, and is
+shared by the Blocking View FOV guide, Camera View, Inspector, and export
+renderer. Camera View and export render the desqueezed source first, then apply
+the selected Delivery Frame crop. StageEngine interaction and project
+persistence remain outside this milestone.
+
+### V2.7B/C Multi-Frame Guides / Frame Lines
+
+Frame Guides are camera-owned JSON records layered over the Camera View image.
+They remain separate from physical Capture Mode, anamorphic display aspect,
+and the primary Delivery Frame. A guide stores its aspect ratio, visibility,
+line style, opacity, line weight, editable `#RRGGBB` color, optional outside
+shade, shade strength, and safe-margin inset. Built-in Cinema/Broadcast and
+Social/Digital presets are supplemented by a custom decimal aspect entry.
+
+Guide rectangles are calculated by a pure normalized-rectangle helper: each
+enabled guide is the largest centered rectangle of its target aspect inside
+the displayed source image. Delivery and guide rectangles share the same
+`fitAspectInsideSource` helper, so equal aspects have identical geometry. For
+anamorphic shots the displayed source is the desqueezed image aspect. The
+overlay never changes production projection, capture crop, export output, or
+timeline evaluation. Edits use the existing camera update/history path, while
+guide selection remains transient UI state. Blocking View intentionally shows
+no frame rectangles.
+
 Milestone 2I is complete. The production Actor baseline contains Male 01 and Female 01, 18 stable semantic poses (six Standing, six Sitting, six Lying), shared semantic definitions adapted through Rig Profiles, support/contact-aware Sitting and Lying, height-preserving Actor placement, and a development-only Pose Calibration tool hidden from normal use. The full Actor/Pose development phase is locked.
 
 Milestone 2.5A, 2.5B, 2.5B-FIX, and 2.5C are complete. The Camera Data

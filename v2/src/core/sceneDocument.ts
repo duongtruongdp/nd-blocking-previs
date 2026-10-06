@@ -29,6 +29,21 @@ export type PropShape = 'cube' | 'sphere' | 'cylinder'
 
 export type CameraLensType = 'Spherical' | 'Anamorphic'
 export type CameraDeliveryFrame = 'sensor' | '16:9' | '1.85' | '2.00' | '2.39'
+export type FrameGuideLineStyle = 'solid' | 'dashed'
+
+export type FrameGuide = {
+  id: string
+  name: string
+  aspectRatio: number
+  enabled: boolean
+  lineStyle: FrameGuideLineStyle
+  opacity: number
+  lineWeight: number
+  color: string
+  shadeOutside: boolean
+  shadeOpacity: number
+  safeMarginPercent: number
+}
 
 export type TimelineEntityType = 'Actor' | 'Camera'
 export type TimelineProperty = 'position' | 'heading' | 'rotation' | 'focalLengthMm'
@@ -69,8 +84,9 @@ export type CameraDocument = {
   captureModeId: string
   focalLengthMm: number
   lensType: CameraLensType
-  anamorphicSqueeze: 1 | 1.33 | 1.5 | 1.8 | 2
+  anamorphicSqueeze: 1 | 1.3 | 1.33 | 1.5 | 1.6 | 1.8 | 2
   deliveryAspectRatio: CameraDeliveryFrame
+  frameGuides: FrameGuide[]
 }
 
 export type PropDocument = {
@@ -169,6 +185,7 @@ export function createCameraDocument(id: string, name: string, position: ActorVe
     lensType: 'Spherical',
     anamorphicSqueeze: 1,
     deliveryAspectRatio: '16:9',
+    frameGuides: [],
   }
 }
 

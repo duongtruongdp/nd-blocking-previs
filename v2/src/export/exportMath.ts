@@ -77,6 +77,11 @@ export function physicalCaptureAspect(document: SceneDocument, cameraId: string 
   return camera ? cameraProjectionForDocument(camera)?.aspect ?? null : null
 }
 
+export function desqueezedCaptureAspect(document: SceneDocument, cameraId: string | null): number | null {
+  const camera = cameraId ? document.cameras.find((item) => item.id === cameraId) : undefined
+  return camera ? cameraProjectionForDocument(camera)?.displayAspect ?? null : null
+}
+
 export function formatExportDuration(markIn: number, markOut: number, rate: RationalFrameRate): string {
   const seconds = Math.max(0, exportDurationSeconds(markIn, markOut, rate))
   const wholeSeconds = Math.floor(seconds)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
 import { V2DetailsPanel } from './components/V2DetailsPanel'
 import { V2ScenePanel } from './components/V2ScenePanel'
 import { V2Stage, type V2TransformDebugState } from './components/V2Stage'
@@ -12,7 +12,8 @@ import { defaultCameraPlacement } from './core/cameraPlacement'
 import { cameraRotationLookingAt } from './runtime/cameraMath'
 import { createEditorClipboard, pasteEditorClipboard, type EditorClipboard } from './core/editorClipboard'
 import { EditorHistory, type EditorHistorySnapshot } from './core/editorHistory'
-import { editorShortcutForKey, timelinePlayPauseShortcut } from './core/editorShortcuts'
+import { editorShortcutForKey, timelineMarkShortcutForKey, timelinePlayPauseShortcut } from './core/editorShortcuts'
+import { clampTimelineHeight, TIMELINE_HEIGHT_DEFAULT, timelineHeightBounds } from './core/workspaceLayout'
 import type { StageTool, StageTransform } from './stage-engine'
 import { evaluateTimeline } from './timeline/timelineEvaluator'
 import { createPlaybackClock, playbackFrameAt, playbackReachedMarkOut, type PlaybackClock } from './timeline/playbackClock'
@@ -47,6 +48,9 @@ export function V2App() {
   const [exportProgress, setExportProgress] = useState<VideoExportProgress | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
   const [exportSettings, setExportSettings] = useState<VideoExportSettings>(() => ({ cameraId: null, markIn: 0, markOut: 120, frameRate: { numerator: 24, denominator: 1 }, deliveryAspectRatio: '16:9', width: 1920, format: 'mp4' }))
+  const [timelineHeight, setTimelineHeight] = useState(TIMELINE_HEIGHT_DEFAULT)
+  const [isResizingTimeline, setIsResizingTimeline] = useState(false)
+  const appShellRef = useRef<HTMLElement>(null)
   const sceneDocumentRef = useRef<SceneDocument>(sceneDocument)
   const savedSceneFingerprintRef = useRef(creativeSceneFingerprint(sceneDocument))
   const selectedEntityIdRef = useRef<string | null>(selectedEntityId)
@@ -57,6 +61,8 @@ export function V2App() {
   const playbackFrameRequestRef = useRef<number | null>(null)
   const exportAbortRef = useRef<AbortController | null>(null)
   const togglePlaybackRef = useRef<() => void>(() => {})
+  const isPlayingRef = useRef(isPlaying)
+  const timelineResizeRef = useRef<{ startY: number; startHeight: number } | null>(null)
   void webPlatformAdapter
   const evaluatedEntities = evaluateTimeline(sceneDocument, sceneDocument.timeline.currentFrame)
   const selectedActorBase = sceneDocument.actors.find((actor) => actor.id === selectedEntityId) ?? null
@@ -77,6 +83,53 @@ export function V2App() {
     sceneDocumentRef.current = sceneDocument
     selectedEntityIdRef.current = selectedEntityId
   }, [sceneDocument, selectedEntityId])
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying
+  }, [isPlaying])
+
+  const availableWorkspaceHeight = () => appShellRef.current?.getBoundingClientRect().height ?? window.innerHeight
+
+  const setClampedTimelineHeight = (requestedHeight: number) => {
+    setTimelineHeight(clampTimelineHeight(requestedHeight, availableWorkspaceHeight()))
+  }
+
+  const startTimelineResize = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    timelineResizeRef.current = { startY: event.clientY, startHeight: timelineHeight }
+    setIsResizingTimeline(true)
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  useEffect(() => {
+    if (!isResizingTimeline) return
+    const handlePointerMove = (event: globalThis.PointerEvent) => {
+      const resize = timelineResizeRef.current
+      if (!resize) return
+      setClampedTimelineHeight(resize.startHeight + resize.startY - event.clientY)
+    }
+    const finishTimelineResize = () => {
+      timelineResizeRef.current = null
+      setIsResizingTimeline(false)
+    }
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', finishTimelineResize)
+    window.addEventListener('pointercancel', finishTimelineResize)
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', finishTimelineResize)
+      window.removeEventListener('pointercancel', finishTimelineResize)
+    }
+  }, [isResizingTimeline])
+
+  useEffect(() => {
+    const handleViewportResize = () => {
+      setTimelineHeight((currentHeight) => clampTimelineHeight(currentHeight, availableWorkspaceHeight()))
+    }
+    window.addEventListener('resize', handleViewportResize)
+    return () => window.removeEventListener('resize', handleViewportResize)
+  }, [])
 
   const applyEditorSnapshot = (snapshot: EditorHistorySnapshot, suspendedIds: ReadonlySet<string> = new Set()) => {
     sceneDocumentRef.current = snapshot.document
@@ -481,6 +534,12 @@ export function V2App() {
         togglePlaybackRef.current()
         return
       }
+      const markShortcut = timelineMarkShortcutForKey(event.key, isTextEditing)
+      if (markShortcut && !event.repeat && !isPlayingRef.current) {
+        event.preventDefault()
+        changeMark(markShortcut)
+        return
+      }
       if (isTextEditing) return
       const shortcut = editorShortcutForKey(event)
       if (!shortcut) return
@@ -491,8 +550,11 @@ export function V2App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
+  const timelineBounds = timelineHeightBounds(typeof window === 'undefined' ? 900 : window.innerHeight)
+  const appShellStyle = { '--v2-timeline-height': `${timelineHeight}px` } as CSSProperties
+
   return (
-    <main className="v2-app-shell">
+    <main ref={appShellRef} className={`v2-app-shell${isResizingTimeline ? ' is-resizing-timeline' : ''}`} style={appShellStyle}>
       <V2TopBar sceneName={sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} view={view} onViewChange={setView} onNewScene={newScene} onSaveScene={saveScene} onLoadScene={loadScene} onExport={openExport} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'finalizing'} />
       <V2ScenePanel actors={sceneDocument.actors} props={sceneDocument.props} cameras={sceneDocument.cameras} activeCameraId={sceneDocument.activeCameraId} selectedEntityId={selectedEntityId} onAddActor={addActor} onAddCamera={addCamera} onSetActiveCamera={setActiveCamera} onSelectEntity={handleSelectionChange} />
       <V2Stage
@@ -517,6 +579,30 @@ export function V2App() {
         selectedFrameGuideId={selectedFrameGuideId}
       />
       <V2DetailsPanel actor={selectedActor} prop={selectedProp} camera={selectedCamera} timeline={sceneDocument.timeline} onCameraChange={updateCamera} onSetActiveCamera={setActiveCamera} onAddKeyframe={addKeyframe} activeCameraId={sceneDocument.activeCameraId} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={setSelectedFrameGuideId} />
+      <div
+        className="v2-timeline-resize-handle"
+        role="separator"
+        aria-label="Resize Timeline"
+        aria-orientation="horizontal"
+        aria-valuemin={timelineBounds.min}
+        aria-valuemax={timelineBounds.max}
+        aria-valuenow={timelineHeight}
+        tabIndex={0}
+        onPointerDown={startTimelineResize}
+        onDoubleClick={() => setClampedTimelineHeight(TIMELINE_HEIGHT_DEFAULT)}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowUp') {
+            event.preventDefault()
+            setClampedTimelineHeight(timelineHeight + 16)
+          } else if (event.key === 'ArrowDown') {
+            event.preventDefault()
+            setClampedTimelineHeight(timelineHeight - 16)
+          } else if (event.key === 'Home') {
+            event.preventDefault()
+            setClampedTimelineHeight(TIMELINE_HEIGHT_DEFAULT)
+          }
+        }}
+      ><span aria-hidden="true" /></div>
       <V2Timeline timeline={sceneDocument.timeline} tracks={sceneDocument.timeline.tracks} entities={timelineEntities} selectedEntityId={selectedEntityId} isPlaying={isPlaying} onFrameChange={setCurrentFrame} onFrameRateChange={changeFrameRate} onTogglePlayback={togglePlayback} onStepFrame={stepFrame} onMarkIn={() => changeMark('in')} onMarkOut={() => changeMark('out')} onDeleteKeyframe={deleteKeyframe} onEntitySelect={handleSelectionChange} onScrubStart={() => setIsScrubbing(true)} onScrubEnd={() => setIsScrubbing(false)} />
       {exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'finalizing' ? <div className="v2-export-lock" aria-hidden="true" /> : null}
       {exportOpen ? <V2ExportModal document={sceneDocument} settings={exportSettings} status={exportStatus} progress={exportProgress} error={exportError} onSettingsChange={setExportSettings} onExport={startExport} onCancel={cancelExport} onClose={() => setExportOpen(false)} /> : null}

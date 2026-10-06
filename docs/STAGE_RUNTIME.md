@@ -230,3 +230,13 @@ Renderer initialization errors are logged for development and translated into a 
 On unmount, the runtime cancels pending frames, removes listeners and observers,
 disposes transform controls, disposes geometry/materials, disposes the renderer,
 and removes its canvas.
+
+## V2.UI1 workspace resizing
+
+The V2 editor owns Timeline panel height as transient workspace state. A small
+horizontal handle sits between the Stage/Inspector row and Timeline; its
+bounded drag changes CSS grid allocation only. Stage and Camera View continue
+through the existing container `ResizeObserver`, so the renderer and camera
+projection are resized in place. The Timeline toolbar and frame ruler remain
+fixed while only its track viewport scrolls. No workspace dimensions or
+collapse state are part of `SceneDocument` or `.ndscene` serialization.

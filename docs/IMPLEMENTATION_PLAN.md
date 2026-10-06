@@ -1,6 +1,13 @@
 # ND Blocking & Previs — Architecture and Implementation Plan
 
-Status: V2.8A current: generic Camera registration, active-camera state, production Camera View rendering, Timeline playback/keyframes, Prop Position/Rotation animation, and portable `.ndscene` persistence are implemented through the frozen V2 StageEngine API; manual browser acceptance remains required.
+Status: V2.8A + V2.UI1 current: portable `.ndscene` persistence, compact workspace header, session-only resizable Timeline layout, fixed Timeline toolbar/ruler, and guarded Mark In/Mark Out shortcuts are implemented through the frozen V2 StageEngine API; manual browser acceptance remains required.
+
+V2.UI1 keeps workspace dimensions outside SceneDocument and `.ndscene`
+serialization. Timeline height defaults to 240px, clamps to a 140px minimum,
+and uses a viewport-aware upper bound that preserves a 240px Stage minimum.
+The existing Stage ResizeObserver handles Stage and Camera View changes in
+place; Timeline track rows scroll inside their viewport while the toolbar and
+ruler remain fixed.
 Scope: Phase 1 foundation, workspace shell, Actor/Prop blocking, locked Actor/Pose system, verified camera data, and serializable Camera objects.
 
 Milestone 0 decisions are implemented in the domain source and specified by these focused contracts:

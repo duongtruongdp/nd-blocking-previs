@@ -84,13 +84,13 @@ export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPla
         }} disabled={isPlaying}>{TIMELINE_FRAME_RATES.map((rate) => <option key={`${rate.numerator}/${rate.denominator}`} value={`${rate.numerator}/${rate.denominator}`}>{frameRateLabel(rate)}</option>)}</select></label>
         <div className="v2-transport">
           <button onClick={() => onStepFrame(-1)} disabled={isPlaying} aria-label="Previous frame" type="button">|&lt;</button>
-          <button onClick={onTogglePlayback} aria-label={isPlaying ? 'Pause' : 'Play'} type="button">{isPlaying ? 'Ⅱ' : '▶'}</button>
+          <button onClick={onTogglePlayback} aria-label={isPlaying ? 'Pause' : 'Play'} title={isPlaying ? 'Pause (Space)' : 'Play / Pause (Space)'} type="button">{isPlaying ? 'Ⅱ' : '▶'}</button>
           <button onClick={() => onStepFrame(1)} disabled={isPlaying} aria-label="Next frame" type="button">&gt;|</button>
         </div>
         <label className="v2-frame-readout">Frame <input aria-label="Current frame" type="number" min={timeline.startFrame} max={timeline.endFrame} step={1} value={timeline.currentFrame} onChange={(event) => onFrameChange(Number(event.target.value))} disabled={isPlaying} /></label>
         <div className="v2-timeline-marks">
-          <button onClick={onMarkIn} disabled={isPlaying} type="button">Mark In</button>
-          <button onClick={onMarkOut} disabled={isPlaying} type="button">Mark Out</button>
+          <button onClick={onMarkIn} disabled={isPlaying} title="Mark In (I)" type="button">Mark In</button>
+          <button onClick={onMarkOut} disabled={isPlaying} title="Mark Out (O)" type="button">Mark Out</button>
         </div>
       </div>
 

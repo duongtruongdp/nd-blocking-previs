@@ -19,3 +19,13 @@ export function editorShortcutForKey(input: EditorShortcutInput): EditorShortcut
 export function timelinePlayPauseShortcut(key: string, isTextEditing: boolean): boolean {
   return key === ' ' && !isTextEditing
 }
+
+export type TimelineMarkShortcut = 'in' | 'out'
+
+export function timelineMarkShortcutForKey(key: string, isTextEditing: boolean): TimelineMarkShortcut | null {
+  if (isTextEditing) return null
+  const normalized = key.toLowerCase()
+  if (normalized === 'i') return 'in'
+  if (normalized === 'o') return 'out'
+  return null
+}

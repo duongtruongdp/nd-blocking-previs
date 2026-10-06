@@ -1,11 +1,16 @@
 import * as THREE from 'three'
-import type { ActorVector3, CameraDocument, PropDocument, SceneDocument, TimelineProperty, TimelineTrack, TimelineValue } from '../core/sceneDocument'
+import type { ActorVector3, CameraDocument, OpeningDocument, PropDocument, SceneDocument, SunDocument, TimelineProperty, TimelineTrack, TimelineValue, WallDocument } from '../core/sceneDocument'
 import { interpolateAngleRadians, interpolateScalar, interpolateVector } from './timelineMath'
 
 export type EvaluatedEntityState = {
   position: ActorVector3
   rotation: ActorVector3
   focalLengthMm?: number
+  openAngle?: number
+  azimuth?: number
+  elevation?: number
+  intensity?: number
+  color?: string
 }
 
 function valueAtFrame(track: TimelineTrack | undefined, frame: number): TimelineValue | undefined {
@@ -19,6 +24,7 @@ function valueAtFrame(track: TimelineTrack | undefined, frame: number): Timeline
   if (previous.interpolation === 'hold') return previous.value
   const amount = (frame - previous.frame) / (next.frame - previous.frame)
   if (Array.isArray(previous.value) && Array.isArray(next.value)) return interpolateVector(previous.value, next.value, amount)
+  if (typeof previous.value === 'string' || typeof next.value === 'string') return previous.value
   return interpolateScalar(Number(previous.value), Number(next.value), amount)
 }
 
@@ -41,7 +47,7 @@ function evaluateRotation(base: ActorVector3, track: TimelineTrack | undefined, 
   return [euler.x, euler.y, euler.z]
 }
 
-function evaluateEntity(base: { id: string; position: ActorVector3; rotation: ActorVector3 }, tracks: readonly TimelineTrack[], frame: number, focalLengthMm?: number): EvaluatedEntityState {
+function evaluateEntity(base: { id: string; position: ActorVector3; rotation: ActorVector3 }, tracks: readonly TimelineTrack[], frame: number, focalLengthMm?: number, openAngle?: number): EvaluatedEntityState {
   const positionValue = valueAtFrame(trackFor(tracks, base.id, 'position'), frame)
   const headingTrack = trackFor(tracks, base.id, 'heading')
   const rotationTrack = trackFor(tracks, base.id, 'rotation')
@@ -61,13 +67,35 @@ function evaluateEntity(base: { id: string; position: ActorVector3; rotation: Ac
   const result: EvaluatedEntityState = { position, rotation }
   if (focalValue !== undefined && !Array.isArray(focalValue)) result.focalLengthMm = Number(focalValue)
   else if (focalLengthMm !== undefined) result.focalLengthMm = focalLengthMm
+  const openValue = valueAtFrame(trackFor(tracks, base.id, 'openAngle'), frame)
+  if (openValue !== undefined && !Array.isArray(openValue) && typeof openValue !== 'string') result.openAngle = Number(openValue)
+  else if (openAngle !== undefined) result.openAngle = openAngle
   return result
+}
+
+function evaluateSun(base: SunDocument, tracks: readonly TimelineTrack[], frame: number): EvaluatedEntityState {
+  const valueFor = (property: TimelineProperty, fallback: number): number => {
+    const value = valueAtFrame(trackFor(tracks, base.id, property), frame)
+    return value !== undefined && !Array.isArray(value) && typeof value !== 'string' ? Number(value) : fallback
+  }
+  const colorValue = valueAtFrame(trackFor(tracks, base.id, 'color'), frame)
+  return {
+    position: [0, 0, 0],
+    rotation: [0, 0, 0],
+    azimuth: valueFor('azimuth', base.azimuth),
+    elevation: valueFor('elevation', base.elevation),
+    intensity: valueFor('intensity', base.intensity),
+    color: typeof colorValue === 'string' ? colorValue : base.color,
+  }
 }
 
 export function evaluateTimeline(document: SceneDocument, frame: number): Record<string, EvaluatedEntityState> {
   const evaluated: Record<string, EvaluatedEntityState> = {}
   document.actors.forEach((actor) => { evaluated[actor.id] = evaluateEntity(actor, document.timeline.tracks, frame) })
   document.props.forEach((prop: PropDocument) => { evaluated[prop.id] = evaluateEntity(prop, document.timeline.tracks, frame) })
+  document.walls.forEach((wall: WallDocument) => { evaluated[wall.id] = evaluateEntity(wall, document.timeline.tracks, frame) })
+  document.openings.forEach((opening: OpeningDocument) => { evaluated[opening.id] = evaluateEntity(opening, document.timeline.tracks, frame, undefined, opening.openAngle) })
+  document.lights.forEach((sun: SunDocument) => { evaluated[sun.id] = evaluateSun(sun, document.timeline.tracks, frame) })
   document.cameras.forEach((camera: CameraDocument) => { evaluated[camera.id] = evaluateEntity(camera, document.timeline.tracks, frame, camera.focalLengthMm) })
   return evaluated
 }

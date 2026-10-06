@@ -121,6 +121,25 @@ intentionally unavailable from inside that Camera's own image.
 
 React mounts `SceneRuntime` through the `Stage` component and only owns the mount element and user-facing failure state. Three.js objects are not placed in React state.
 
+## V2.10E openable Windows
+
+Windows remain serializable `OpeningDocument` records with a backward-compatible
+`hingeSide` (left/right) and `openAngle` in degrees. New and normalized legacy
+Windows default to a left hinge and 0 degrees; Window angles are bounded to the
+0–90 degree editorial range. The runtime builds a fixed outer frame and a
+separate sash group whose local vertical Y pivot is placed on the selected
+hinge. Glass and the sash frame rotate with that pivot, while the wall aperture
+continues to use only the Window's dimensions, sill, and wall placement.
+
+Open Angle is a scalar Timeline property using the existing keyframe and
+evaluation path. Blocking View, Camera View/Preview, still capture, and video
+export all consume the evaluated Opening document, so a Window opens in the
+same frame everywhere without a second animation system. Changing only
+`openAngle` updates the sash in place and does not rebuild the Wall; changing
+the hinge side or Window construction values may rebuild the lightweight
+Opening visual. Clipboard, duplication, history, and scene/project
+persistence keep the hinge and angle as plain data, never Three.js objects.
+
 ## Rendering strategy
 
 ### V2 Camera Stage Representation
@@ -221,7 +240,7 @@ The renderer uses the browser's device pixel ratio with a maximum of `2`. This p
 
 ## Environment
 
-The Stage environment uses a finite 24-meter ground plane, a subtle 20-meter reference grid, and neutral internal illumination. These are visualization infrastructure only. They are not editable `LightDocument` records and never enter the project document.
+The Stage environment uses a finite 24-meter ground plane, a subtle 20-meter reference grid, and neutral internal illumination. This baseline illumination is visualization infrastructure only. User-authored Sun records are separate serializable light entities and are added on top of the baseline when present.
 
 ## Failure and disposal
 
@@ -259,3 +278,202 @@ undo is intentionally separate from Scene editing undo. Scene duplication
 deep-copies and remaps entity, Frame Guide, Track, Keyframe, and active Camera
 IDs. `.ndscene` import adds a Scene to the current Project; individual Scene
 export remains available and does not clear Project dirty state.
+
+## V2.10 Scenic runtime
+
+Scenic Props are procedural proxy assemblies created from inexpensive Three.js
+primitives. The same visual definitions feed Blocking View, Camera View, and
+video export, while only Blocking View registers selectable editor helpers.
+Walls and Door/Window Openings are registered through the existing
+`StageEngine.addEntity` boundary with their own serializable records; no
+boolean wall operation or external model loading is introduced. Door panels
+use a hinge-side child pivot and read their swing from the evaluated
+`openAngle` property.
+
+Sun records create a directional light from azimuth/elevation, intensity, and
+color. The Blocking View helper sits on a fixed editor sky radius and is
+selectable; its drag is converted back into Direction/Height at the application
+transform boundary, while the serializable Sun record remains authoritative.
+The helper is omitted from Camera View and export. Runtime resources are owned
+by the scenic visual adapter and disposed when the entity is removed or its
+active runtime is destroyed.
+
+## V2.10A appearance and scenic interaction
+
+Actors, Props, Walls, Doors, Windows, and editor Camera proxies have
+independent serializable colors. Procedural runtime materials are owned per
+entity, so changing one object does not tint another. Camera proxy color is
+editor metadata only and cannot alter lens projection, Camera View, or export.
+
+The Add menu uses one lightweight inline SVG icon vocabulary for Scenes,
+Actors, Cameras, Props, Architecture, and Sun. Delete/Backspace and Cmd/Ctrl+D
+route through the existing document/history actions and are ignored while a
+text, select, or numeric field is focused. The procedural Car, Bicycle, and
+Motorbike assemblies are shared by Blocking View, Camera View, and export.
+
+## V2.10B vehicles and Scale
+
+Vehicle proxies are procedural, low-cost scenic assemblies shared by Blocking
+View, Camera View, and export. Their convention is +Y up, -Z forward, length
+on Z, width on X, and wheel axles on X. Bicycle uses two wheels, hubs, an
+open triangulated frame, fork, saddle, and handlebar. Motorbike uses two
+wheels, fork, frame, engine, tank, seat, tail, cowl, and handlebar. Car keeps
+a compact body/cabin proxy with four correctly oriented wheels. Roots remain
+at Y=0 and wheel geometry is offset so tires meet the Stage floor.
+
+Primitive Props expose a Scale triplet in the document model and details
+panel. Missing scale in older files resolves to [1, 1, 1]. Camera View and
+export consume the same scaled scenic runtime. Scale is intentionally not a
+timeline property. The StageEngine Scale mode is isolated from Move/Rotate:
+screen-projected axis handles calculate a multiplicative factor from the
+drag-start scale, while the center handle or Shift uses that same factor on
+all three components. Values clamp from 0.05 to 100. A pointer gesture calls
+the existing transform-start/transform-end boundary once, so one drag creates
+one history entry. Scale handles are only registered for primitive Props;
+Actors, Cameras, Sun, Walls, Openings, and scenic furniture remain
+unsupported.
+
+## V2.10C wall drawing and attached openings
+
+The Car visual is a lightweight three-part silhouette: lower body, upper
+cabin, and four dark wheels. Bicycle remains frozen from V2.10B and Motorbike
+is unchanged. No external scenic assets or boolean operations are used.
+
+Blocking View creates walls through `WallDrawingController`, which adds a
+non-selectable translucent preview overlay and asks StageEngine only for a
+ground-plane point. A segment is committed on the second left click; chained
+segments start at the previous endpoint. Right-drag remains available for
+StageEngine pan, and Escape/Enter cancels the temporary placement mode. Grid
+and angle snapping are placement conveniences only.
+
+`wallMath.ts` stores no runtime state. It derives wall endpoints from the
+wall's center, length, and Y rotation, then provides projection, tangent,
+normal, clamped opening offsets, and nearest-wall candidates. An attached
+OpeningDocument stores `wallId` and `offsetAlongWallMeters`; its world
+position is reconstructed with a small face offset and its rotation follows
+the wall while preserving sill height and hinge metadata. Moving, rotating,
+or resizing a wall recomputes attached openings. Moving an opening outside
+the snap threshold clears the relation. This is a serializable relationship,
+not a mesh cut.
+
+The StageEngine additions are limited to overlay registration, ground-point
+sampling, snap-highlight forwarding, transform-preview notification, and a
+public render invalidation seam for the drawing overlay. Existing Move,
+Rotate, Scale, orbit, pan, and trackpad algorithms are not rewritten.
+
+## V2.10D through-wall apertures
+
+Wall openings are generated procedurally from semantic documents. The pure
+`wallApertures.ts` layer maps each attached Opening into Wall-local coordinates:
+U runs from the Wall start endpoint to its end, V runs from the ground to the
+Wall height, and W is the authored Wall thickness. A Door occupies V=0 through
+its clamped height; a Window occupies its clamped sill-to-top range. Horizontal
+boundaries are partitioned, overlapping vertical ranges are unioned, and the
+remaining solid rectangles are extruded through the full W dimension.
+
+The renderer creates those rectangles as lightweight Wall section boxes. No
+CSG, boolean library, aperture records, or geometry payloads are persisted.
+Every section carries the parent Wall `entityId`, so picking a visible section
+selects the Wall and provides one transform. Door frames/leaves and Window
+frames/glass remain separate Opening visuals; changing a Door's swing rotates
+only its leaf. Geometry signatures rebuild only Walls whose construction or
+attached-opening aperture data changed. The same derived sections are used by
+Blocking View, Camera View, still capture, and video export, and resources are
+disposed when a rebuilt or removed runtime is replaced.
+
+## V2.10C3 Camera View overlay layout
+
+The Camera View DOM overlay has three independent zones. Camera Status stays
+at the viewport top-left in a compact dark translucent badge; Delivery and
+Frame Guide labels are positioned against their own computed rectangles; and
+still-capture controls remain top-right with pointer events enabled. Labels
+are informational and do not intercept the stage. A bounded layout helper
+tries opposite-edge and vertical-stack placements when labels collide or
+intersect the Camera Status area. The helper is driven by the Camera View
+container width, not the browser viewport.
+
+The small Blocking View Camera Preview uses the same separation with a shorter
+`Camera · focal length` status line. Delivery and guide lines remain visible;
+guide text is omitted at compact monitor widths. These are DOM monitor
+overlays only. The existing still renderer continues to output clean frames
+unless its deliberate Include Guides option is enabled.
+
+## Camera still capture and Blocking View monitor
+
+`CameraViewRuntime` remains the authoritative production scene adapter for
+Camera View. It now supports a PNG still path that renders the current
+evaluated production Camera into an offscreen canvas, crops with the shared
+Delivery dimension/crop helpers, and optionally paints the Delivery Frame and
+enabled Frame Guides. Resolution choices are 1280, 1920, and 2560 pixels wide;
+height is derived from the active Delivery Frame. The current active Camera
+and Timeline frame determine the capture, and the action creates no document
+history or dirty-state change.
+
+Blocking View's Camera Preview uses the same CameraViewRuntime scene and
+production camera with a lightweight secondary canvas renderer. Its monitor
+is a bottom-right UI overlay with the active Delivery aspect, enabled guide
+overlays, and a compact Camera/focal-length label. It is not registered with
+StageEngine and cannot affect picking. During StageEngine transform previews,
+CameraViewRuntime applies transient Actor, Prop, Wall, Opening, Sun, and
+Camera updates so Camera Move/Rotate and blocking changes are visible live;
+the next evaluated document sync remains authoritative. Preview visibility is
+session-only and is intentionally absent from SceneDocument serialization.
+
+## V2.10C4 compact Camera Preview overlay
+
+The small Blocking View Camera Preview reserves a simple top strip: the active
+Camera name and focal length sit in a pointer-transparent dark badge at the
+top-left, while the close control has its own top-right circular hit area.
+Only that camera badge is textual preview metadata. Delivery and Frame Guide
+labels are omitted at every compact-preview width; their mathematically
+derived borders remain visible. Full Camera View retains its richer Camera
+status, Delivery, and Frame Guide overlay behavior. Monitor UI remains
+excluded from still and video output.
+
+## V2.10C5 single Camera View info box
+
+Full Camera View has one authoritative Camera metadata box at the top-left.
+It contains only the focal length/model line and the capture-mode line, such
+as `35mm · ALEXA 35 Xtreme` and `Open Gate 4.6K`. The general Stage header is
+not mounted in Camera View, so it cannot introduce a second active-Camera name
+behind the box. Delivery and Frame Guide labels remain owned by their existing
+frame overlays, and the compact Blocking View Camera Preview is unchanged.
+
+## V2.UI2 Deep Blue visual system
+
+V2 UI polish uses a centralized deep-blue semantic palette in
+`v2/src/styles/tokens.css`. Primary actions, selected rows, View and tool
+states, focus rings, Camera badges, timeline playhead/keyframes/range, and
+technical FOV helpers use the same blue family. Surfaces and Soft UI shadows
+remain light, cool-neutral, and layout dimensions are unchanged. Delivery and
+custom Frame Guide colors remain composition data, while red danger, green
+success, amber Sun/selection cues, and transform-axis colors retain their
+semantic meaning. Actor, Prop, Wall, Opening, and other creative entity colors
+are still read from Scene documents and are not overwritten by the UI theme.
+
+The FOV helper remains derived from the existing camera projection and only
+changes its technical blue presentation. Camera View keeps its neutral dark
+monitor; its Capture Frame action uses the deep-blue control treatment while
+warm Delivery overlays remain distinct. No StageEngine, camera math, timeline
+evaluation, export, persistence, or interaction code is involved in this
+visual system pass.
+
+## V2.UI2A Header and Project workspace cleanup
+
+The compact Header is the sole Project rename surface. The brand reads
+`[ND] Blocking & Previs`; the Project name is an inline field with Enter and
+blur commit, Escape cancel, empty-name protection, truncation for long names,
+and the existing dirty-state callback. New, Load, and Save remain secondary
+actions with deep-blue hover, pressed, and focus states, while Export remains
+the primary action. The left Workspace panel no longer duplicates the Project
+name card and begins with Scenes. ProjectDocument, persistence, scene switching,
+file confirmation, and global text-input shortcut guards are unchanged.
+
+## V2.UI2B Dynamic Project name width
+
+The Header Project context is content-sized for ordinary names, so short names
+stay close to the `/ Scene` context. The editable name uses a character-sized
+input with a responsive maximum; long names remain ellipsized and cannot push
+the file, View, or Export actions out of the Header. Flexible space remains
+between the Project context and right-side actions. Rename commit, dirty state,
+and persistence behavior are unchanged.

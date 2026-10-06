@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { PropDocument } from '../core/sceneDocument'
 import { classifyWheelInput } from '../runtime/inputNormalization'
 import { stageMovedBeyondThreshold, stageNdcFromEvent, stagePointerDeltaAlongAxis, stageProjectWorldAxisToScreen, stageToolForKey, stageWorldUnitsPerPixelAlongAxis, stageZoomDistance, type StageCanvasRect, type StagePointerMode, type StageTool } from './stageEngineMath'
+import { scaleFromPointer, type ScaleAxis } from './stageEngineScaleMath'
 
 const MAX_PIXEL_RATIO = 2
 const SELECTION_COLOR = '#f0a032'
@@ -10,7 +11,7 @@ const GIZMO_AXIS_COLORS = { x: 0xe5484d, y: 0x62d16e, z: 0x4d8ff0 } as const
 
 type AxisName = keyof typeof GIZMO_AXIS_COLORS
 
-export type StageEntityType = 'Prop' | 'Actor' | 'Camera'
+export type StageEntityType = 'Prop' | 'Actor' | 'Camera' | 'Wall' | 'Opening' | 'Sun'
 
 export type StageEntity = {
   id: string
@@ -20,20 +21,24 @@ export type StageEntity = {
   mesh?: THREE.Mesh
   material?: THREE.MeshStandardMaterial
   setSelected?: (selected: boolean) => void
+  setSnapPreview?: (active: boolean) => void
   dispose?: () => void
+  transformable?: boolean
+  scalable?: boolean
 }
 
-export type StagePropDefinition = Pick<PropDocument, 'id' | 'name' | 'shape' | 'position' | 'rotation' | 'primaryColor'>
+export type StagePropDefinition = Pick<PropDocument, 'id' | 'name' | 'shape' | 'position' | 'rotation' | 'primaryColor' | 'scale'>
 
 export type StageTransform = {
   entityId: string
   position: [number, number, number]
   rotation: [number, number, number]
+  scale?: [number, number, number]
 }
 
 type StageGizmoHandle = {
-  mode: 'move' | 'rotate'
-  kind: 'axis' | 'plane'
+  mode: 'move' | 'rotate' | 'scale'
+  kind: 'axis' | 'plane' | 'uniform'
   axis: AxisName | null
   visible: THREE.Mesh[]
 }
@@ -48,6 +53,15 @@ export type StageAxisDragDebug = {
   worldUnitsPerPixel: number
   worldDistance: number
   resultPosition: [number, number, number]
+}
+
+export type StageScaleDragDebug = {
+  handle: string
+  startScale: [number, number, number]
+  shiftConstrained: boolean
+  pixelsAlongAxis: number
+  factor: number
+  resultScale: [number, number, number]
 }
 
 type StageDrag = {
@@ -67,6 +81,7 @@ type StageDrag = {
   plane: THREE.Plane | null
   startPoint: THREE.Vector3 | null
   startPosition: THREE.Vector3 | null
+  startScale: THREE.Vector3 | null
   startQuaternion: THREE.Quaternion | null
   startAngle: number | null
   verticalMove: boolean
@@ -82,12 +97,14 @@ export type StageEngineDebugSnapshot = {
   rayHits: string
   selectedId: string
   axisDrag: StageAxisDragDebug | null
+  scaleDrag?: StageScaleDragDebug | null
 }
 
 export type StageEngineOptions = {
   onToolChanged?: (tool: StageTool) => void
   onTransformStart?: (change: StageTransform) => void
   onTransformEnd?: (change: StageTransform) => void
+  onTransformPreview?: (change: StageTransform) => void
   onDebug?: (snapshot: StageEngineDebugSnapshot) => void
   debugEnabled?: boolean
 }
@@ -109,6 +126,7 @@ export class StageEngine {
   private readonly gizmoRoot = new THREE.Group()
   private readonly gizmoMove = new THREE.Group()
   private readonly gizmoRotate = new THREE.Group()
+  private readonly gizmoScaleHandles = new THREE.Group()
   private readonly gizmoHandles: Array<{ pick: THREE.Mesh; handle: StageGizmoHandle }> = []
   private readonly orbit = { radius: 15, theta: 0.62, phi: 1.13 }
   private readonly options: StageEngineOptions
@@ -125,6 +143,7 @@ export class StageEngine {
   private lastNdc = '—'
   private lastRayHits = '—'
   private lastAxisDragDebug: StageAxisDragDebug | null = null
+  private lastScaleDragDebug: StageScaleDragDebug | null = null
 
   constructor(container: HTMLElement, options: StageEngineOptions = {}) {
     this.container = container
@@ -168,7 +187,7 @@ export class StageEngine {
     this.requestRender()
   }
 
-  addEntity(entity: { id: string; type: StageEntityType; root: THREE.Group; name?: string; setSelected?: (selected: boolean) => void; dispose?: () => void }): void {
+  addEntity(entity: { id: string; type: StageEntityType; root: THREE.Group; name?: string; setSelected?: (selected: boolean) => void; setSnapPreview?: (active: boolean) => void; dispose?: () => void; transformable?: boolean; scalable?: boolean }): void {
     this.removeEntity(entity.id)
     const registered: StageEntity = { ...entity, name: entity.name ?? entity.id }
     registered.root.userData.entityId = registered.id
@@ -194,11 +213,33 @@ export class StageEngine {
     this.select(entityId)
   }
 
-  setEntityTransform(entityId: string, transform: Pick<StageTransform, 'position' | 'rotation'>): void {
+  setSnapPreview(entityId: string | null): void {
+    this.entities.forEach((entity) => entity.setSnapPreview?.(entity.id === entityId))
+    this.requestRender()
+  }
+
+  addOverlay(root: THREE.Object3D): void {
+    this.scene.add(root)
+    this.requestRender()
+  }
+
+  removeOverlay(root: THREE.Object3D): void {
+    root.removeFromParent()
+    this.requestRender()
+  }
+
+  groundPointFromClient(clientX: number, clientY: number): [number, number, number] | null {
+    const ray = this.pointerRay({ clientX, clientY })
+    const point = ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), new THREE.Vector3())
+    return point ? [point.x, 0, point.z] : null
+  }
+
+  setEntityTransform(entityId: string, transform: Pick<StageTransform, 'position' | 'rotation' | 'scale'>): void {
     const entity = this.entities.get(entityId)
     if (!entity) return
     entity.root.position.set(...transform.position)
     entity.root.rotation.set(...transform.rotation)
+    if (transform.scale) entity.root.scale.set(...transform.scale)
     if (entity.type === 'Actor') entity.root.position.y = 0
     this.updateGizmo()
     this.requestRender()
@@ -214,6 +255,7 @@ export class StageEngine {
       if (entity?.type === 'Prop') {
         entity.root.position.set(...definition.position)
         entity.root.rotation.set(...definition.rotation)
+        if (definition.scale) entity.root.scale.set(...definition.scale)
         return
       }
       this.createProp(definition)
@@ -300,6 +342,7 @@ export class StageEngine {
       plane: null,
       startPoint: null,
       startPosition: null,
+      startScale: null,
       startQuaternion: null,
       startAngle: null,
       verticalMove: event.shiftKey,
@@ -313,12 +356,12 @@ export class StageEngine {
       this.pointerMode = 'pan'
     } else {
       const gizmoHandle = event.button === 0 ? this.pickGizmo(event) : null
-      if (gizmoHandle && this.selectedEntity && this.tool !== 'select') {
+      if (gizmoHandle && this.selectedEntity && this.selectedEntity.transformable !== false && this.tool !== 'select' && (this.tool !== 'scale' || this.selectedEntity.scalable === true)) {
         this.drag = this.beginGizmoDrag(event, base, gizmoHandle)
         this.pointerMode = 'gizmo'
       } else {
         const hit = event.button === 0 ? this.pick(event) : null
-        if (hit && this.tool === 'move') {
+        if (hit && this.tool === 'move' && hit.transformable !== false) {
           this.select(hit.id)
           this.drag = this.beginDirectMove(event, base, hit)
           this.pointerMode = 'move'
@@ -358,6 +401,7 @@ export class StageEngine {
     } else {
       this.applyGizmoDrag(event, drag)
     }
+    if (drag.transformStarted && drag.entity) this.options.onTransformPreview?.(this.transformSnapshot(drag.entity))
     event.preventDefault()
     this.emitDebug()
     this.requestRender()
@@ -421,7 +465,7 @@ export class StageEngine {
 
   private isTypingTarget(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) return false
-    return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable
+    return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable
   }
 
   private releasePointer(pointerId: number): void {
@@ -470,6 +514,7 @@ export class StageEngine {
       entityId: entity.id,
       position: [entity.root.position.x, entity.root.position.y, entity.root.position.z],
       rotation: [entity.root.rotation.x, entity.root.rotation.y, entity.root.rotation.z],
+      scale: [entity.root.scale.x, entity.root.scale.y, entity.root.scale.z],
     }
   }
 
@@ -484,7 +529,7 @@ export class StageEngine {
     return ndc
   }
 
-  private pointerRay(event: PointerEvent, synchronizeScene = true): THREE.Raycaster {
+  private pointerRay(event: StagePointerPointLike, synchronizeScene = true): THREE.Raycaster {
     if (synchronizeScene) {
       this.scene.updateMatrixWorld(true)
       this.editorCamera.updateMatrixWorld(true)
@@ -526,7 +571,7 @@ export class StageEngine {
     const axis = handle.axis ? new THREE.Vector3(handle.axis === 'x' ? 1 : 0, handle.axis === 'y' ? 1 : 0, handle.axis === 'z' ? 1 : 0) : null
     const plane = handle.kind === 'plane' ? new THREE.Plane(new THREE.Vector3(0, 1, 0), -origin.y) : null
     const startPoint = plane ? this.pointerRay(event).ray.intersectPlane(plane, new THREE.Vector3()) : null
-    const screenAxis = handle.mode === 'move' && handle.kind === 'axis' && axis ? stageProjectWorldAxisToScreen(this.editorCamera, origin, axis, this.getCanvasRect()) : null
+    const screenAxis = (handle.mode === 'move' || handle.mode === 'scale') && handle.kind === 'axis' && axis ? stageProjectWorldAxisToScreen(this.editorCamera, origin, axis, this.getCanvasRect()) : null
     const worldUnitsPerPixel = handle.mode === 'move' && handle.kind === 'axis' && axis ? stageWorldUnitsPerPixelAlongAxis(this.editorCamera, origin, axis, this.getCanvasRect()) : null
     this.lastAxisDragDebug = handle.mode === 'move' && handle.kind === 'axis' ? {
       handle: handle.axis ?? 'axis',
@@ -549,6 +594,7 @@ export class StageEngine {
       plane,
       startPoint,
       startPosition: entity.root.position.clone(),
+      startScale: entity.root.scale.clone(),
       startQuaternion: entity.root.quaternion.clone(),
       startAngle: handle.mode === 'rotate' && axis ? this.ringAngle(event, origin, axis) : null,
       gizmoScale: this.gizmoScale(entity.root.position),
@@ -571,7 +617,25 @@ export class StageEngine {
 
   private applyGizmoDrag(event: PointerEvent, drag: StageDrag): void {
     if (!drag.entity || !drag.handle || !drag.origin) return
-    if (drag.handle.mode === 'rotate') {
+    if (drag.handle.mode === 'scale') {
+      if (!drag.startScale) return
+      const axis = drag.handle.axis ?? 'uniform'
+      const axisVector = drag.axis
+      const screenAxis = drag.screenAxis ?? new THREE.Vector2(0, -1)
+      const pixelsAlongAxis = axisVector && drag.handle.kind === 'axis'
+        ? stagePointerDeltaAlongAxis(drag.startX, drag.startY, event.clientX, event.clientY, screenAxis)
+        : -(event.clientY - drag.startY)
+      const result = scaleFromPointer([drag.startScale.x, drag.startScale.y, drag.startScale.z], axis as ScaleAxis, pixelsAlongAxis, drag.handle.kind === 'uniform' || drag.verticalMove)
+      drag.entity.root.scale.set(...result.scale)
+      this.lastScaleDragDebug = {
+        handle: axis,
+        startScale: [drag.startScale.x, drag.startScale.y, drag.startScale.z],
+        shiftConstrained: drag.handle.kind === 'uniform' || drag.verticalMove,
+        pixelsAlongAxis,
+        factor: result.factor,
+        resultScale: result.scale,
+      }
+    } else if (drag.handle.mode === 'rotate') {
       if (!drag.axis || !drag.startQuaternion || drag.startAngle === null) return
       const angle = this.ringAngle(event, drag.origin, drag.axis)
       if (angle === null) return
@@ -668,16 +732,17 @@ export class StageEngine {
       this.gizmoRoot.visible = visible
       this.gizmoMove.visible = visible && this.tool === 'move'
       this.gizmoRotate.visible = visible && this.tool === 'rotate'
+      this.gizmoScaleHandles.visible = visible && this.tool === 'scale' && entity?.scalable === true
       this.gizmoHandles.forEach(({ pick, handle }) => {
         const actorYMove = entity?.type === 'Actor' && this.tool === 'move' && handle.axis === 'y'
         const actorZRotate = entity?.type === 'Actor' && this.tool === 'rotate' && handle.axis === 'z'
-        const axisVisible = !(handle.mode === 'move' && handle.kind === 'axis' && handle.axis) || !!stageProjectWorldAxisToScreen(
+        const axisVisible = !((handle.mode === 'move' || handle.mode === 'scale') && handle.kind === 'axis' && handle.axis) || !!stageProjectWorldAxisToScreen(
           this.editorCamera,
           entity?.root.position ?? new THREE.Vector3(),
           new THREE.Vector3(handle.axis === 'x' ? 1 : 0, handle.axis === 'y' ? 1 : 0, handle.axis === 'z' ? 1 : 0),
           this.getCanvasRect(),
         )
-        const handleVisible = !actorYMove && !actorZRotate && axisVisible
+        const handleVisible = !actorYMove && !actorZRotate && axisVisible && (handle.mode !== 'scale' || (this.tool === 'scale' && entity?.scalable === true))
         pick.visible = handleVisible
         handle.visible.forEach((mesh) => { mesh.visible = handleVisible })
       })
@@ -709,10 +774,11 @@ export class StageEngine {
       rayHits: this.lastRayHits,
       selectedId: this.selectedId ?? 'NONE',
       axisDrag: this.lastAxisDragDebug ? { ...this.lastAxisDragDebug, resultPosition: [...this.lastAxisDragDebug.resultPosition] } : null,
+      scaleDrag: this.lastScaleDragDebug ? { ...this.lastScaleDragDebug, startScale: [...this.lastScaleDragDebug.startScale], resultScale: [...this.lastScaleDragDebug.resultScale] } : null,
     })
   }
 
-  private requestRender(): void {
+  requestRender(): void {
     if (this.disposed || this.frameRequest !== null) return
     this.frameRequest = window.requestAnimationFrame(() => {
       this.frameRequest = null
@@ -770,6 +836,7 @@ export class StageEngine {
       root,
       mesh,
       material,
+      scalable: true,
       dispose: () => {
         geometry.dispose()
         material.dispose()
@@ -782,7 +849,7 @@ export class StageEngine {
     this.gizmoRoot.name = 'StageEngineGizmo'
     this.gizmoRoot.visible = false
     this.gizmoRoot.renderOrder = 999
-    this.gizmoRoot.add(this.gizmoMove, this.gizmoRotate)
+    this.gizmoRoot.add(this.gizmoMove, this.gizmoRotate, this.gizmoScaleHandles)
     this.scene.add(this.gizmoRoot)
 
     const up = new THREE.Vector3(0, 1, 0)
@@ -817,6 +884,22 @@ export class StageEngine {
     planePick.rotation.x = -Math.PI / 2
     planePick.position.copy(plane.position)
     this.addGizmoHandle(this.gizmoMove, { mode: 'move', kind: 'plane', axis: null, visible: [plane] }, planePick)
+
+    ;(['x', 'y', 'z'] as const).forEach((axis) => {
+      const direction = new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0)
+      const color = GIZMO_AXIS_COLORS[axis]
+      const size = 0.72
+      const thickness = 0.09
+      const dimensions: [number, number, number] = axis === 'x' ? [size, thickness, thickness] : axis === 'y' ? [thickness, size, thickness] : [thickness, thickness, size]
+      const visible = this.gizmoMesh(new THREE.BoxGeometry(...dimensions), color)
+      visible.position.copy(direction).multiplyScalar(size / 2)
+      const pick = this.gizmoMesh(new THREE.BoxGeometry(...dimensions.map((value, index) => index === (axis === 'x' ? 0 : axis === 'y' ? 1 : 2) ? value + 0.22 : value + 0.18) as [number, number, number]), color, true)
+      pick.position.copy(visible.position)
+      this.addGizmoHandle(this.gizmoScaleHandles, { mode: 'scale', kind: 'axis', axis, visible: [visible] }, pick)
+    })
+    const uniform = this.gizmoMesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), 0xf0a032)
+    const uniformPick = this.gizmoMesh(new THREE.BoxGeometry(0.36, 0.36, 0.36), 0xf0a032, true)
+    this.addGizmoHandle(this.gizmoScaleHandles, { mode: 'scale', kind: 'uniform', axis: null, visible: [uniform] }, uniformPick)
   }
 
   private gizmoMesh(geometry: THREE.BufferGeometry, color: number, pick = false, opacity = 1): THREE.Mesh {

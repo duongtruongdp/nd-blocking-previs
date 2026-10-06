@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createEditorClipboard, pasteEditorClipboard } from '../core/editorClipboard'
-import { createActorDocument, createEmptySceneDocument } from '../core/sceneDocument'
+import { createActorDocument, createEmptySceneDocument, createOpeningDocument } from '../core/sceneDocument'
 import { createDefaultProps } from '../scene/testEntities'
 
 describe('V2 editor clipboard', () => {
@@ -35,5 +35,23 @@ describe('V2 editor clipboard', () => {
     expect(result.entity.name).toBe('Cube 02')
     expect(result.entity.position).toEqual([prop.position[0] + 0.5, prop.position[1], prop.position[2] + 0.5])
     expect(result.entity).toMatchObject({ shape: prop.shape, primaryColor: prop.primaryColor })
+  })
+
+  it('pastes a Window with hinge and open-angle state preserved', () => {
+    const window = createOpeningDocument('window-01', 'Window 01', 'window', [1, 1.1, -2])
+    window.hingeSide = 'right'
+    window.openAngle = 52
+    window.wallId = 'wall-01'
+    window.offsetAlongWallMeters = 2.4
+    const document = { ...createEmptySceneDocument(), openings: [window] }
+    const clipboard = createEditorClipboard(window)
+    const result = pasteEditorClipboard(document, clipboard)
+
+    expect(clipboard.entityType).toBe('Opening')
+    expect(result.entity.id).toBe('opening-01')
+    expect(result.entity.name).toBe('Window 02')
+    expect(result.entity.position).toEqual([1.5, 1.1, -1.5])
+    expect(result.entity).toMatchObject({ hingeSide: 'right', openAngle: 52, wallId: 'wall-01', offsetAlongWallMeters: 2.4 })
+    expect(result.entity).not.toBe(window)
   })
 })

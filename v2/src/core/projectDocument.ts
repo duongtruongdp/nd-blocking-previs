@@ -32,7 +32,7 @@ export function createProjectDocument(id: string, name: string, scene: SceneDocu
 
 export function cloneSceneWithIdentity(scene: SceneDocument, sceneId: string, sceneName: string, suffix: string): SceneDocument {
   const copied = clone(scene)
-  const entityIds = [...copied.actors, ...copied.props, ...copied.cameras].map((entity) => entity.id)
+  const entityIds = [...copied.actors, ...copied.props, ...copied.walls, ...copied.openings, ...copied.lights, ...copied.cameras].map((entity) => entity.id)
   const entityIdMap = new Map(entityIds.map((id) => [id, remapId(id, suffix)]))
   const guideIds = copied.cameras.flatMap((camera) => camera.frameGuides.map((guide) => guide.id))
   const guideIdMap = new Map(guideIds.map((id) => [id, remapId(id, suffix)]))
@@ -47,6 +47,9 @@ export function cloneSceneWithIdentity(scene: SceneDocument, sceneId: string, sc
     metadata: { ...copied.metadata, id: sceneId, name: sceneName },
     actors: copied.actors.map((actor) => ({ ...actor, id: remapEntityId(actor.id) })),
     props: copied.props.map((prop) => ({ ...prop, id: remapEntityId(prop.id) })),
+    walls: copied.walls.map((wall) => ({ ...wall, id: remapEntityId(wall.id) })),
+    openings: copied.openings.map((opening) => ({ ...opening, id: remapEntityId(opening.id), wallId: opening.wallId ? remapEntityId(opening.wallId) : null })),
+    lights: copied.lights.map((light) => ({ ...light, id: remapEntityId(light.id) })),
     cameras: copied.cameras.map((camera) => ({
       ...camera,
       id: remapEntityId(camera.id),

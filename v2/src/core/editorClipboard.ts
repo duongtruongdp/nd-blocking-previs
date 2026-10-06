@@ -1,7 +1,7 @@
-import type { ActorDocument, PropDocument, SceneDocument } from './sceneDocument'
+import type { ActorDocument, OpeningDocument, PropDocument, SceneDocument } from './sceneDocument'
 
-export type ClipboardEntity = ActorDocument | PropDocument
-export type ClipboardEntityType = 'Actor' | 'Prop'
+export type ClipboardEntity = ActorDocument | PropDocument | OpeningDocument
+export type ClipboardEntityType = 'Actor' | 'Prop' | 'Opening'
 
 export type EditorClipboard = {
   entityType: ClipboardEntityType
@@ -14,14 +14,14 @@ function clone<T>(value: T): T {
 
 export function createEditorClipboard(entity: ClipboardEntity): EditorClipboard {
   return {
-    entityType: 'type' in entity ? 'Prop' : 'Actor',
+    entityType: 'type' in entity ? entity.type : 'Actor',
     entity: clone(entity),
   }
 }
 
 function nextEntityId(document: SceneDocument, entityType: ClipboardEntityType): string {
-  const prefix = entityType === 'Actor' ? 'actor' : 'prop'
-  const used = new Set([...document.actors, ...document.props].map((entity) => entity.id))
+  const prefix = entityType === 'Actor' ? 'actor' : entityType === 'Prop' ? 'prop' : 'opening'
+  const used = new Set([...document.actors, ...document.props, ...document.openings].map((entity) => entity.id))
   let index = 1
   let id = `${prefix}-${String(index).padStart(2, '0')}`
   while (used.has(id)) {
@@ -32,7 +32,7 @@ function nextEntityId(document: SceneDocument, entityType: ClipboardEntityType):
 }
 
 function nextEntityName(document: SceneDocument, entity: ClipboardEntity): string {
-  const names = new Set([...document.actors, ...document.props].map((item) => item.name))
+  const names = new Set([...document.actors, ...document.props, ...document.openings].map((item) => item.name))
   const match = /^(.*?)(?:\s+(\d+))?$/.exec(entity.name)
   const base = match?.[1]?.trim() || entity.name
   const sourceNumber = match?.[2] ? Number(match[2]) : 1
@@ -58,6 +58,7 @@ export function pasteEditorClipboard(document: SceneDocument, clipboard: EditorC
     metadata: { ...document.metadata, updatedAt: new Date().toISOString() },
     actors: clipboard.entityType === 'Actor' ? [...document.actors, entity as ActorDocument] : document.actors,
     props: clipboard.entityType === 'Prop' ? [...document.props, entity as PropDocument] : document.props,
+    openings: clipboard.entityType === 'Opening' ? [...document.openings, entity as OpeningDocument] : document.openings,
   }
   return { document: nextDocument, entity }
 }

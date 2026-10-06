@@ -26,6 +26,11 @@ const propertyLabels: Record<TimelineProperty, string> = {
   heading: 'Heading',
   rotation: 'Rotation',
   focalLengthMm: 'Focal Length',
+  openAngle: 'Open Angle',
+  azimuth: 'Direction',
+  elevation: 'Height',
+  intensity: 'Intensity',
+  color: 'Color',
 }
 
 function frameFromPointer(clientX: number, element: HTMLDivElement, timeline: TimelineDocument): number {

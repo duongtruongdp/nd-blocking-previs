@@ -1,4 +1,4 @@
-export type EditorShortcut = 'copy' | 'paste' | 'undo' | 'redo'
+export type EditorShortcut = 'copy' | 'paste' | 'undo' | 'redo' | 'duplicate'
 
 export type EditorShortcutInput = {
   key: string
@@ -12,8 +12,13 @@ export function editorShortcutForKey(input: EditorShortcutInput): EditorShortcut
   const key = input.key.toLowerCase()
   if (key === 'c' && !input.shiftKey) return 'copy'
   if (key === 'v' && !input.shiftKey) return 'paste'
+  if (key === 'd' && !input.shiftKey) return 'duplicate'
   if (key === 'z') return input.shiftKey ? 'redo' : 'undo'
   return null
+}
+
+export function deleteShortcutForKey(key: string, isTextEditing: boolean): boolean {
+  return !isTextEditing && (key === 'Delete' || key === 'Backspace')
 }
 
 export function timelinePlayPauseShortcut(key: string, isTextEditing: boolean): boolean {

@@ -6,7 +6,7 @@ import { V2Timeline } from './components/V2Timeline'
 import { V2TopBar } from './components/V2TopBar'
 import { webPlatformAdapter } from './platform/platformAdapter'
 import { createDefaultProps } from './scene/testEntities'
-import { applySceneEntityTransform, createActorDocument, createCameraDocument, createEmptySceneDocument, type ActorDocument, type CameraDocument, type RationalFrameRate, type SceneDocument, type TimelineProperty } from './core/sceneDocument'
+import { applySceneEntityTransform, createActorDocument, createCameraDocument, createEmptySceneDocument, createOpeningDocument, createPropDocument, createSunDocument, createWallDocument, type ActorDocument, type ActorVector3, type CameraDocument, type OpeningDocument, type PropDocument, type RationalFrameRate, type SceneDocument, type ScenicPropType, type SunDocument, type TimelineProperty, type WallDocument } from './core/sceneDocument'
 import type { ProjectDocument, ProjectSceneEntry } from './core/projectDocument'
 import { cloneSceneWithIdentity, createProjectDocument } from './core/projectDocument'
 import { CAMERA_DATABASE } from './core/cameraDatabase'
@@ -14,7 +14,7 @@ import { defaultCameraPlacement } from './core/cameraPlacement'
 import { cameraRotationLookingAt } from './runtime/cameraMath'
 import { createEditorClipboard, pasteEditorClipboard, type EditorClipboard } from './core/editorClipboard'
 import { EditorHistory, type EditorHistorySnapshot } from './core/editorHistory'
-import { editorShortcutForKey, timelineMarkShortcutForKey, timelinePlayPauseShortcut } from './core/editorShortcuts'
+import { deleteShortcutForKey, editorShortcutForKey, timelineMarkShortcutForKey, timelinePlayPauseShortcut } from './core/editorShortcuts'
 import { clampTimelineHeight, TIMELINE_HEIGHT_DEFAULT, timelineHeightBounds } from './core/workspaceLayout'
 import type { StageTool, StageTransform } from './stage-engine'
 import { evaluateTimeline } from './timeline/timelineEvaluator'
@@ -29,6 +29,11 @@ import { parseSceneFile, prepareSceneForSave, sceneFilename, serializeScene, Sce
 import { parseProjectFile, prepareProjectForSave, projectFilename, ProjectFileError, serializeProject } from './core/projectPersistence'
 import { creativeSceneChanged } from './core/sceneDirty'
 import { creativeProjectFingerprint } from './core/projectDirty'
+import * as THREE from 'three'
+import { sunAnglesFromHelperPosition } from './runtime/sunMapping'
+import type { WallDrawingState } from './architecture/wallDrawing'
+import { WALL_SNAP_THRESHOLD, nearestWallForOpening, resolveOpeningAgainstWalls, wallFromEndpoints } from './architecture/wallMath'
+import { cameraStillFilename, type StillCaptureOptions } from './runtime/stillCapture'
 
 function createDefaultV2Scene(id = 'scene-01', name = 'Scene 01', includeDefaultProps = true): SceneDocument {
   const scene = createEmptySceneDocument()
@@ -47,6 +52,11 @@ function nextSceneNumber(entries: readonly ProjectSceneEntry[]): number {
   return Math.max(0, ...entries.map((entry) => Number(/scene-(\d+)/i.exec(entry.id)?.[1] ?? 0))) + 1
 }
 
+function nextEntityIndex(scene: SceneDocument, prefix: string): number {
+  const ids = [...scene.actors, ...scene.props, ...scene.walls, ...scene.openings, ...scene.cameras, ...scene.lights].map((entity) => entity.id)
+  return Math.max(0, ...ids.map((id) => Number(new RegExp(`^${prefix}-(\\d+)$`, 'i').exec(id)?.[1] ?? 0))) + 1
+}
+
 export function V2App() {
   const [view, setView] = useState<'blocking' | 'camera'>('blocking')
   const [projectDocument, setProjectDocument] = useState(createDefaultV2Project)
@@ -62,6 +72,10 @@ export function V2App() {
   const [transformingEntityId, setTransformingEntityId] = useState<string | null>(null)
   const [suspendedTimelineEntityIds, setSuspendedTimelineEntityIds] = useState<ReadonlySet<string>>(new Set())
   const [lastTransformDebug, setLastTransformDebug] = useState<V2TransformDebugState | null>(null)
+  const [wallDrawing, setWallDrawing] = useState(false)
+  const [wallDrawState, setWallDrawState] = useState<WallDrawingState>({ active: false, start: null, end: null, length: 0 })
+  const [snapPreviewWallId, setSnapPreviewWallId] = useState<string | null>(null)
+  const [cameraPreview, setCameraPreview] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [exportStatus, setExportStatus] = useState<VideoExportStatus>('idle')
   const [exportProgress, setExportProgress] = useState<VideoExportProgress | null>(null)
@@ -88,12 +102,21 @@ export function V2App() {
   const selectedActorBase = sceneDocument.actors.find((actor) => actor.id === selectedEntityId) ?? null
   const selectedPropBase = sceneDocument.props.find((prop) => prop.id === selectedEntityId) ?? null
   const selectedCameraBase = sceneDocument.cameras.find((camera) => camera.id === selectedEntityId) ?? null
+  const selectedWallBase = sceneDocument.walls.find((wall) => wall.id === selectedEntityId) ?? null
+  const selectedOpeningBase = sceneDocument.openings.find((opening) => opening.id === selectedEntityId) ?? null
+  const selectedSunBase = sceneDocument.lights.find((sun) => sun.id === selectedEntityId) ?? null
   const selectedActor = selectedActorBase ? (suspendedTimelineEntityIds.has(selectedActorBase.id) ? selectedActorBase : { ...selectedActorBase, ...(evaluatedEntities[selectedActorBase.id] ?? {}) } as ActorDocument) : null
   const selectedProp = selectedPropBase ? (suspendedTimelineEntityIds.has(selectedPropBase.id) ? selectedPropBase : { ...selectedPropBase, ...(evaluatedEntities[selectedPropBase.id] ?? {}) }) : null
   const selectedCamera = selectedCameraBase ? (suspendedTimelineEntityIds.has(selectedCameraBase.id) ? selectedCameraBase : { ...selectedCameraBase, ...(evaluatedEntities[selectedCameraBase.id] ?? {}) } as CameraDocument) : null
+  const selectedWall = selectedWallBase ? (suspendedTimelineEntityIds.has(selectedWallBase.id) ? selectedWallBase : { ...selectedWallBase, ...(evaluatedEntities[selectedWallBase.id] ?? {}) } as WallDocument) : null
+  const selectedOpening = selectedOpeningBase ? (suspendedTimelineEntityIds.has(selectedOpeningBase.id) ? selectedOpeningBase : { ...selectedOpeningBase, ...(evaluatedEntities[selectedOpeningBase.id] ?? {}) } as OpeningDocument) : null
+  const selectedSun = selectedSunBase ? (suspendedTimelineEntityIds.has(selectedSunBase.id) ? selectedSunBase : { ...selectedSunBase, ...(evaluatedEntities[selectedSunBase.id] ?? {}) } as SunDocument) : null
   const timelineEntities = [
     ...sceneDocument.actors.map((entity) => ({ id: entity.id, name: entity.name, entityType: 'Actor' as const })),
     ...sceneDocument.props.map((entity) => ({ id: entity.id, name: entity.name, entityType: 'Prop' as const })),
+    ...sceneDocument.walls.map((entity) => ({ id: entity.id, name: entity.name, entityType: 'Wall' as const })),
+    ...sceneDocument.openings.map((entity) => ({ id: entity.id, name: entity.name, entityType: 'Opening' as const })),
+    ...sceneDocument.lights.map((entity) => ({ id: entity.id, name: entity.name, entityType: 'Sun' as const })),
     ...sceneDocument.cameras.map((entity) => ({ id: entity.id, name: entity.name, entityType: 'Camera' as const })),
   ]
 
@@ -370,6 +393,174 @@ export function V2App() {
     applyEditorSnapshot({ document: after, selectedEntityId: actor.id })
   }
 
+  const addProp = (propType: ScenicPropType) => {
+    const before = sceneDocumentRef.current
+    const index = nextEntityIndex(before, 'prop')
+    const labels: Record<ScenicPropType, string> = { cube: 'Cube', sphere: 'Sphere', cylinder: 'Cylinder', table: 'Table', chair: 'Chair', window: 'Window', door: 'Door', bicycle: 'Bicycle', motorbike: 'Motorbike', car: 'Car' }
+    const colors: Record<ScenicPropType, string> = { cube: '#9b91df', sphere: '#86b7c8', cylinder: '#d5a47f', table: '#9a7658', chair: '#7d8fa5', window: '#7ba2b4', door: '#806a55', bicycle: '#8f9e6d', motorbike: '#a86d61', car: '#71839a' }
+    const groundHeight = propType === 'sphere' ? 0.9 : propType === 'cube' || propType === 'cylinder' ? 1 : 0
+    const prop = createPropDocument(`prop-${String(index).padStart(2, '0')}`, `${labels[propType]} ${String(index).padStart(2, '0')}`, propType, [((index - 1) % 3 - 1) * 2.2, groundHeight, 0.5], colors[propType])
+    const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, props: [...before.props, prop] }
+    recordAction(`Add ${prop.name}`, before, selectedEntityIdRef.current, after, prop.id)
+    applyEditorSnapshot({ document: after, selectedEntityId: prop.id })
+  }
+
+  const addWall = () => {
+    setWallDrawing(true)
+    setWallDrawState({ active: true, start: null, end: null, length: 0 })
+  }
+
+  const commitWallSegment = (start: ActorVector3, end: ActorVector3) => {
+    const geometry = wallFromEndpoints(start, end)
+    if (geometry.length < 0.05) return
+    const before = sceneDocumentRef.current
+    const index = nextEntityIndex(before, 'wall')
+    const wall = createWallDocument(`wall-${String(index).padStart(2, '0')}`, `Wall ${String(index).padStart(2, '0')}`, geometry.center)
+    const placedWall: WallDocument = { ...wall, length: geometry.length, height: geometry.height, thickness: geometry.thickness, rotation: [0, geometry.heading, 0] }
+    const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, walls: [...before.walls, placedWall] }
+    recordAction(`Add ${placedWall.name}`, before, selectedEntityIdRef.current, after, placedWall.id)
+    applyEditorSnapshot({ document: after, selectedEntityId: placedWall.id })
+  }
+
+  const exitWallDrawing = () => {
+    setWallDrawing(false)
+    setWallDrawState({ active: false, start: null, end: null, length: 0 })
+    setSnapPreviewWallId(null)
+  }
+
+  const handleViewChange = (nextView: 'blocking' | 'camera') => {
+    setView(nextView)
+    if (nextView !== 'blocking' && wallDrawing) exitWallDrawing()
+  }
+
+  const handleCaptureFrameReady = (blob: Blob, _options: StillCaptureOptions) => {
+    const current = sceneDocumentRef.current
+    const camera = current.cameras.find((item) => item.id === current.activeCameraId)
+    if (!camera) return
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = cameraStillFilename(projectDocumentRef.current.name, current.metadata.name, camera.name, current.timeline.currentFrame)
+    link.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
+  const addOpening = (openingType: 'door' | 'window') => {
+    const before = sceneDocumentRef.current
+    const index = nextEntityIndex(before, openingType)
+    const name = `${openingType === 'door' ? 'Door' : 'Window'} ${String(index).padStart(2, '0')}`
+    const opening = createOpeningDocument(`${openingType}-${String(index).padStart(2, '0')}`, name, openingType, [openingType === 'door' ? -1 : 1, openingType === 'door' ? 0 : 1.1, -2.86])
+    const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, openings: [...before.openings, opening] }
+    recordAction(`Add ${opening.name}`, before, selectedEntityIdRef.current, after, opening.id)
+    applyEditorSnapshot({ document: after, selectedEntityId: opening.id })
+  }
+
+  const addSun = () => {
+    const before = sceneDocumentRef.current
+    const index = nextEntityIndex(before, 'sun')
+    const sun = createSunDocument(`sun-${String(index).padStart(2, '0')}`, `Sun ${String(index).padStart(2, '0')}`)
+    const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, lights: [...before.lights, sun] }
+    recordAction(`Add ${sun.name}`, before, selectedEntityIdRef.current, after, sun.id)
+    applyEditorSnapshot({ document: after, selectedEntityId: sun.id })
+  }
+
+  const updateWall = (wallId: string, changes: Partial<WallDocument>) => {
+    const before = sceneDocumentRef.current
+    const wall = before.walls.find((item) => item.id === wallId)
+    if (!wall) return
+    const nextWalls = before.walls.map((item) => item.id === wallId ? { ...item, ...changes } : item)
+    const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, walls: nextWalls, openings: before.openings.map((opening) => resolveOpeningAgainstWalls(opening, nextWalls)) }
+    recordAction(`Update ${wall.name}`, before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
+    applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current })
+  }
+
+  const updateActor = (actorId: string, changes: Partial<ActorDocument>) => {
+    const before = sceneDocumentRef.current
+    const actor = before.actors.find((item) => item.id === actorId)
+    if (!actor) return
+    const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, actors: before.actors.map((item) => item.id === actorId ? { ...item, ...changes, appearance: changes.appearance ? { ...item.appearance, ...changes.appearance } : item.appearance } : item) }
+    recordAction(`Update ${actor.name}`, before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
+    applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current })
+  }
+
+  const updateProp = (propId: string, changes: Partial<PropDocument>) => {
+    const before = sceneDocumentRef.current
+    const prop = before.props.find((item) => item.id === propId)
+    if (!prop) return
+    const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, props: before.props.map((item) => item.id === propId ? { ...item, ...changes } : item) }
+    recordAction(`Update ${prop.name}`, before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
+    applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current })
+  }
+
+  const updateOpening = (openingId: string, changes: Partial<OpeningDocument>) => {
+    const before = sceneDocumentRef.current
+    const opening = before.openings.find((item) => item.id === openingId)
+    if (!opening) return
+    const nextOpenings = before.openings.map((item) => item.id === openingId ? { ...item, ...changes } : item)
+    const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, openings: nextOpenings.map((item) => resolveOpeningAgainstWalls(item, before.walls)) }
+    recordAction(`Update ${opening.name}`, before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
+    applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current })
+  }
+
+  const updateSun = (sunId: string, changes: Partial<SunDocument>) => {
+    const before = sceneDocumentRef.current
+    const sun = before.lights.find((item) => item.id === sunId)
+    if (!sun) return
+    const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, lights: before.lights.map((item) => item.id === sunId ? { ...item, ...changes } : item) }
+    recordAction(`Update ${sun.name}`, before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
+    applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current })
+  }
+
+  const duplicateEntity = (entityId: string): boolean => {
+    const before = sceneDocumentRef.current
+    const source = [...before.actors, ...before.props, ...before.walls, ...before.openings, ...before.cameras, ...before.lights].find((entity) => entity.id === entityId)
+    if (!source) return false
+    const sourceType = 'cameraDefinitionId' in source ? 'Camera' : 'type' in source ? source.type : 'Actor'
+    const prefix = sourceType === 'Prop' ? 'prop' : sourceType === 'Wall' ? 'wall' : sourceType === 'Opening' ? ('openingType' in source ? source.openingType : 'door') : sourceType === 'Camera' ? 'camera' : sourceType === 'Sun' ? 'sun' : 'actor'
+    const index = nextEntityIndex(before, prefix)
+    const id = `${prefix}-${String(index).padStart(2, '0')}`
+    const copy = JSON.parse(JSON.stringify(source)) as typeof source
+    copy.id = id
+    copy.name = `${source.name} Copy`
+    if ('position' in copy) copy.position = [copy.position[0] + 0.6, copy.position[1], copy.position[2] + 0.6]
+    const tracks = before.timeline.tracks.filter((track) => track.entityId === entityId).map((track) => ({ ...track, id: `${id}:${track.property}`, entityId: id, keyframes: track.keyframes.map((keyframe) => ({ ...keyframe, id: `${id}:${track.property}:${keyframe.frame}` })) }))
+    const next = {
+      ...before,
+      metadata: { ...before.metadata, updatedAt: new Date().toISOString() },
+      actors: sourceType === 'Actor' ? [...before.actors, copy as ActorDocument] : before.actors,
+      props: sourceType === 'Prop' ? [...before.props, copy as PropDocument] : before.props,
+      walls: sourceType === 'Wall' ? [...before.walls, copy as WallDocument] : before.walls,
+      openings: sourceType === 'Opening' ? [...before.openings, copy as OpeningDocument] : before.openings,
+      cameras: sourceType === 'Camera' ? [...before.cameras, copy as CameraDocument] : before.cameras,
+      lights: sourceType === 'Sun' ? [...before.lights, copy as SunDocument] : before.lights,
+      timeline: { ...before.timeline, tracks: [...before.timeline.tracks, ...tracks] },
+    }
+    recordAction(`Duplicate ${source.name}`, before, selectedEntityIdRef.current, next, id)
+    applyEditorSnapshot({ document: next, selectedEntityId: id })
+    return true
+  }
+
+  const deleteEntity = (entityId: string) => {
+    const before = sceneDocumentRef.current
+    const source = [...before.actors, ...before.props, ...before.walls, ...before.openings, ...before.cameras, ...before.lights].find((entity) => entity.id === entityId)
+    if (!source || !window.confirm(`Delete ${source.name}?`)) return
+    const nextCameras = before.cameras.filter((item) => item.id !== entityId)
+    const next = {
+      ...before,
+      metadata: { ...before.metadata, updatedAt: new Date().toISOString() },
+      actors: before.actors.filter((item) => item.id !== entityId),
+      props: before.props.filter((item) => item.id !== entityId),
+      walls: before.walls.filter((item) => item.id !== entityId),
+      openings: before.openings.filter((item) => item.id !== entityId).map((item) => item.wallId === entityId ? { ...item, wallId: null, offsetAlongWallMeters: undefined } : item),
+      cameras: nextCameras,
+      activeCameraId: before.activeCameraId === entityId ? (nextCameras[0]?.id ?? null) : before.activeCameraId,
+      lights: before.lights.filter((item) => item.id !== entityId),
+      timeline: { ...before.timeline, tracks: before.timeline.tracks.filter((track) => track.entityId !== entityId) },
+    }
+    recordAction(`Delete ${source.name}`, before, selectedEntityIdRef.current, next, null)
+    applyEditorSnapshot({ document: next, selectedEntityId: null })
+  }
+
   const addCamera = () => {
     const before = sceneDocumentRef.current
     const nextIndex = Math.max(0, ...before.cameras.map((camera) => Number(/camera-(\d+)/.exec(camera.id)?.[1] ?? 0))) + 1
@@ -429,14 +620,17 @@ export function V2App() {
     const before = sceneDocumentRef.current
     const actor = before.actors.find((item) => item.id === entityId)
     const prop = before.props.find((item) => item.id === entityId)
+    const wall = before.walls.find((item) => item.id === entityId)
+    const opening = before.openings.find((item) => item.id === entityId)
+    const sun = before.lights.find((item) => item.id === entityId)
     const camera = before.cameras.find((item) => item.id === entityId)
-    const entity = actor ?? prop ?? camera
+    const entity = actor ?? prop ?? wall ?? opening ?? sun ?? camera
     if (!entity) return
     const evaluated = evaluateTimeline(before, before.timeline.currentFrame)[entityId]
     const visibleEntity = suspendedTimelineEntityIds.has(entityId) || !evaluated ? entity : { ...entity, ...evaluated, ...(camera ? { focalLengthMm: evaluated.focalLengthMm ?? camera.focalLengthMm } : {}) }
     const value = captureTimelineValue(visibleEntity, property)
     if (value === undefined) return
-    const entityType = camera ? 'Camera' : prop ? 'Prop' : 'Actor'
+    const entityType = camera ? 'Camera' : sun ? 'Sun' : opening ? 'Opening' : wall ? 'Wall' : prop ? 'Prop' : 'Actor'
     const nextTimeline = upsertTimelineKeyframe(before.timeline, entityId, entityType, property, before.timeline.currentFrame, value)
     const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, timeline: nextTimeline }
     recordAction(`Add ${entity.name} ${property} keyframe`, before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
@@ -453,6 +647,7 @@ export function V2App() {
   }
 
   const handleTransformStart = (_change: StageTransform) => {
+    setSnapPreviewWallId(null)
     setTransformingEntityId(_change.entityId)
     transformTransactionRef.current = {
       before: sceneDocumentRef.current,
@@ -464,30 +659,67 @@ export function V2App() {
     const transaction = transformTransactionRef.current
     transformTransactionRef.current = null
     setTransformingEntityId(null)
+    setSnapPreviewWallId(null)
     if (!transaction) return
     const before = transaction.before
     const actor = before.actors.find((item) => item.id === change.entityId)
     const prop = before.props.find((item) => item.id === change.entityId)
+    const wall = before.walls.find((item) => item.id === change.entityId)
+    const opening = before.openings.find((item) => item.id === change.entityId)
     const camera = before.cameras.find((item) => item.id === change.entityId)
-    if (actor || prop || camera) {
-      const result = commitTimelineTransform(before, change as TimelineTransformCommit)
-      const after = { ...result.document, metadata: { ...result.document.metadata, updatedAt: new Date().toISOString() } }
-      const finalEntity = [...after.actors, ...after.props, ...after.cameras].find((item) => item.id === change.entityId)
+    const sun = before.lights.find((item) => item.id === change.entityId)
+    if (sun) {
+      const angles = sunAnglesFromHelperPosition(new THREE.Vector3(...change.position))
+      const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, lights: before.lights.map((item) => item.id === sun.id ? { ...item, ...angles } : item) }
+      setLastTransformDebug({ entityId: change.entityId, runtimeFinal: formatTransform(change.position, change.rotation), baseDocumentFinal: `Direction ${angles.azimuth.toFixed(1)}° / Height ${angles.elevation.toFixed(1)}°`, timelineEvaluated: '—', valueAppliedAfterTransform: 'SUN DIRECTION / HEIGHT' })
+      recordAction(`Move ${sun.name}`, before, transaction.beforeSelection, after, change.entityId)
+      const suspendedIds = new Set(suspendedTimelineEntityIds)
+      if (before.timeline.tracks.some((track) => track.entityId === sun.id && (track.property === 'azimuth' || track.property === 'elevation'))) suspendedIds.add(sun.id)
+      applyEditorSnapshot({ document: after, selectedEntityId: change.entityId }, suspendedIds)
+      return
+    }
+    if (actor || prop || wall || opening || camera) {
+      const snap = opening ? nearestWallForOpening(change.position, before.walls, WALL_SNAP_THRESHOLD, opening.width) : null
+      const effectiveChange: StageTransform = opening && snap
+        ? { ...change, position: resolveOpeningAgainstWalls({ ...opening, position: change.position, rotation: change.rotation, wallId: snap.wallId, offsetAlongWallMeters: snap.offset }, before.walls).position, rotation: resolveOpeningAgainstWalls({ ...opening, position: change.position, rotation: change.rotation, wallId: snap.wallId, offsetAlongWallMeters: snap.offset }, before.walls).rotation }
+        : change
+      const result = commitTimelineTransform(before, effectiveChange as TimelineTransformCommit)
+      let after = { ...result.document, metadata: { ...result.document.metadata, updatedAt: new Date().toISOString() } }
+      if (opening) {
+        const attachedOpening = snap
+          ? resolveOpeningAgainstWalls({ ...(after.openings.find((item) => item.id === opening.id) ?? opening), wallId: snap.wallId, offsetAlongWallMeters: snap.offset, position: effectiveChange.position, rotation: effectiveChange.rotation }, after.walls)
+          : { ...(after.openings.find((item) => item.id === opening.id) ?? opening), wallId: null, offsetAlongWallMeters: undefined, position: effectiveChange.position, rotation: effectiveChange.rotation }
+        after = { ...after, openings: after.openings.map((item) => item.id === opening.id ? attachedOpening : item) }
+      } else if (wall) {
+        after = { ...after, openings: after.openings.map((item) => resolveOpeningAgainstWalls(item, after.walls)) }
+      }
+      const finalEntity = [...after.actors, ...after.props, ...after.walls, ...after.openings, ...after.cameras].find((item) => item.id === change.entityId)
       const evaluatedAfter = evaluateTimeline(after, before.timeline.currentFrame)[change.entityId]
-      setLastTransformDebug({ entityId: change.entityId, runtimeFinal: formatTransform(change.position, change.rotation), baseDocumentFinal: finalEntity ? formatTransform(finalEntity.position, finalEntity.rotation) : '—', timelineEvaluated: evaluatedAfter ? formatTransform(evaluatedAfter.position, evaluatedAfter.rotation) : '—', valueAppliedAfterTransform: result.suspendEvaluation ? 'BASE (TIMELINE SUSPENDED)' : result.changedKeyframe ? 'KEYFRAME' : 'BASE' })
-      recordAction(`${result.changedKeyframe ? 'Update' : 'Move'} ${actor?.name ?? prop?.name ?? camera?.name ?? change.entityId}${result.changedKeyframe ? ' keyframe' : ''}`, before, transaction.beforeSelection, after, change.entityId)
+      setLastTransformDebug({ entityId: change.entityId, runtimeFinal: formatTransform(effectiveChange.position, effectiveChange.rotation), baseDocumentFinal: finalEntity ? formatTransform(finalEntity.position, finalEntity.rotation) : '—', timelineEvaluated: evaluatedAfter ? formatTransform(evaluatedAfter.position, evaluatedAfter.rotation) : '—', valueAppliedAfterTransform: result.suspendEvaluation ? 'BASE (TIMELINE SUSPENDED)' : result.changedKeyframe ? 'KEYFRAME' : 'BASE' })
+      recordAction(`${result.changedKeyframe ? 'Update' : 'Move'} ${actor?.name ?? prop?.name ?? wall?.name ?? opening?.name ?? camera?.name ?? change.entityId}${result.changedKeyframe ? ' keyframe' : ''}`, before, transaction.beforeSelection, after, change.entityId)
       const suspendedIds = new Set(suspendedTimelineEntityIds)
       if (result.suspendEvaluation) suspendedIds.add(change.entityId)
       applyEditorSnapshot({ document: after, selectedEntityId: change.entityId }, suspendedIds)
       return
     }
     const after = applySceneEntityTransform(sceneDocumentRef.current, change)
-    const entity = [...after.actors, ...after.props, ...after.cameras].find((item) => item.id === change.entityId)
-    const action = transformTool === 'rotate' ? 'Rotate' : 'Move'
+    const entity = [...after.actors, ...after.props, ...after.walls, ...after.openings, ...after.cameras].find((item) => item.id === change.entityId)
+    const action = transformTool === 'rotate' ? 'Rotate' : transformTool === 'scale' ? 'Scale' : 'Move'
     setLastTransformDebug({ entityId: change.entityId, runtimeFinal: formatTransform(change.position, change.rotation), baseDocumentFinal: formatTransform(after.props.find((item) => item.id === change.entityId)?.position ?? change.position, after.props.find((item) => item.id === change.entityId)?.rotation ?? change.rotation), timelineEvaluated: '—', valueAppliedAfterTransform: 'BASE' })
     recordAction(`${action} ${entity?.name ?? change.entityId}`, before, transaction.beforeSelection, after, change.entityId)
     applyEditorSnapshot({ document: after, selectedEntityId: change.entityId })
   }
+
+  const handleTransformPreview = (change: StageTransform) => {
+    const opening = sceneDocumentRef.current.openings.find((item) => item.id === change.entityId)
+    if (!opening) {
+      setSnapPreviewWallId(null)
+      return
+    }
+    setSnapPreviewWallId(nearestWallForOpening(change.position, sceneDocumentRef.current.walls, WALL_SNAP_THRESHOLD, opening.width)?.wallId ?? null)
+  }
+
+  const handleWallDrawState = (state: WallDrawingState) => setWallDrawState(state)
 
   const changeFrameRate = (frameRate: RationalFrameRate) => {
     const before = sceneDocumentRef.current
@@ -629,7 +861,7 @@ export function V2App() {
   useEffect(() => () => exportAbortRef.current?.abort(), [])
 
   const copySelection = (): boolean => {
-    const selected = [...sceneDocumentRef.current.actors, ...sceneDocumentRef.current.props].find((entity) => entity.id === selectedEntityIdRef.current)
+    const selected = [...sceneDocumentRef.current.actors, ...sceneDocumentRef.current.props, ...sceneDocumentRef.current.openings].find((entity) => entity.id === selectedEntityIdRef.current)
     if (!selected) return false
     clipboardRef.current = createEditorClipboard(selected)
     return true
@@ -688,9 +920,17 @@ export function V2App() {
       }
       if (isTextEditing) return
       const shortcut = editorShortcutForKey(event)
-      if (!shortcut) return
-      const handled = shortcut === 'copy' ? copySelection() : shortcut === 'paste' ? pasteSelection() : shortcut === 'undo' ? undo() : redo()
-      if (handled) event.preventDefault()
+      if (shortcut) {
+        const handled = shortcut === 'copy' ? copySelection() : shortcut === 'paste' ? pasteSelection() : shortcut === 'undo' ? undo() : shortcut === 'redo' ? redo() : duplicateEntity(selectedEntityIdRef.current ?? '')
+        if (handled) event.preventDefault()
+        return
+      }
+      if (deleteShortcutForKey(event.key, isTextEditing)) {
+        const selected = selectedEntityIdRef.current
+        if (selected === null) return
+        deleteEntity(selected as string)
+        event.preventDefault()
+      }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
@@ -701,12 +941,15 @@ export function V2App() {
 
   return (
     <main ref={appShellRef} className={`v2-app-shell${isResizingTimeline ? ' is-resizing-timeline' : ''}`} style={appShellStyle}>
-      <V2TopBar projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} view={view} onViewChange={setView} onNewProject={newProject} onSaveProject={saveProject} onLoadProject={loadProject} onExport={openExport} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'finalizing'} />
-      <V2ScenePanel projectName={projectDocument.name} scenes={projectDocument.scenes} activeSceneId={projectDocument.activeSceneId} actors={sceneDocument.actors} props={sceneDocument.props} cameras={sceneDocument.cameras} activeCameraId={sceneDocument.activeCameraId} selectedEntityId={selectedEntityId} onProjectNameChange={renameProject} onSelectScene={switchScene} onAddScene={addScene} onRenameScene={renameScene} onDuplicateScene={duplicateScene} onDeleteScene={deleteScene} onImportScene={importScene} onExportScene={exportScene} onAddActor={addActor} onAddCamera={addCamera} onSetActiveCamera={setActiveCamera} onSelectEntity={handleSelectionChange} />
+      <V2TopBar projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} view={view} onViewChange={handleViewChange} onNewProject={newProject} onSaveProject={saveProject} onLoadProject={loadProject} onProjectNameChange={renameProject} onExport={openExport} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'finalizing'} />
+      <V2ScenePanel scenes={projectDocument.scenes} activeSceneId={projectDocument.activeSceneId} actors={sceneDocument.actors} props={sceneDocument.props} walls={sceneDocument.walls} openings={sceneDocument.openings} lights={sceneDocument.lights} cameras={sceneDocument.cameras} activeCameraId={sceneDocument.activeCameraId} selectedEntityId={selectedEntityId} onSelectScene={switchScene} onAddScene={addScene} onRenameScene={renameScene} onDuplicateScene={duplicateScene} onDeleteScene={deleteScene} onImportScene={importScene} onExportScene={exportScene} onAddActor={addActor} onAddProp={addProp} onAddWall={addWall} onAddOpening={addOpening} onAddSun={addSun} onAddCamera={addCamera} onSetActiveCamera={setActiveCamera} onSelectEntity={handleSelectionChange} />
       <V2Stage
         view={view}
         actors={sceneDocument.actors}
         props={sceneDocument.props}
+        walls={sceneDocument.walls}
+        openings={sceneDocument.openings}
+        lights={sceneDocument.lights}
         cameras={sceneDocument.cameras}
         activeCameraId={sceneDocument.activeCameraId}
         selectedEntityId={selectedEntityId}
@@ -715,6 +958,17 @@ export function V2App() {
         onToolChange={setTransformTool}
         onTransformStart={handleTransformStart}
         onTransformEnd={handleTransformEnd}
+        onTransformPreview={handleTransformPreview}
+        onCaptureFrameReady={handleCaptureFrameReady}
+        cameraPreview={cameraPreview}
+        onCameraPreviewChange={setCameraPreview}
+        onOpenCameraView={() => setView('camera')}
+        wallDrawing={wallDrawing}
+        wallDrawState={wallDrawState}
+        onWallDrawCommit={commitWallSegment}
+        onWallDrawState={handleWallDrawState}
+        onWallDrawExit={exitWallDrawing}
+        snapPreviewWallId={snapPreviewWallId}
         evaluatedEntities={evaluatedEntities}
         isPlaying={isPlaying}
         transformingEntityId={transformingEntityId}
@@ -724,7 +978,7 @@ export function V2App() {
         lastTransformDebug={lastTransformDebug}
         selectedFrameGuideId={selectedFrameGuideId}
       />
-      <V2DetailsPanel actor={selectedActor} prop={selectedProp} camera={selectedCamera} timeline={sceneDocument.timeline} onCameraChange={updateCamera} onSetActiveCamera={setActiveCamera} onAddKeyframe={addKeyframe} activeCameraId={sceneDocument.activeCameraId} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={setSelectedFrameGuideId} />
+      <V2DetailsPanel actor={selectedActor} prop={selectedProp} wall={selectedWall} opening={selectedOpening} sun={selectedSun} camera={selectedCamera} timeline={sceneDocument.timeline} onActorChange={updateActor} onPropChange={updateProp} onCameraChange={updateCamera} onWallChange={updateWall} onOpeningChange={updateOpening} onSunChange={updateSun} onDuplicateEntity={duplicateEntity} onDeleteEntity={deleteEntity} onSetActiveCamera={setActiveCamera} onAddKeyframe={addKeyframe} activeCameraId={sceneDocument.activeCameraId} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={setSelectedFrameGuideId} />
       <div
         className="v2-timeline-resize-handle"
         role="separator"

@@ -10,7 +10,7 @@ const GLASS_COLOR = '#172b3c'
 const SELECTION_COLOR = '#f0b866'
 const FOV_GUIDE_DISTANCE = 3
 const FOV_GUIDE_ORIGIN_Z = -1.04
-const FOV_GUIDE_COLOR_FALLBACK = '#5947c7'
+const FOV_GUIDE_COLOR_FALLBACK = '#2c6fb7'
 
 function fovGuideColor(): string {
   if (typeof document === 'undefined') return FOV_GUIDE_COLOR_FALLBACK
@@ -28,6 +28,7 @@ export class ProceduralCameraRuntime {
   readonly fovGuide = new THREE.Group()
   private readonly resources: Array<THREE.BufferGeometry | THREE.Material> = []
   private readonly selectionMaterials: THREE.MeshStandardMaterial[] = []
+  private readonly proxyMaterials: THREE.MeshStandardMaterial[] = []
   private readonly fovGuideRayMaterial = new THREE.LineBasicMaterial({ color: fovGuideColor(), transparent: true, opacity: 0.86, depthTest: false })
   private readonly fovGuideFrameMaterial = new THREE.LineBasicMaterial({ color: fovGuideColor(), transparent: true, opacity: 0.96, depthTest: false })
   private readonly fovGuideAxisMaterial = new THREE.LineBasicMaterial({ color: fovGuideColor(), transparent: true, opacity: 0.52, depthTest: false })
@@ -52,6 +53,7 @@ export class ProceduralCameraRuntime {
     this.root.name = document.name
     this.root.position.set(...document.position)
     this.root.rotation.set(...document.rotation)
+    this.proxyMaterials.forEach((surface) => surface.color.set(document.proxyColor || BODY_COLOR))
     const projection = cameraProjectionForDocument(document)
     if (projection) {
       this.productionCamera.aspect = projection.displayAspect
@@ -114,7 +116,7 @@ export class ProceduralCameraRuntime {
   }
 
   private buildProxy(entityId: string, name: string): void {
-    const addBox = (label: string, size: [number, number, number], position: [number, number, number], color: string, selectable = true) => {
+    const addBox = (label: string, size: [number, number, number], position: [number, number, number], color: string, selectable = true, tintWithProxy = true) => {
       const geometry = new THREE.BoxGeometry(...size)
       const surface = material(color)
       const mesh = new THREE.Mesh(geometry, surface)
@@ -124,10 +126,11 @@ export class ProceduralCameraRuntime {
       this.root.add(mesh)
       this.resources.push(geometry, surface)
       this.selectionMaterials.push(surface)
+      if (tintWithProxy) this.proxyMaterials.push(surface)
       if (selectable) this.selectableMeshes.push(mesh)
       return mesh
     }
-    const addCylinder = (label: string, radius: number, depth: number, position: [number, number, number], color: string, radialSegments = 16) => {
+    const addCylinder = (label: string, radius: number, depth: number, position: [number, number, number], color: string, radialSegments = 16, tintWithProxy = true) => {
       const geometry = new THREE.CylinderGeometry(radius, radius, depth, radialSegments)
       const surface = material(color)
       const mesh = new THREE.Mesh(geometry, surface)
@@ -138,10 +141,11 @@ export class ProceduralCameraRuntime {
       this.root.add(mesh)
       this.resources.push(geometry, surface)
       this.selectionMaterials.push(surface)
+      if (tintWithProxy) this.proxyMaterials.push(surface)
       this.selectableMeshes.push(mesh)
       return mesh
     }
-    const addSphere = (label: string, radius: number, position: [number, number, number], color: string) => {
+    const addSphere = (label: string, radius: number, position: [number, number, number], color: string, tintWithProxy = true) => {
       const geometry = new THREE.SphereGeometry(radius, 12, 8)
       const surface = material(color)
       const mesh = new THREE.Mesh(geometry, surface)
@@ -151,6 +155,7 @@ export class ProceduralCameraRuntime {
       this.root.add(mesh)
       this.resources.push(geometry, surface)
       this.selectionMaterials.push(surface)
+      if (tintWithProxy) this.proxyMaterials.push(surface)
       this.selectableMeshes.push(mesh)
       return mesh
     }
@@ -168,7 +173,7 @@ export class ProceduralCameraRuntime {
     addCylinder('Rear Lens Barrel', 0.25, 0.18, [0, 0, -0.56], BODY_DARK)
     addCylinder('Focus Ring', 0.29, 0.16, [0, 0, -0.72], BODY_LIGHT, 20)
     addCylinder('Front Lens Barrel', 0.25, 0.22, [0, 0, -0.88], BODY_DARK)
-    addCylinder('Front Glass', 0.20, 0.04, [0, 0, -1.01], GLASS_COLOR, 20)
+    addCylinder('Front Glass', 0.20, 0.04, [0, 0, -1.01], GLASS_COLOR, 20, false)
 
     addBox('Matte Box Top', [0.72, 0.08, 0.18], [0, 0.32, -1.02], BODY_LIGHT)
     addBox('Matte Box Bottom', [0.72, 0.08, 0.18], [0, -0.32, -1.02], BODY_LIGHT)

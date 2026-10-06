@@ -26,6 +26,10 @@ export type ActorAppearance = {
 }
 
 export type PropShape = 'cube' | 'sphere' | 'cylinder'
+export type ScenicPropType = PropShape | 'table' | 'chair' | 'window' | 'door' | 'bicycle' | 'motorbike' | 'car'
+export type WallVector3 = [number, number, number]
+export type OpeningType = 'door' | 'window'
+export type HingeSide = 'left' | 'right'
 
 export type CameraLensType = 'Spherical' | 'Anamorphic'
 export type CameraDeliveryFrame = 'sensor' | '16:9' | '1.85' | '2.00' | '2.39'
@@ -58,10 +62,10 @@ export type FrameGuide = {
   safeMarginPercent: number
 }
 
-export type TimelineEntityType = 'Actor' | 'Prop' | 'Camera'
-export type TimelineProperty = 'position' | 'heading' | 'rotation' | 'focalLengthMm'
+export type TimelineEntityType = 'Actor' | 'Prop' | 'Wall' | 'Opening' | 'Sun' | 'Camera'
+export type TimelineProperty = 'position' | 'heading' | 'rotation' | 'focalLengthMm' | 'openAngle' | 'azimuth' | 'elevation' | 'intensity' | 'color'
 export type TimelineInterpolation = 'linear' | 'hold'
-export type TimelineValue = number | ActorVector3
+export type TimelineValue = number | string | ActorVector3
 
 export type TimelineKeyframe = {
   id: string
@@ -99,6 +103,8 @@ export type CameraDocument = {
   lensType: CameraLensType
   anamorphicSqueeze: 1 | 1.3 | 1.33 | 1.5 | 1.6 | 1.8 | 2
   deliveryAspectRatio: CameraDeliveryFrame
+  /** Editor-only color for distinguishing camera proxies in Blocking View. */
+  proxyColor: string
   frameGuides: FrameGuide[]
   cameraSnapshot?: CameraPhysicalSnapshot
 }
@@ -110,7 +116,52 @@ export type PropDocument = {
   position: ActorVector3
   rotation: ActorVector3
   shape: PropShape
+  propType?: ScenicPropType
   primaryColor: string
+  dimensions?: ActorVector3
+  /** Defaults to one when loading older scene/project files. */
+  scale?: ActorVector3
+}
+
+export type WallDocument = {
+  id: string
+  name: string
+  type: 'Wall'
+  position: ActorVector3
+  rotation: ActorVector3
+  length: number
+  height: number
+  thickness: number
+  primaryColor: string
+}
+
+export type OpeningDocument = {
+  id: string
+  name: string
+  type: 'Opening'
+  openingType: OpeningType
+  position: ActorVector3
+  rotation: ActorVector3
+  width: number
+  height: number
+  depth: number
+  sillHeight: number
+  hingeSide?: HingeSide
+  openAngle?: number
+  wallId: string | null
+  /** Distance from the wall's start endpoint when wallId is set. */
+  offsetAlongWallMeters?: number
+  primaryColor: string
+}
+
+export type SunDocument = {
+  id: string
+  name: string
+  type: 'Sun'
+  azimuth: number
+  elevation: number
+  intensity: number
+  color: string
 }
 
 export type ActorDocument = {
@@ -136,9 +187,11 @@ export type SceneDocument = {
   }
   actors: ActorDocument[]
   props: PropDocument[]
+  walls: WallDocument[]
+  openings: OpeningDocument[]
   cameras: CameraDocument[]
   activeCameraId: string | null
-  lights: unknown[]
+  lights: SunDocument[]
   timeline: TimelineDocument
 }
 
@@ -146,6 +199,7 @@ export type SceneTransformCommit = {
   entityId: string
   position: ActorVector3
   rotation: ActorVector3
+  scale?: ActorVector3
 }
 
 export function applySceneEntityTransform(document: SceneDocument, change: SceneTransformCommit): SceneDocument {
@@ -153,7 +207,9 @@ export function applySceneEntityTransform(document: SceneDocument, change: Scene
     ...document,
     metadata: { ...document.metadata, updatedAt: new Date().toISOString() },
     actors: document.actors.map((actor) => actor.id === change.entityId ? { ...actor, position: [...change.position], rotation: [...change.rotation] } : actor),
-    props: document.props.map((prop) => prop.id === change.entityId ? { ...prop, position: [...change.position], rotation: [...change.rotation] } : prop),
+    props: document.props.map((prop) => prop.id === change.entityId ? { ...prop, position: [...change.position], rotation: [...change.rotation], ...(change.scale ? { scale: [...change.scale] as ActorVector3 } : {}) } : prop),
+    walls: document.walls.map((wall) => wall.id === change.entityId ? { ...wall, position: [...change.position], rotation: [...change.rotation] } : wall),
+    openings: document.openings.map((opening) => opening.id === change.entityId ? { ...opening, position: [...change.position], rotation: [...change.rotation] } : opening),
     cameras: document.cameras.map((camera) => camera.id === change.entityId ? { ...camera, position: [...change.position], rotation: [...change.rotation] } : camera),
   }
 }
@@ -199,8 +255,38 @@ export function createCameraDocument(id: string, name: string, position: ActorVe
     lensType: 'Spherical',
     anamorphicSqueeze: 1,
     deliveryAspectRatio: '16:9',
+    proxyColor: '#4e5665',
     frameGuides: [],
   }
+}
+
+export function createPropDocument(id: string, name: string, propType: ScenicPropType, position: ActorVector3, primaryColor: string): PropDocument {
+  const shape: PropShape = propType === 'sphere' ? 'sphere' : propType === 'cylinder' ? 'cylinder' : 'cube'
+  return { id, name, type: 'Prop', position: [...position], rotation: [0, 0, 0], shape, propType, primaryColor, dimensions: defaultScenicDimensions(propType), scale: [1, 1, 1] }
+}
+
+export function createWallDocument(id: string, name: string, position: ActorVector3 = [0, 0, -3]): WallDocument {
+  return { id, name, type: 'Wall', position: [...position], rotation: [0, 0, 0], length: 6, height: 3, thickness: 0.18, primaryColor: '#c2ad95' }
+}
+
+export function createOpeningDocument(id: string, name: string, openingType: OpeningType, position: ActorVector3): OpeningDocument {
+  return { id, name, type: 'Opening', openingType, position: [...position], rotation: [0, 0, 0], width: openingType === 'door' ? 0.9 : 1.4, height: openingType === 'door' ? 2.1 : 1.1, depth: 0.16, sillHeight: openingType === 'door' ? 0 : 1.1, hingeSide: 'left', openAngle: 0, wallId: null, primaryColor: openingType === 'door' ? '#806a55' : '#7ba2b4' }
+}
+
+export function createSunDocument(id: string, name: string): SunDocument {
+  return { id, name, type: 'Sun', azimuth: 135, elevation: 42, intensity: 2.2, color: '#fff1d2' }
+}
+
+function defaultScenicDimensions(propType: ScenicPropType): ActorVector3 {
+  if (propType === 'table') return [1.8, 0.78, 1]
+  if (propType === 'chair') return [0.55, 1, 0.55]
+  if (propType === 'window') return [1.4, 1.1, 0.16]
+  if (propType === 'door') return [0.9, 2.1, 0.16]
+  // Vehicle dimensions use [width X, height Y, length Z]. Forward is -Z.
+  if (propType === 'bicycle') return [0.6, 1.1, 1.25]
+  if (propType === 'motorbike') return [0.82, 1.15, 2.15]
+  if (propType === 'car') return [1.8, 1.45, 3.8]
+  return [1.6, 2, 1.6]
 }
 
 export function createEmptySceneDocument(): SceneDocument {
@@ -216,6 +302,8 @@ export function createEmptySceneDocument(): SceneDocument {
     stage: { name: 'Untitled Stage' },
     actors: [],
     props: [],
+    walls: [],
+    openings: [],
     cameras: [],
     activeCameraId: null,
     lights: [],

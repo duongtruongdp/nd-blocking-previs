@@ -1,4 +1,4 @@
-import { prepareSceneForSave, validateSceneDocument } from './scenePersistence'
+import { normalizeSceneDocument, prepareSceneForSave, validateSceneDocument } from './scenePersistence'
 import type { ProjectDocument } from './projectDocument'
 
 export const NDBLOCK_FORMAT = 'ndblock' as const
@@ -58,7 +58,12 @@ export function migrateProjectFile(value: unknown): NdblockFile {
   const version = value.version as number
   if (version > CURRENT_NDBLOCK_VERSION) throw new ProjectFileError('unsupported-newer-version', 'This Project file was created by an unsupported newer version.')
   if (version !== CURRENT_NDBLOCK_VERSION) throw new ProjectFileError('invalid-file', 'This Project file version is not supported.')
-  return { format: NDBLOCK_FORMAT, version: CURRENT_NDBLOCK_VERSION, project: value.project as ProjectDocument }
+  const project = value.project as ProjectDocument
+  return {
+    format: NDBLOCK_FORMAT,
+    version: CURRENT_NDBLOCK_VERSION,
+    project: { ...project, scenes: Array.isArray(project.scenes) ? project.scenes.map((entry) => ({ ...entry, scene: normalizeSceneDocument(entry.scene) })) : project.scenes },
+  }
 }
 
 export function validateProjectDocument(value: unknown): string[] {

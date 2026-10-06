@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 
 type V2TopBarProps = {
   view: 'blocking' | 'camera'
@@ -10,20 +10,44 @@ type V2TopBarProps = {
   onNewProject: () => void
   onSaveProject: () => void
   onLoadProject: (file: File) => void
+  onProjectNameChange: (name: string) => void
   onExport: () => void
   exportDisabled?: boolean
 }
 
-export function V2TopBar({ view, projectName, sceneName, isDirty, fileError, onViewChange, onNewProject, onSaveProject, onLoadProject, onExport, exportDisabled = false }: V2TopBarProps) {
+export function V2TopBar({ view, projectName, sceneName, isDirty, fileError, onViewChange, onNewProject, onSaveProject, onLoadProject, onProjectNameChange, onExport, exportDisabled = false }: V2TopBarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const skipBlurRef = useRef(false)
+  const [editingProjectName, setEditingProjectName] = useState(false)
+  const [projectNameDraft, setProjectNameDraft] = useState(projectName)
+
+  const beginProjectRename = () => {
+    setProjectNameDraft(projectName)
+    setEditingProjectName(true)
+  }
+
+  const commitProjectRename = (value: string) => {
+    const trimmed = value.trim()
+    if (trimmed) onProjectNameChange(trimmed)
+    setProjectNameDraft(trimmed || projectName)
+    setEditingProjectName(false)
+  }
+
+  const cancelProjectRename = () => {
+    skipBlurRef.current = true
+    setProjectNameDraft(projectName)
+    setEditingProjectName(false)
+    window.requestAnimationFrame(() => { skipBlurRef.current = false })
+  }
+
   return (
     <header className="v2-topbar">
       <div className="v2-brand">
         <span className="v2-brand-mark">ND</span>
-        <span>ND Blocking &amp; Previs</span>
+        <span>Blocking &amp; Previs</span>
       </div>
-      <div className="v2-project-context" title={fileError ?? undefined}>
-        <span className="v2-project-name">{projectName}{isDirty ? <span className="v2-unsaved-dot" aria-label="Unsaved Project changes">•</span> : null}</span>
+      <div className="v2-project-context" title={fileError ?? projectName}>
+        {editingProjectName ? <input className="v2-project-name-input v2-project-name-edit" aria-label="Project name" autoFocus size={Math.max(12, Math.min(36, projectNameDraft.length + 2))} value={projectNameDraft} onChange={(event) => setProjectNameDraft(event.target.value)} onBlur={() => { if (!skipBlurRef.current) commitProjectRename(projectNameDraft) }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commitProjectRename(projectNameDraft) } else if (event.key === 'Escape') { event.preventDefault(); cancelProjectRename() } }} /> : <button className="v2-project-name" aria-label={`Rename project ${projectName}`} onClick={beginProjectRename} type="button"><span className="v2-project-name-label">{projectName}</span>{isDirty ? <span className="v2-unsaved-dot" aria-label="Unsaved Project changes">•</span> : null}</button>}
         <span className="v2-project-scene">/ {sceneName}</span>
       </div>
       {fileError ? <span className="v2-file-error" role="alert">{fileError}</span> : null}

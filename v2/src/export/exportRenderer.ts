@@ -1,17 +1,12 @@
 import * as THREE from 'three'
-import type { ActorDocument, CameraDocument, PropDocument, SceneDocument } from '../core/sceneDocument'
+import type { ActorDocument, CameraDocument, SceneDocument } from '../core/sceneDocument'
 import { cameraProjectionForDocument } from '../runtime/cameraMath'
 import { ProceduralActorRuntime } from '../runtime/actor/proceduralActor'
-import { createV2TestGeometry } from '../scene/testEntities'
+import { createScenicVisual, scenicGeometrySignature, type ScenicDefinition, type ScenicVisual } from '../runtime/scenicRuntime'
 import { evaluateExportFrame } from './exportEvaluation'
 import { centeredCrop, desqueezedCaptureAspect, dimensionsForDeliveryAspect, deliveryAspectForCamera } from './exportMath'
 import type { VideoExportSettings } from './exportTypes'
-
-type PropRuntime = {
-  root: THREE.Group
-  geometry: THREE.BufferGeometry
-  material: THREE.MeshStandardMaterial
-}
+import { resolveOpeningAgainstWalls } from '../architecture/wallMath'
 
 /**
  * Dedicated production render path for browser video export.
@@ -26,7 +21,8 @@ export class VideoExportRenderer {
   private readonly cameraMount = new THREE.Group()
   private readonly camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.05, 500)
   private readonly actorRuntimes = new Map<string, ProceduralActorRuntime>()
-  private readonly propRuntimes = new Map<string, PropRuntime>()
+  private readonly scenicRuntimes = new Map<string, ScenicVisual>()
+  private readonly scenicSignatures = new Map<string, string>()
   private readonly resources: Array<THREE.BufferGeometry | THREE.Material> = []
   private readonly document: SceneDocument
   private readonly settings: VideoExportSettings
@@ -59,7 +55,7 @@ export class VideoExportRenderer {
     this.cameraMount.add(this.camera)
     this.scene.add(this.cameraMount)
     this.syncActors(sceneDocument.actors)
-    this.syncProps(sceneDocument.props)
+    this.syncScenic([...sceneDocument.props, ...sceneDocument.walls, ...sceneDocument.openings.map((opening) => resolveOpeningAgainstWalls(opening, sceneDocument.walls)), ...sceneDocument.lights])
   }
 
   renderFrame(frame: number): void {
@@ -67,17 +63,29 @@ export class VideoExportRenderer {
     const cameraDocument = this.resolveCamera(frame)
     if (!cameraDocument) throw new Error('The active Camera is not available for export.')
     const evaluated = evaluateExportFrame(this.document, frame)
+    const evaluatedProps = this.document.props.map((prop) => ({ ...prop, ...(evaluated[prop.id] ?? {}) }))
+    const evaluatedWalls = this.document.walls.map((wall) => ({ ...wall, ...(evaluated[wall.id] ?? {}) }))
+    const evaluatedOpenings = this.document.openings.map((opening) => {
+      const value = evaluated[opening.id]
+      return resolveOpeningAgainstWalls({ ...opening, ...(value ?? {}), openAngle: value?.openAngle ?? opening.openAngle }, evaluatedWalls)
+    })
+    const evaluatedLights = this.document.lights.map((sun) => {
+      const value = evaluated[sun.id]
+      return { ...sun, ...(value ?? {}), azimuth: value?.azimuth ?? sun.azimuth, elevation: value?.elevation ?? sun.elevation, intensity: value?.intensity ?? sun.intensity, color: value?.color ?? sun.color }
+    })
+    this.syncScenic([...evaluatedProps, ...evaluatedWalls, ...evaluatedOpenings, ...evaluatedLights])
     this.document.actors.forEach((actor) => {
       const runtime = this.actorRuntimes.get(actor.id)
       if (runtime) runtime.applyDocument({ ...actor, ...(evaluated[actor.id] ?? {}) })
     })
-    this.document.props.forEach((prop) => {
-      const runtime = this.propRuntimes.get(prop.id)
+    evaluatedProps.forEach((prop) => {
+      const runtime = this.scenicRuntimes.get(prop.id)
       if (!runtime) return
-      const evaluatedProp = evaluated[prop.id]
-      runtime.root.position.set(...(evaluatedProp?.position ?? prop.position))
-      runtime.root.rotation.set(...(evaluatedProp?.rotation ?? prop.rotation))
+      runtime.applyDocument(prop)
     })
+    evaluatedWalls.forEach((wall) => this.scenicRuntimes.get(wall.id)?.applyDocument(wall))
+    evaluatedOpenings.forEach((opening) => this.scenicRuntimes.get(opening.id)?.applyDocument(opening))
+    evaluatedLights.forEach((sun) => this.scenicRuntimes.get(sun.id)?.applyDocument(sun))
 
     const projection = cameraProjectionForDocument(cameraDocument)
     if (!projection) throw new Error('The active Camera has no valid capture mode.')
@@ -103,10 +111,8 @@ export class VideoExportRenderer {
     if (this.disposed) return
     this.disposed = true
     this.actorRuntimes.forEach((runtime) => runtime.dispose())
-    this.propRuntimes.forEach((runtime) => {
-      runtime.geometry.dispose()
-      runtime.material.dispose()
-    })
+    this.scenicRuntimes.forEach((runtime) => runtime.dispose())
+    this.scenicSignatures.clear()
     this.resources.forEach((resource) => resource.dispose())
     this.sourceRenderer.dispose()
     this.sourceCanvas.width = 0
@@ -130,20 +136,33 @@ export class VideoExportRenderer {
     })
   }
 
-  private syncProps(props: readonly PropDocument[]): void {
-    props.forEach((prop) => {
-      const root = new THREE.Group()
-      root.name = `${prop.name} Export`
-      root.position.set(...prop.position)
-      root.rotation.set(...prop.rotation)
-      const geometry = createV2TestGeometry(prop.shape)
-      const material = new THREE.MeshStandardMaterial({ color: prop.primaryColor, roughness: 0.78, metalness: 0.04 })
-      const mesh = new THREE.Mesh(geometry, material)
-      mesh.castShadow = true
-      mesh.receiveShadow = true
-      root.add(mesh)
-      this.propRuntimes.set(prop.id, { root, geometry, material })
-      this.scene.add(root)
+  private syncScenic(definitions: readonly ScenicDefinition[]): void {
+    const ids = new Set(definitions.map((definition) => definition.id))
+    Array.from(this.scenicRuntimes.entries()).forEach(([id, runtime]) => {
+      if (ids.has(id)) return
+      runtime.root.removeFromParent()
+      runtime.dispose()
+      this.scenicRuntimes.delete(id)
+      this.scenicSignatures.delete(id)
+    })
+    definitions.forEach((definition) => {
+      const wallOpenings = definition.type === 'Wall' ? definitions.filter((candidate): candidate is Extract<ScenicDefinition, { type: 'Opening' }> => candidate.type === 'Opening' && candidate.wallId === definition.id) : []
+      const signature = scenicGeometrySignature(definition, wallOpenings)
+      const existing = this.scenicRuntimes.get(definition.id)
+      if (existing && this.scenicSignatures.get(definition.id) === signature) {
+        existing.applyDocument(definition)
+        return
+      }
+      if (existing) {
+        existing.root.removeFromParent()
+        existing.dispose()
+        this.scenicRuntimes.delete(definition.id)
+      }
+      const runtime = createScenicVisual(definition, { includeSunHelper: false, wallOpenings })
+      runtime.root.name = `${definition.name} Export`
+      this.scenicRuntimes.set(definition.id, runtime)
+      this.scenicSignatures.set(definition.id, signature)
+      this.scene.add(runtime.root)
     })
   }
 

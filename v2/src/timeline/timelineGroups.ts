@@ -10,7 +10,7 @@ export type TimelineTrackGroup = TimelineEntityDescriptor & {
   tracks: readonly TimelineTrack[]
 }
 
-const propertyOrder: Record<TimelineTrack['property'], number> = { position: 0, heading: 1, rotation: 2, focalLengthMm: 3 }
+const propertyOrder: Record<TimelineTrack['property'], number> = { position: 0, heading: 1, rotation: 2, focalLengthMm: 3, openAngle: 4, azimuth: 5, elevation: 6, intensity: 7, color: 8 }
 
 /** Returns only animated entities, in the same Actor / Prop / Camera order as the Scene panel. */
 export function groupTimelineTracks(tracks: readonly TimelineTrack[], entities: readonly TimelineEntityDescriptor[]): TimelineTrackGroup[] {

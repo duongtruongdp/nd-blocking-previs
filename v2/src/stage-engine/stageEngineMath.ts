@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 
-export type StageTool = 'select' | 'move' | 'rotate'
+export type StageTool = 'select' | 'move' | 'rotate' | 'scale'
 
 export type StagePointerMode = 'idle' | 'orbit' | 'pan' | 'move' | 'gizmo'
 
@@ -71,6 +71,7 @@ export function stageToolForKey(key: string): StageTool | null {
   if (key.toLowerCase() === 'e') return 'select'
   if (key.toLowerCase() === 'q') return 'move'
   if (key.toLowerCase() === 'r') return 'rotate'
+  if (key.toLowerCase() === 's') return 'scale'
   return null
 }
 

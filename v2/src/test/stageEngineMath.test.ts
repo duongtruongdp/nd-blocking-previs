@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { stageMovedBeyondThreshold, stageNdcFromEvent, stagePointerDeltaAlongAxis, stageProjectWorldAxisToScreen, stageToolForKey, stageWorldUnitsPerPixelAtDepth, stageWorldUnitsPerPixelAlongAxis, stageZoomDistance } from '../stage-engine'
+import { scaleFromFactor, scaleFromPointer, stageMovedBeyondThreshold, stageNdcFromEvent, stagePointerDeltaAlongAxis, stageProjectWorldAxisToScreen, stageToolForKey, stageWorldUnitsPerPixelAtDepth, stageWorldUnitsPerPixelAlongAxis, stageZoomDistance } from '../stage-engine'
 
 describe('StageEngine math boundary', () => {
   it('maps pointer coordinates using the live canvas rectangle', () => {
@@ -18,7 +18,24 @@ describe('StageEngine math boundary', () => {
     expect(stageToolForKey('e')).toBe('select')
     expect(stageToolForKey('Q')).toBe('move')
     expect(stageToolForKey('r')).toBe('rotate')
+    expect(stageToolForKey('s')).toBe('scale')
     expect(stageToolForKey('w')).toBeNull()
+  })
+
+  it('scales one axis without changing the other components', () => {
+    expect(scaleFromFactor([2, 1, 3], 'x', 1.5)).toEqual([3, 1, 3])
+    expect(scaleFromFactor([2, 1, 3], 'y', 1.5)).toEqual([2, 1.5, 3])
+    expect(scaleFromFactor([2, 1, 3], 'z', 1.5)).toEqual([2, 1, 4.5])
+  })
+
+  it('uses the initial proportions for uniform and Shift-constrained scaling', () => {
+    expect(scaleFromFactor([2, 1, 3], 'uniform', 1.5)).toEqual([3, 1.5, 4.5])
+    expect(scaleFromPointer([2, 1, 3], 'x', 180, true).scale).toEqual([2 * Math.E, 1 * Math.E, 3 * Math.E])
+  })
+
+  it('clamps scale factors to the supported document range', () => {
+    expect(scaleFromFactor([1, 1, 1], 'x', 0.001)[0]).toBe(0.05)
+    expect(scaleFromFactor([2, 2, 2], 'uniform', 1000)).toEqual([100, 100, 100])
   })
 
   it('uses multiplicative DEMO-style zoom distance', () => {

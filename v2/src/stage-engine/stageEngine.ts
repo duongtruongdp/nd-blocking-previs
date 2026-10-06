@@ -107,6 +107,8 @@ export type StageEngineOptions = {
   onTransformPreview?: (change: StageTransform) => void
   onDebug?: (snapshot: StageEngineDebugSnapshot) => void
   debugEnabled?: boolean
+  toolShortcuts?: Partial<Record<StageTool, string>>
+  frameSelectedShortcut?: string
 }
 
 type SelectionListener = (entityId: string | null) => void
@@ -137,6 +139,8 @@ export class StageEngine {
   private disposed = false
   private selectedId: string | null = null
   private tool: StageTool = 'select'
+  private toolShortcuts: Partial<Record<StageTool, string>>
+  private frameSelectedShortcut: string
   private drag: StageDrag | null = null
   private hoverHandle: StageGizmoHandle | null = null
   private pointerMode: StagePointerMode = 'idle'
@@ -148,6 +152,8 @@ export class StageEngine {
   constructor(container: HTMLElement, options: StageEngineOptions = {}) {
     this.container = container
     this.options = options
+    this.toolShortcuts = options.toolShortcuts ?? {}
+    this.frameSelectedShortcut = options.frameSelectedShortcut ?? 'f'
     this.debugEnabled = options.debugEnabled ?? false
     this.scene = new THREE.Scene()
     this.scene.background = new THREE.Color('#d9deef')
@@ -185,6 +191,11 @@ export class StageEngine {
     this.options.onToolChanged?.(tool)
     this.emitDebug()
     this.requestRender()
+  }
+
+  setShortcutBindings(toolShortcuts: Partial<Record<StageTool, string>>, frameSelectedShortcut = 'f'): void {
+    this.toolShortcuts = toolShortcuts
+    this.frameSelectedShortcut = frameSelectedShortcut
   }
 
   addEntity(entity: { id: string; type: StageEntityType; root: THREE.Group; name?: string; setSelected?: (selected: boolean) => void; setSnapPreview?: (active: boolean) => void; dispose?: () => void; transformable?: boolean; scalable?: boolean }): void {
@@ -443,13 +454,15 @@ export class StageEngine {
 
   private readonly handleKeyDown = (event: KeyboardEvent) => {
     if (this.isTypingTarget(event.target)) return
-    const tool = stageToolForKey(event.key)
+    if (event.metaKey || event.ctrlKey || event.altKey) return
+    const configuredTool = Object.entries(this.toolShortcuts).find(([, key]) => key?.toLowerCase() === event.key.toLowerCase())?.[0] as StageTool | undefined
+    const tool = configuredTool ?? stageToolForKey(event.key)
     if (tool) {
       this.setTool(tool)
       event.preventDefault()
       return
     }
-    if (event.key.toLowerCase() === 'f') {
+    if (event.key.toLowerCase() === this.frameSelectedShortcut.toLowerCase()) {
       this.frameSelected()
       event.preventDefault()
     } else if (event.key === 'Home' || event.key.toLowerCase() === 'h') {

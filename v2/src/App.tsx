@@ -5,8 +5,8 @@ import { V2Stage, type V2TransformDebugState } from './components/V2Stage'
 import { V2Timeline } from './components/V2Timeline'
 import { V2TopBar } from './components/V2TopBar'
 import { V2ProjectLibrary } from './components/V2ProjectLibrary'
-import { closeDecisionForUnsavedChoice, platformAdapter, PlatformFileError } from './platform/platformAdapter'
-import { basename, createRecentProjectEntry, duplicateFilename, filenameWithoutExtension, projectFilenameFromInput, recentProjectIdentity, removeRecentProject, siblingPath, sortRecentProjects, updateRecentProjectPath, upsertRecentProject, type RecentProjectEntry } from './platform/projectLibrary'
+import { closeDecisionForUnsavedChoice, platformAdapter, PlatformFileError, type DesktopDropEvent } from './platform/platformAdapter'
+import { basename, createRecentProjectEntry, duplicateFilename, filenameWithoutExtension, firstSupportedProjectPath, isProjectFilePath, projectFilenameFromInput, recentProjectIdentity, recentProjectThumbnailKey, removeRecentProject, siblingPath, sortRecentProjects, updateRecentProjectPath, upsertRecentProject, type RecentProjectEntry } from './platform/projectLibrary'
 import { createDefaultProps } from './scene/testEntities'
 import { applySceneEntityTransform, createActorDocument, createCameraDocument, createEmptySceneDocument, createOpeningDocument, createPropDocument, createSunDocument, createWallDocument, type ActorDocument, type ActorVector3, type CameraDocument, type OpeningDocument, type PropDocument, type RationalFrameRate, type SceneDocument, type ScenicPropType, type SunDocument, type TimelineProperty, type WallDocument } from './core/sceneDocument'
 import type { ProjectDocument, ProjectSceneEntry } from './core/projectDocument'
@@ -16,12 +16,12 @@ import { defaultCameraPlacement } from './core/cameraPlacement'
 import { cameraRotationLookingAt } from './runtime/cameraMath'
 import { createEditorClipboard, pasteEditorClipboard, type EditorClipboard } from './core/editorClipboard'
 import { EditorHistory, type EditorHistorySnapshot } from './core/editorHistory'
-import { deleteShortcutForKey, editorShortcutForKey, timelineMarkShortcutForKey, timelinePlayPauseShortcut } from './core/editorShortcuts'
+import { destructiveShortcutTarget, editorShortcutForKey } from './core/editorShortcuts'
 import { clampTimelineHeight, TIMELINE_HEIGHT_DEFAULT, timelineHeightBounds } from './core/workspaceLayout'
 import type { StageTool, StageTransform } from './stage-engine'
 import { evaluateTimeline } from './timeline/timelineEvaluator'
 import { createPlaybackClock, playbackFrameAt, playbackReachedMarkOut, type PlaybackClock } from './timeline/playbackClock'
-import { clampTimelineFrame, removeTimelineKeyframe, setTimelineMark, upsertTimelineKeyframe } from './timeline/timelineMath'
+import { clampTimelineFrame, moveTimelineKeyframe, removeTimelineKeyframe, setTimelineMark, upsertTimelineKeyframe } from './timeline/timelineMath'
 import { captureTimelineValue, commitTimelineTransform, type TimelineTransformCommit } from './timeline/transformOwnership'
 import { V2ExportModal } from './components/V2ExportModal'
 import { exportFilename } from './export/exportMath'
@@ -36,6 +36,8 @@ import { sunAnglesFromHelperPosition } from './runtime/sunMapping'
 import type { WallDrawingState } from './architecture/wallDrawing'
 import { WALL_SNAP_THRESHOLD, nearestWallForOpening, resolveOpeningAgainstWalls, wallFromEndpoints } from './architecture/wallMath'
 import { cameraStillFilename, type StillCaptureOptions } from './runtime/stillCapture'
+import { shortcutLabel, shortcutMatches, shortcutPreferencesWithDefaults, SHORTCUT_COMMANDS, type ShortcutBinding, type ShortcutCommandId } from './core/shortcutRegistry'
+import { V2ShortcutSettings } from './components/V2ShortcutSettings'
 
 function createDefaultV2Scene(id = 'scene-01', name = 'Scene 01', includeDefaultProps = true): SceneDocument {
   const scene = createEmptySceneDocument()
@@ -48,6 +50,15 @@ function createDefaultV2Scene(id = 'scene-01', name = 'Scene 01', includeDefault
 
 function createDefaultV2Project(): ProjectDocument {
   return createProjectDocument('project-01', 'Untitled Project', createDefaultV2Scene())
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('Thumbnail could not be read.'))
+    reader.onerror = () => reject(reader.error ?? new Error('Thumbnail could not be read.'))
+    reader.readAsDataURL(blob)
+  })
 }
 
 async function refreshRecentProjectStatus(entries: readonly RecentProjectEntry[]): Promise<RecentProjectEntry[]> {
@@ -82,10 +93,13 @@ function V2EditorApp() {
   const sceneDocument = activeSceneEntry.scene
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null)
   const [selectedFrameGuideId, setSelectedFrameGuideId] = useState<string | null>(null)
+  const [selectedTimelineKeyframe, setSelectedTimelineKeyframe] = useState<{ trackId: string; keyframeId: string } | null>(null)
   const [isDirty, setIsDirty] = useState(false)
   const [recentProjects, setRecentProjects] = useState<RecentProjectEntry[]>([])
+  const [recentProjectThumbnails, setRecentProjectThumbnails] = useState<Record<string, string | null>>({})
   const [recentProjectsLoading, setRecentProjectsLoading] = useState(platformAdapter.kind === 'desktop')
   const [recentProjectsError, setRecentProjectsError] = useState<string | null>(null)
+  const [desktopDropState, setDesktopDropState] = useState<'idle' | 'valid' | 'invalid'>('idle')
   const [sceneFileError, setSceneFileError] = useState<string | null>(null)
   const [transformTool, setTransformTool] = useState<StageTool>('select')
   const [isPlaying, setIsPlaying] = useState(false)
@@ -104,15 +118,20 @@ function V2EditorApp() {
   const [exportSettings, setExportSettings] = useState<VideoExportSettings>(() => ({ cameraId: null, markIn: 0, markOut: 120, frameRate: { numerator: 24, denominator: 1 }, deliveryAspectRatio: '16:9', width: 1920, format: 'mp4' }))
   const [timelineHeight, setTimelineHeight] = useState(TIMELINE_HEIGHT_DEFAULT)
   const [isResizingTimeline, setIsResizingTimeline] = useState(false)
+  const [shortcutBindings, setShortcutBindings] = useState(() => shortcutPreferencesWithDefaults())
+  const [shortcutSettingsOpen, setShortcutSettingsOpen] = useState(false)
   const appShellRef = useRef<HTMLElement>(null)
   const projectDocumentRef = useRef<ProjectDocument>(projectDocument)
   const sceneDocumentRef = useRef<SceneDocument>(sceneDocument)
   const currentProjectPathRef = useRef<string | null>(null)
   const recentProjectsRef = useRef<RecentProjectEntry[]>([])
+  const thumbnailCaptureRef = useRef<(() => Promise<Blob | null>) | null>(null)
   const isDirtyRef = useRef(isDirty)
   const workspaceModeRef = useRef(workspaceMode)
   const savedProjectFingerprintRef = useRef(creativeProjectFingerprint(projectDocument))
   const selectedEntityIdRef = useRef<string | null>(selectedEntityId)
+  const selectedTimelineKeyframeRef = useRef<{ trackId: string; keyframeId: string } | null>(selectedTimelineKeyframe)
+  const shortcutBindingsRef = useRef(shortcutBindings)
   const clipboardRef = useRef<EditorClipboard | null>(null)
   const historyRef = useRef<EditorHistory>(new EditorHistory(100))
   const transformTransactionRef = useRef<{ before: SceneDocument; beforeSelection: string | null } | null>(null)
@@ -122,6 +141,8 @@ function V2EditorApp() {
   const togglePlaybackRef = useRef<() => void>(() => {})
   const newProjectRef = useRef<() => void>(() => {})
   const loadProjectRef = useRef<() => void>(() => {})
+  const saveProjectRef = useRef<() => void>(() => {})
+  const saveProjectAsRef = useRef<() => void>(() => {})
   const isPlayingRef = useRef(isPlaying)
   const timelineResizeRef = useRef<{ startY: number; startHeight: number } | null>(null)
   const evaluatedEntities = evaluateTimeline(sceneDocument, sceneDocument.timeline.currentFrame)
@@ -152,10 +173,36 @@ function V2EditorApp() {
     projectDocumentRef.current = projectDocument
     sceneDocumentRef.current = sceneDocument
     selectedEntityIdRef.current = selectedEntityId
+    selectedTimelineKeyframeRef.current = selectedTimelineKeyframe
+    shortcutBindingsRef.current = shortcutBindings
     isDirtyRef.current = isDirty
     workspaceModeRef.current = workspaceMode
     recentProjectsRef.current = recentProjects
-  }, [projectDocument, sceneDocument, selectedEntityId, isDirty, workspaceMode, recentProjects])
+  }, [projectDocument, sceneDocument, selectedEntityId, selectedTimelineKeyframe, shortcutBindings, isDirty, workspaceMode, recentProjects])
+
+  useEffect(() => {
+    let active = true
+    void platformAdapter.loadShortcutPreferences().then((preferences) => {
+      if (active) setShortcutBindings(shortcutPreferencesWithDefaults(preferences))
+    })
+    return () => { active = false }
+  }, [])
+
+  const updateShortcut = (id: ShortcutCommandId, binding: ShortcutBinding) => {
+    const next = { ...shortcutBindingsRef.current, [id]: binding }
+    shortcutBindingsRef.current = next
+    setShortcutBindings(next)
+    const defaults = shortcutPreferencesWithDefaults()
+    const preferences = Object.fromEntries(SHORTCUT_COMMANDS.filter((command) => shortcutLabel(next[command.id]) !== shortcutLabel(defaults[command.id])).map((command) => [command.id, next[command.id]]))
+    void platformAdapter.saveShortcutPreferences(preferences)
+  }
+
+  const resetShortcuts = () => {
+    const next = shortcutPreferencesWithDefaults()
+    shortcutBindingsRef.current = next
+    setShortcutBindings(next)
+    void platformAdapter.saveShortcutPreferences({})
+  }
 
   useEffect(() => {
     if (platformAdapter.kind !== 'desktop') return
@@ -166,11 +213,15 @@ function V2EditorApp() {
       recentProjectsRef.current = refreshed
       setRecentProjects(refreshed)
       setRecentProjectsError(null)
+      const thumbnailEntries = await Promise.all(refreshed.map(async (entry) => [entry.thumbnailKey, await platformAdapter.loadProjectThumbnail(entry.thumbnailKey)] as const))
+      if (!active) return
+      setRecentProjectThumbnails(Object.fromEntries(thumbnailEntries))
       await platformAdapter.saveRecentProjects(refreshed)
     }).catch(() => {
       if (!active) return
       recentProjectsRef.current = []
       setRecentProjects([])
+      setRecentProjectThumbnails({})
       setRecentProjectsError('Recent Projects could not be loaded.')
     }).finally(() => {
       if (active) setRecentProjectsLoading(false)
@@ -276,6 +327,7 @@ function V2EditorApp() {
     setTransformingEntityId(null)
     transformTransactionRef.current = null
     setSelectedFrameGuideId(null)
+    setSelectedTimelineKeyframe(null)
     setSceneFileError(null)
     historyRef.current = new EditorHistory(100)
     const active = project.scenes.find((entry) => entry.id === project.activeSceneId) ?? project.scenes[0]
@@ -300,6 +352,7 @@ function V2EditorApp() {
     historyRef.current = new EditorHistory(100)
     setSelectedEntityId(null)
     setSelectedFrameGuideId(null)
+    setSelectedTimelineKeyframe(null)
     setSuspendedTimelineEntityIds(new Set())
     sceneDocumentRef.current = target.scene
     replaceProjectDocument({ ...current, activeSceneId: target.id })
@@ -310,12 +363,15 @@ function V2EditorApp() {
     recentProjectsRef.current = next
     setRecentProjects(next)
     await platformAdapter.saveRecentProjects(next)
+    void platformAdapter.cleanupProjectThumbnails(next.map((entry) => entry.thumbnailKey))
   }
 
   const recentEntryForProject = async (path: string, project: ProjectDocument, lastOpenedAt = new Date().toISOString()): Promise<RecentProjectEntry> => {
     const stat = await platformAdapter.statFile(path)
+    const existing = recentProjectsRef.current.find((entry) => recentProjectIdentity(entry.path) === recentProjectIdentity(path))
     return createRecentProjectEntry({
       path,
+      thumbnailKey: existing?.thumbnailKey ?? recentProjectThumbnailKey(path),
       displayName: project.name || filenameWithoutExtension(path),
       lastOpenedAt,
       lastKnownModifiedAt: stat?.modifiedAt ?? null,
@@ -326,9 +382,27 @@ function V2EditorApp() {
   }
 
   const updateRecentForProject = async (path: string, project: ProjectDocument, lastOpenedAt = new Date().toISOString(), oldPath?: string) => {
+    const prior = oldPath ? recentProjectsRef.current.find((candidate) => recentProjectIdentity(candidate.path) === recentProjectIdentity(oldPath)) : undefined
     const entry = await recentEntryForProject(path, project, lastOpenedAt)
-    const next = oldPath ? updateRecentProjectPath(recentProjectsRef.current, oldPath, entry) : upsertRecentProject(recentProjectsRef.current, entry)
+    const preservedEntry = prior && recentProjectIdentity(prior.path) !== recentProjectIdentity(path) ? { ...entry, thumbnailKey: prior.thumbnailKey } : entry
+    const next = oldPath ? updateRecentProjectPath(recentProjectsRef.current, oldPath, preservedEntry) : upsertRecentProject(recentProjectsRef.current, preservedEntry)
     await persistRecentProjects(next)
+  }
+
+  const captureProjectThumbnail = (path: string) => {
+    if (platformAdapter.kind !== 'desktop' || !thumbnailCaptureRef.current) return
+    const entry = recentProjectsRef.current.find((candidate) => recentProjectIdentity(candidate.path) === recentProjectIdentity(path))
+    const key = entry?.thumbnailKey ?? recentProjectThumbnailKey(path)
+    // Saving replaces the project document; wait one browser turn so Camera View
+    // has received the same active-camera snapshot before rendering the still.
+    window.setTimeout(() => {
+      void thumbnailCaptureRef.current?.().then(async (blob) => {
+        if (!blob) return
+        await platformAdapter.saveProjectThumbnail(key, blob)
+        const dataUrl = await blobToDataUrl(blob)
+        setRecentProjectThumbnails((current) => ({ ...current, [key]: dataUrl }))
+      }).catch(() => {})
+    }, 0)
   }
 
   const saveProject = async (): Promise<boolean> => {
@@ -344,7 +418,10 @@ function V2EditorApp() {
       savedProjectFingerprintRef.current = creativeProjectFingerprint(prepared)
       setSceneFileError(null)
       setIsDirty(false)
-      if (result.path) await updateRecentForProject(result.path, prepared)
+      if (result.path) {
+        await updateRecentForProject(result.path, prepared)
+        captureProjectThumbnail(result.path)
+      }
       return true
     } catch (error: unknown) {
       setSceneFileError(error instanceof ProjectFileError || error instanceof PlatformFileError ? error.message : 'This Project could not be saved.')
@@ -354,6 +431,7 @@ function V2EditorApp() {
 
   const saveProjectAs = async (): Promise<boolean> => {
     const savedAt = new Date().toISOString()
+    const previousPath = currentProjectPathRef.current
     try {
       const prepared = prepareProjectForSave(projectDocumentRef.current, savedAt)
       const result = await platformAdapter.saveProjectFileAs(serializeProject(prepared, savedAt), projectFilename(prepared.name))
@@ -364,7 +442,10 @@ function V2EditorApp() {
       savedProjectFingerprintRef.current = creativeProjectFingerprint(prepared)
       setSceneFileError(null)
       setIsDirty(false)
-      if (result.path) await updateRecentForProject(result.path, prepared)
+      if (result.path) {
+        await updateRecentForProject(result.path, prepared, savedAt, previousPath ?? undefined)
+        captureProjectThumbnail(result.path)
+      }
       return true
     } catch (error: unknown) {
       setSceneFileError(error instanceof ProjectFileError || error instanceof PlatformFileError ? error.message : 'This Project could not be saved.')
@@ -394,12 +475,38 @@ function V2EditorApp() {
     if (file.path) await updateRecentForProject(file.path, loaded)
   }
 
+  const confirmProjectSwitch = async (): Promise<boolean> => {
+    if (!isDirtyRef.current) return true
+    if (platformAdapter.promptUnsavedClose) {
+      const choice = await platformAdapter.promptUnsavedClose()
+      const decision = closeDecisionForUnsavedChoice(choice, choice !== 'save' || await saveProject())
+      if (choice === 'discard' && decision === 'close') setIsDirty(false)
+      return decision === 'close'
+    }
+    return window.confirm('Discard unsaved Project changes and load this Project?')
+  }
+
+  const openProjectFile = async (file: { path: string | null; text: string } | null) => {
+    if (!file || !await confirmProjectSwitch()) return
+    await enterLoadedProject(file)
+  }
+
+  const openDesktopProjectPath = async (path: string) => {
+    if (!isProjectFilePath(path)) return
+    try {
+      await openProjectFile(await platformAdapter.openProjectFileAt(path))
+      setRecentProjectsError(null)
+      setSceneFileError(null)
+    } catch (error: unknown) {
+      const message = error instanceof ProjectFileError || error instanceof PlatformFileError ? error.message : 'This Project file could not be opened.'
+      if (workspaceModeRef.current === 'library') setRecentProjectsError(message)
+      else setSceneFileError(message)
+    }
+  }
+
   const loadProject = async () => {
     try {
-      const file = await platformAdapter.openProjectFile()
-      if (!file) return
-      if (isDirtyRef.current && !window.confirm('Discard unsaved Project changes and load this Project?')) return
-      await enterLoadedProject(file)
+      await openProjectFile(await platformAdapter.openProjectFile())
     } catch (error: unknown) {
       setSceneFileError(error instanceof ProjectFileError || error instanceof PlatformFileError ? error.message : 'This Project file could not be opened.')
     }
@@ -415,7 +522,46 @@ function V2EditorApp() {
   useEffect(() => {
     newProjectRef.current = newProject
     loadProjectRef.current = loadProject
+    saveProjectRef.current = () => { void saveProject() }
+    saveProjectAsRef.current = () => { void saveProjectAs() }
   }, [newProject, loadProject])
+
+  useEffect(() => {
+    if (platformAdapter.kind !== 'desktop') return
+    let active = true
+    const handleDrop = (event: DesktopDropEvent) => {
+      if (event.type === 'leave') {
+        setDesktopDropState('idle')
+        return
+      }
+      if (event.type === 'enter' || event.type === 'drop') {
+        const supported = firstSupportedProjectPath(event.paths)
+        setDesktopDropState(supported ? 'valid' : event.type === 'enter' ? 'invalid' : 'idle')
+        if (event.type === 'drop') {
+          setDesktopDropState('idle')
+          if (supported) void openDesktopProjectPath(supported)
+        }
+      }
+    }
+    let unlistenOpen: (() => void) | null = null
+    let unlistenDrop: (() => void) | null = null
+    void Promise.all([platformAdapter.subscribeProjectOpen(openDesktopProjectPath), platformAdapter.subscribeProjectDrop(handleDrop)]).then(async ([removeOpen, removeDrop]) => {
+      if (!active) {
+        removeOpen()
+        removeDrop()
+        return
+      }
+      unlistenOpen = removeOpen
+      unlistenDrop = removeDrop
+      const startupPath = await platformAdapter.initialProjectPath()
+      if (startupPath) await openDesktopProjectPath(startupPath)
+    }).catch(() => {})
+    return () => {
+      active = false
+      unlistenOpen?.()
+      unlistenDrop?.()
+    }
+  }, [])
 
   const openRecentProject = async (entry: RecentProjectEntry) => {
     try {
@@ -424,9 +570,7 @@ function V2EditorApp() {
         return
       }
       const file = await platformAdapter.openProjectFileAt(entry.path)
-      if (!file) return
-      if (isDirtyRef.current && !window.confirm('Discard unsaved Project changes and load this Project?')) return
-      await enterLoadedProject(file)
+      await openProjectFile(file)
     } catch (error: unknown) {
       setRecentProjectsError(error instanceof ProjectFileError || error instanceof PlatformFileError ? error.message : 'This Project file could not be opened.')
     }
@@ -448,6 +592,26 @@ function V2EditorApp() {
 
   const removeRecent = async (entry: RecentProjectEntry) => {
     await persistRecentProjects(removeRecentProject(recentProjectsRef.current, entry.path))
+    await platformAdapter.deleteProjectThumbnail(entry.thumbnailKey)
+    setRecentProjectThumbnails((current) => {
+      const next = { ...current }
+      delete next[entry.thumbnailKey]
+      return next
+    })
+  }
+
+  const revealRecentFile = async (entry: RecentProjectEntry) => {
+    try {
+      if (!await platformAdapter.fileExists(entry.path)) {
+        await persistRecentProjects(recentProjectsRef.current.map((candidate) => candidate.id === entry.id ? { ...candidate, missing: true } : candidate))
+        setRecentProjectsError('This Project file is no longer available.')
+        return
+      }
+      await platformAdapter.revealProjectFile(entry.path)
+      setRecentProjectsError(null)
+    } catch (error: unknown) {
+      setRecentProjectsError(error instanceof PlatformFileError ? error.message : 'The Project could not be revealed in Finder or Explorer.')
+    }
   }
 
   const renameRecentFile = async (entry: RecentProjectEntry) => {
@@ -483,9 +647,13 @@ function V2EditorApp() {
         nextPath = siblingPath(entry.path, duplicateFilename(entry.path, copyIndex))
       }
       await platformAdapter.copyProjectFile(entry.path, nextPath)
+      const nextThumbnailKey = recentProjectThumbnailKey(nextPath)
+      await platformAdapter.copyProjectThumbnail(entry.thumbnailKey, nextThumbnailKey)
       const stat = await platformAdapter.statFile(nextPath)
-      const nextEntry = createRecentProjectEntry({ ...entry, id: undefined, path: nextPath, lastOpenedAt: new Date().toISOString(), lastKnownModifiedAt: stat?.modifiedAt ?? entry.lastKnownModifiedAt, missing: false, modifiedSinceLastOpen: false })
+      const nextEntry = createRecentProjectEntry({ ...entry, id: undefined, path: nextPath, thumbnailKey: nextThumbnailKey, lastOpenedAt: new Date().toISOString(), lastKnownModifiedAt: stat?.modifiedAt ?? entry.lastKnownModifiedAt, missing: false, modifiedSinceLastOpen: false })
       await persistRecentProjects(upsertRecentProject(recentProjectsRef.current, nextEntry))
+      const thumbnail = await platformAdapter.loadProjectThumbnail(nextThumbnailKey)
+      if (thumbnail) setRecentProjectThumbnails((current) => ({ ...current, [nextThumbnailKey]: thumbnail }))
       setRecentProjectsError(null)
     } catch (error: unknown) {
       setRecentProjectsError(error instanceof PlatformFileError ? error.message : 'This Project file could not be duplicated.')
@@ -498,6 +666,12 @@ function V2EditorApp() {
     try {
       await platformAdapter.deleteProjectFile(entry.path)
       await persistRecentProjects(removeRecentProject(recentProjectsRef.current, entry.path))
+      await platformAdapter.deleteProjectThumbnail(entry.thumbnailKey)
+      setRecentProjectThumbnails((current) => {
+        const next = { ...current }
+        delete next[entry.thumbnailKey]
+        return next
+      })
       setRecentProjectsError(null)
     } catch (error: unknown) {
       setRecentProjectsError(error instanceof PlatformFileError ? error.message : 'This Project file could not be deleted.')
@@ -965,6 +1139,17 @@ function V2EditorApp() {
     const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, timeline: removeTimelineKeyframe(before.timeline, trackId, keyframeId) }
     recordAction('Delete Keyframe', before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
     applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current })
+    setSelectedTimelineKeyframe(null)
+  }
+
+  const moveKeyframe = (trackId: string, keyframeId: string, frame: number) => {
+    const before = sceneDocumentRef.current
+    const track = before.timeline.tracks.find((item) => item.id === trackId)
+    const source = track?.keyframes.find((keyframe) => keyframe.id === keyframeId)
+    if (!source || source.frame === frame) return
+    const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, timeline: moveTimelineKeyframe(before.timeline, trackId, keyframeId, frame) }
+    recordAction('Move Keyframe', before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
+    applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current })
   }
 
   const stepFrame = (amount: number) => setCurrentFrame(sceneDocumentRef.current.timeline.currentFrame + amount)
@@ -1150,23 +1335,33 @@ function V2EditorApp() {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target instanceof HTMLElement ? event.target : null
       const isTextEditing = Boolean(target && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable))
-      const commandKey = event.metaKey || event.ctrlKey
-      if (!isTextEditing && commandKey && event.key.toLowerCase() === 'o' && workspaceModeRef.current === 'library') {
+      const bindings = shortcutBindingsRef.current
+      if (!isTextEditing && shortcutMatches(event, bindings.open)) {
         event.preventDefault()
         loadProjectRef.current()
         return
       }
-      if (!isTextEditing && commandKey && event.key.toLowerCase() === 'n' && workspaceModeRef.current === 'library') {
+      if (!isTextEditing && shortcutMatches(event, bindings.newProject)) {
         event.preventDefault()
         newProjectRef.current()
         return
       }
-      if (timelinePlayPauseShortcut(event.key, isTextEditing) && !event.repeat) {
+      if (!isTextEditing && shortcutMatches(event, bindings.save) && workspaceModeRef.current === 'editor') {
+        event.preventDefault()
+        saveProjectRef.current()
+        return
+      }
+      if (!isTextEditing && shortcutMatches(event, bindings.saveAs) && workspaceModeRef.current === 'editor') {
+        event.preventDefault()
+        saveProjectAsRef.current()
+        return
+      }
+      if (!isTextEditing && shortcutMatches(event, bindings.playPause) && !event.repeat) {
         event.preventDefault()
         togglePlaybackRef.current()
         return
       }
-      const markShortcut = timelineMarkShortcutForKey(event.key, isTextEditing)
+      const markShortcut = !isTextEditing && shortcutMatches(event, bindings.markIn) ? 'in' : !isTextEditing && shortcutMatches(event, bindings.markOut) ? 'out' : null
       if (markShortcut && !event.repeat && !isPlayingRef.current) {
         event.preventDefault()
         changeMark(markShortcut)
@@ -1179,7 +1374,16 @@ function V2EditorApp() {
         if (handled) event.preventDefault()
         return
       }
-      if (deleteShortcutForKey(event.key, isTextEditing)) {
+      const destructiveTarget = destructiveShortcutTarget(event.key, isTextEditing, selectedTimelineKeyframeRef.current !== null, selectedEntityIdRef.current !== null)
+      if (destructiveTarget === 'keyframe') {
+        const timelineKeyframe = selectedTimelineKeyframeRef.current
+        if (timelineKeyframe) {
+          deleteKeyframe(timelineKeyframe.trackId, timelineKeyframe.keyframeId)
+          event.preventDefault()
+          return
+        }
+      }
+      if (destructiveTarget === 'entity') {
         const selected = selectedEntityIdRef.current
         if (selected === null) return
         deleteEntity(selected as string)
@@ -1191,7 +1395,7 @@ function V2EditorApp() {
   }, [])
 
   if (workspaceMode === 'library') {
-    return <V2ProjectLibrary entries={recentProjects} loading={recentProjectsLoading} error={recentProjectsError} onNewProject={newProject} onOpenProject={loadProject} onOpenRecent={openRecentProject} onLocate={locateRecentProject} onRemove={removeRecent} onRename={renameRecentFile} onDuplicate={duplicateRecentFile} onDelete={deleteRecentFile} />
+    return <><V2ProjectLibrary entries={recentProjects} thumbnails={recentProjectThumbnails} loading={recentProjectsLoading} error={recentProjectsError} dropState={desktopDropState} revealLabel={platformAdapter.revealProjectLabel} onNewProject={newProject} onOpenProject={loadProject} onOpenRecent={openRecentProject} onLocate={locateRecentProject} onReveal={revealRecentFile} onRemove={removeRecent} onRename={renameRecentFile} onDuplicate={duplicateRecentFile} onDelete={deleteRecentFile} onOpenSettings={() => setShortcutSettingsOpen(true)} />{shortcutSettingsOpen ? <V2ShortcutSettings bindings={shortcutBindings} onChange={updateShortcut} onReset={resetShortcuts} onClose={() => setShortcutSettingsOpen(false)} /> : null}</>
   }
 
   const timelineBounds = timelineHeightBounds(typeof window === 'undefined' ? 900 : window.innerHeight)
@@ -1199,6 +1403,7 @@ function V2EditorApp() {
 
   return (
     <main ref={appShellRef} className={`v2-app-shell${isResizingTimeline ? ' is-resizing-timeline' : ''}`} style={appShellStyle}>
+      {desktopDropState === 'valid' ? <div className="v2-desktop-drop-feedback" role="status">Drop .ndblock to open this Project</div> : null}
       <V2TopBar projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} view={view} onViewChange={handleViewChange} onNewProject={newProject} onBackToLibrary={platformAdapter.kind === 'desktop' ? returnToLibrary : undefined} onSaveProject={saveProject} onSaveProjectAs={saveProjectAs} onLoadProject={loadProject} onProjectNameChange={renameProject} onExport={openExport} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'finalizing'} />
       <V2ScenePanel scenes={projectDocument.scenes} activeSceneId={projectDocument.activeSceneId} actors={sceneDocument.actors} props={sceneDocument.props} walls={sceneDocument.walls} openings={sceneDocument.openings} lights={sceneDocument.lights} cameras={sceneDocument.cameras} activeCameraId={sceneDocument.activeCameraId} selectedEntityId={selectedEntityId} onSelectScene={switchScene} onAddScene={addScene} onRenameScene={renameScene} onDuplicateScene={duplicateScene} onDeleteScene={deleteScene} onImportScene={importScene} onExportScene={exportScene} onAddActor={addActor} onAddProp={addProp} onAddWall={addWall} onAddOpening={addOpening} onAddSun={addSun} onAddCamera={addCamera} onSetActiveCamera={setActiveCamera} onSelectEntity={handleSelectionChange} />
       <V2Stage
@@ -1235,6 +1440,8 @@ function V2EditorApp() {
         isScrubbing={isScrubbing}
         lastTransformDebug={lastTransformDebug}
         selectedFrameGuideId={selectedFrameGuideId}
+        thumbnailCaptureRef={thumbnailCaptureRef}
+        shortcutBindings={shortcutBindings}
       />
       <V2DetailsPanel actor={selectedActor} prop={selectedProp} wall={selectedWall} opening={selectedOpening} sun={selectedSun} camera={selectedCamera} timeline={sceneDocument.timeline} onActorChange={updateActor} onPropChange={updateProp} onCameraChange={updateCamera} onWallChange={updateWall} onOpeningChange={updateOpening} onSunChange={updateSun} onDuplicateEntity={duplicateEntity} onDeleteEntity={deleteEntity} onSetActiveCamera={setActiveCamera} onAddKeyframe={addKeyframe} activeCameraId={sceneDocument.activeCameraId} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={setSelectedFrameGuideId} />
       <div
@@ -1261,9 +1468,10 @@ function V2EditorApp() {
           }
         }}
       ><span aria-hidden="true" /></div>
-      <V2Timeline timeline={sceneDocument.timeline} tracks={sceneDocument.timeline.tracks} entities={timelineEntities} selectedEntityId={selectedEntityId} isPlaying={isPlaying} onFrameChange={setCurrentFrame} onFrameRateChange={changeFrameRate} onTogglePlayback={togglePlayback} onStepFrame={stepFrame} onMarkIn={() => changeMark('in')} onMarkOut={() => changeMark('out')} onDeleteKeyframe={deleteKeyframe} onEntitySelect={handleSelectionChange} onScrubStart={() => setIsScrubbing(true)} onScrubEnd={() => setIsScrubbing(false)} />
+      <V2Timeline timeline={sceneDocument.timeline} tracks={sceneDocument.timeline.tracks} entities={timelineEntities} selectedEntityId={selectedEntityId} isPlaying={isPlaying} onFrameChange={setCurrentFrame} onFrameRateChange={changeFrameRate} onTogglePlayback={togglePlayback} onStepFrame={stepFrame} onMarkIn={() => changeMark('in')} onMarkOut={() => changeMark('out')} onMoveKeyframe={moveKeyframe} selectedKeyframe={selectedTimelineKeyframe} onKeyframeSelect={setSelectedTimelineKeyframe} onEntitySelect={handleSelectionChange} onScrubStart={() => setIsScrubbing(true)} onScrubEnd={() => setIsScrubbing(false)} />
       {exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'finalizing' ? <div className="v2-export-lock" aria-hidden="true" /> : null}
       {exportOpen ? <V2ExportModal document={sceneDocument} projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} settings={exportSettings} status={exportStatus} progress={exportProgress} error={exportError} onSettingsChange={setExportSettings} onExport={startExport} onCancel={cancelExport} onClose={() => setExportOpen(false)} /> : null}
+      {shortcutSettingsOpen ? <V2ShortcutSettings bindings={shortcutBindings} onChange={updateShortcut} onReset={resetShortcuts} onClose={() => setShortcutSettingsOpen(false)} /> : null}
     </main>
   )
 }

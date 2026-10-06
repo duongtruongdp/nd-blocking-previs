@@ -33,8 +33,24 @@ export function clampTimelineFrame(frame: number, startFrame: number, endFrame: 
 }
 
 export function frameToTimelinePercent(frame: number, timeline: Pick<TimelineDocument, 'startFrame' | 'endFrame'>): number {
-  const range = Math.max(1, timeline.endFrame - timeline.startFrame)
-  return Math.min(100, Math.max(0, ((frame - timeline.startFrame) / range) * 100))
+  return Math.min(100, Math.max(0, frameToTimelineX(frame, { left: 0, width: 100, startFrame: timeline.startFrame, endFrame: timeline.endFrame })))
+}
+
+export type TimelineFrameGeometry = {
+  left: number
+  width: number
+  startFrame: number
+  endFrame: number
+}
+
+export function frameToTimelineX(frame: number, geometry: TimelineFrameGeometry): number {
+  const range = Math.max(1, geometry.endFrame - geometry.startFrame)
+  return geometry.left + ((frame - geometry.startFrame) / range) * geometry.width
+}
+
+export function timelineXToFrame(x: number, geometry: TimelineFrameGeometry): number {
+  const range = Math.max(1, geometry.endFrame - geometry.startFrame)
+  return clampTimelineFrame(geometry.startFrame + ((x - geometry.left) / Math.max(1, geometry.width)) * range, geometry.startFrame, geometry.endFrame)
 }
 
 export function setTimelineMark(timeline: TimelineDocument, kind: 'in' | 'out', frame: number): TimelineDocument {
@@ -96,6 +112,24 @@ export function removeTimelineKeyframe(timeline: TimelineDocument, trackId: stri
     tracks: timeline.tracks.flatMap((track) => {
       if (track.id !== trackId) return [track]
       const keyframes = track.keyframes.filter((keyframe) => keyframe.id !== keyframeId)
+      return keyframes.length > 0 ? [{ ...track, keyframes }] : []
+    }),
+  }
+}
+
+/** Move one keyframe, replacing a same-track destination deterministically. */
+export function moveTimelineKeyframe(timeline: TimelineDocument, trackId: string, keyframeId: string, targetFrame: number): TimelineDocument {
+  return {
+    ...timeline,
+    tracks: timeline.tracks.flatMap((track) => {
+      if (track.id !== trackId) return [track]
+      const source = track.keyframes.find((keyframe) => keyframe.id === keyframeId)
+      if (!source) return [track]
+      const frame = clampTimelineFrame(targetFrame, timeline.startFrame, timeline.endFrame)
+      const keyframes = track.keyframes
+        .filter((keyframe) => keyframe.id !== keyframeId && keyframe.frame !== frame)
+        .concat([{ ...source, frame }])
+        .sort((a, b) => a.frame - b.frame)
       return keyframes.length > 0 ? [{ ...track, keyframes }] : []
     }),
   }

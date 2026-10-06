@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import type { RationalFrameRate, TimelineDocument, TimelineProperty, TimelineTrack } from '../core/sceneDocument'
-import { TIMELINE_FRAME_RATES, clampTimelineFrame, frameRateLabel, frameToTimelinePercent } from '../timeline/timelineMath'
+import { TIMELINE_FRAME_RATES, frameRateLabel, frameToTimelinePercent, timelineXToFrame } from '../timeline/timelineMath'
 import { groupTimelineTracks, type TimelineEntityDescriptor } from '../timeline/timelineGroups'
 
 type V2TimelineProps = {
@@ -15,7 +15,9 @@ type V2TimelineProps = {
   onStepFrame: (amount: number) => void
   onMarkIn: () => void
   onMarkOut: () => void
-  onDeleteKeyframe: (trackId: string, keyframeId: string) => void
+  onMoveKeyframe: (trackId: string, keyframeId: string, frame: number) => void
+  selectedKeyframe: { trackId: string; keyframeId: string } | null
+  onKeyframeSelect: (selection: { trackId: string; keyframeId: string } | null) => void
   onEntitySelect: (entityId: string) => void
   onScrubStart: () => void
   onScrubEnd: () => void
@@ -35,27 +37,14 @@ const propertyLabels: Record<TimelineProperty, string> = {
 
 function frameFromPointer(clientX: number, element: HTMLDivElement, timeline: TimelineDocument): number {
   const bounds = element.getBoundingClientRect()
-  const amount = Math.min(1, Math.max(0, (clientX - bounds.left) / Math.max(1, bounds.width)))
-  return clampTimelineFrame(timeline.startFrame + amount * (timeline.endFrame - timeline.startFrame), timeline.startFrame, timeline.endFrame)
+  return timelineXToFrame(clientX, { left: bounds.left, width: bounds.width, startFrame: timeline.startFrame, endFrame: timeline.endFrame })
 }
 
-export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPlaying, onFrameChange, onFrameRateChange, onTogglePlayback, onStepFrame, onMarkIn, onMarkOut, onDeleteKeyframe, onEntitySelect, onScrubStart, onScrubEnd }: V2TimelineProps) {
+export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPlaying, onFrameChange, onFrameRateChange, onTogglePlayback, onStepFrame, onMarkIn, onMarkOut, onMoveKeyframe, selectedKeyframe, onKeyframeSelect, onEntitySelect, onScrubStart, onScrubEnd }: V2TimelineProps) {
   const rulerRef = useRef<HTMLDivElement>(null)
-  const [selectedKeyframe, setSelectedKeyframe] = useState<{ trackId: string; keyframeId: string } | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
+  const [draggingKeyframe, setDraggingKeyframe] = useState<{ trackId: string; keyframeId: string; frame: number } | null>(null)
   const groups = groupTimelineTracks(tracks, entities)
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (isPlaying || !selectedKeyframe || (event.target instanceof HTMLElement && (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement || event.target.isContentEditable))) return
-      if (event.key !== 'Delete' && event.key !== 'Backspace') return
-      event.preventDefault()
-      onDeleteKeyframe(selectedKeyframe.trackId, selectedKeyframe.keyframeId)
-      setSelectedKeyframe(null)
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isPlaying, onDeleteKeyframe, selectedKeyframe])
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (isPlaying || !rulerRef.current) return
@@ -83,7 +72,7 @@ export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPla
           <span className="v2-eyebrow">Shot Planning</span>
           <h2>Timeline</h2>
         </div>
-        <label className="v2-frame-rate">FPS<select value={rateValue} onChange={(event) => {
+        <label className="v2-frame-rate">FPS<select className="v2-select" value={rateValue} onChange={(event) => {
           const selected = TIMELINE_FRAME_RATES.find((rate) => `${rate.numerator}/${rate.denominator}` === event.target.value)
           if (selected) onFrameRateChange(selected)
         }} disabled={isPlaying}>{TIMELINE_FRAME_RATES.map((rate) => <option key={`${rate.numerator}/${rate.denominator}`} value={`${rate.numerator}/${rate.denominator}`}>{frameRateLabel(rate)}</option>)}</select></label>
@@ -123,7 +112,31 @@ export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPla
                       <div className={`v2-timeline-track${track.entityId === selectedEntityId ? ' is-selected' : ''}`} key={track.id}>
                         <span className="v2-timeline-track-name">{propertyLabels[track.property]}</span>
                         <div className="v2-timeline-track-lane">
-                          {track.keyframes.map((keyframe) => <button className={`v2-timeline-keyframe${keyframe.frame === timeline.currentFrame ? ' is-current' : ''}${selectedKeyframe?.trackId === track.id && selectedKeyframe.keyframeId === keyframe.id ? ' is-selected' : ''}`} key={keyframe.id} style={{ left: `${frameToTimelinePercent(keyframe.frame, timeline)}%` }} title={`${group.name} · ${propertyLabels[track.property]} · frame ${keyframe.frame}`} aria-label={`Select ${group.name} ${propertyLabels[track.property]} keyframe at frame ${keyframe.frame}`} onClick={() => setSelectedKeyframe({ trackId: track.id, keyframeId: keyframe.id })} type="button" />)}
+                          {track.keyframes.map((keyframe) => {
+                            const isDragging = draggingKeyframe?.trackId === track.id && draggingKeyframe.keyframeId === keyframe.id
+                            const displayFrame = isDragging ? draggingKeyframe.frame : keyframe.frame
+                            const selection = { trackId: track.id, keyframeId: keyframe.id }
+                            return <button className={`v2-timeline-keyframe${keyframe.frame === timeline.currentFrame ? ' is-current' : ''}${selectedKeyframe?.trackId === track.id && selectedKeyframe.keyframeId === keyframe.id ? ' is-selected' : ''}${isDragging ? ' is-dragging' : ''}`} key={keyframe.id} style={{ left: `${frameToTimelinePercent(displayFrame, timeline)}%` }} title={`${group.name} · ${propertyLabels[track.property]} · frame ${displayFrame}`} aria-label={`Select ${group.name} ${propertyLabels[track.property]} keyframe at frame ${displayFrame}`} onPointerDown={(event) => {
+                              if (isPlaying) return
+                              event.preventDefault()
+                              event.stopPropagation()
+                              onKeyframeSelect(selection)
+                              event.currentTarget.setPointerCapture(event.pointerId)
+                              setDraggingKeyframe({ ...selection, frame: keyframe.frame })
+                            }} onPointerMove={(event) => {
+                              if (!draggingKeyframe || draggingKeyframe.trackId !== track.id || draggingKeyframe.keyframeId !== keyframe.id || !event.currentTarget.hasPointerCapture(event.pointerId)) return
+                              const lane = event.currentTarget.parentElement
+                              if (!lane) return
+                              const bounds = lane.getBoundingClientRect()
+                              setDraggingKeyframe((current) => current ? { ...current, frame: timelineXToFrame(event.clientX, { left: bounds.left, width: bounds.width, startFrame: timeline.startFrame, endFrame: timeline.endFrame }) } : current)
+                            }} onPointerUp={(event) => {
+                              if (!draggingKeyframe || draggingKeyframe.trackId !== track.id || draggingKeyframe.keyframeId !== keyframe.id) return
+                              if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+                              const targetFrame = draggingKeyframe.frame
+                              setDraggingKeyframe(null)
+                              if (targetFrame !== keyframe.frame) onMoveKeyframe(track.id, keyframe.id, targetFrame)
+                            }} onPointerCancel={() => setDraggingKeyframe(null)} onClick={() => onKeyframeSelect(selection)} type="button" />
+                          })}
                         </div>
                       </div>
                     )) : null}

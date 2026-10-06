@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type MutableRefObject } from 'react'
 import type { ActorDocument, ActorVector3, CameraDocument, OpeningDocument, PropDocument, SunDocument, WallDocument } from '../core/sceneDocument'
 import { cameraDisplayAspect, cameraProjectionForDocument, letterboxRect } from '../runtime/cameraMath'
 import { deliveryAspectValue, fitAspectInsideSource, insetFrameGuideRect } from '../runtime/frameGuideMath'
@@ -15,6 +15,7 @@ import { WallDrawingController, type WallDrawingState } from '../architecture/wa
 import { resolveOpeningAgainstWalls } from '../architecture/wallMath'
 import { STILL_CAPTURE_WIDTHS, type StillCaptureOptions, type StillCaptureWidth } from '../runtime/stillCapture'
 import { cameraOverlayMode, compactPreviewOverlayPolicy, fullCameraInfoLines, layoutOverlayLabels, previewCameraLabel, type OverlayLabelPlacement, type OverlayRect } from '../runtime/cameraOverlayLayout'
+import type { ShortcutBinding } from '../core/shortcutRegistry'
 
 export type V2TransformDebugState = {
   entityId: string
@@ -58,6 +59,8 @@ type V2StageProps = {
   isScrubbing: boolean
   lastTransformDebug: V2TransformDebugState | null
   selectedFrameGuideId: string | null
+  thumbnailCaptureRef: MutableRefObject<(() => Promise<Blob | null>) | null>
+  shortcutBindings: Partial<Record<'select' | 'move' | 'rotate' | 'scale' | 'frameSelected', ShortcutBinding>>
 }
 
 function syncActors(engine: StageEngine, actors: readonly ActorDocument[], runtimes: Map<string, ProceduralActorRuntime>): void {
@@ -136,7 +139,7 @@ function deliveryAspect(camera: CameraDocument): number {
   return deliveryAspectValue(camera.deliveryAspectRatio, cameraDisplayAspect(camera))
 }
 
-export function V2Stage({ view, actors, props, walls, openings, lights, cameras, activeCameraId, selectedEntityId, tool, onSelectionChange, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onCaptureFrameReady, cameraPreview, onCameraPreviewChange, onOpenCameraView, wallDrawing, wallDrawState, onWallDrawCommit, onWallDrawState, onWallDrawExit, snapPreviewWallId, evaluatedEntities, isPlaying, transformingEntityId, suspendedTimelineEntityIds, timeline, isScrubbing, lastTransformDebug, selectedFrameGuideId }: V2StageProps) {
+export function V2Stage({ view, actors, props, walls, openings, lights, cameras, activeCameraId, selectedEntityId, tool, onSelectionChange, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onCaptureFrameReady, cameraPreview, onCameraPreviewChange, onOpenCameraView, wallDrawing, wallDrawState, onWallDrawCommit, onWallDrawState, onWallDrawExit, snapPreviewWallId, evaluatedEntities, isPlaying, transformingEntityId, suspendedTimelineEntityIds, timeline, isScrubbing, lastTransformDebug, selectedFrameGuideId, thumbnailCaptureRef, shortcutBindings }: V2StageProps) {
   const stageRef = useRef<HTMLDivElement>(null)
   const engineRef = useRef<StageEngine | null>(null)
   const cameraViewRef = useRef<CameraViewRuntime | null>(null)
@@ -145,6 +148,7 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
   const scenicRuntimesRef = useRef(new Map<string, ScenicVisual>())
   const wallDrawingRef = useRef<WallDrawingController | null>(null)
   const initialStageRef = useRef({ actors, props, walls, openings, lights, cameras, selectedEntityId, tool })
+  const initialShortcutBindingsRef = useRef(shortcutBindings)
   const initialToolRef = useRef(tool)
   const [viewportSize, setViewportSize] = useState({ width: 1, height: 1 })
   const [captureWidth, setCaptureWidth] = useState<StillCaptureWidth>(1920)
@@ -173,6 +177,8 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
         callbacksRef.current.onTransformPreview(change)
       },
       debugEnabled: false,
+      toolShortcuts: Object.fromEntries((['select', 'move', 'rotate', 'scale'] as const).map((key) => [key, initialShortcutBindingsRef.current[key]?.key ?? ({ select: 'e', move: 'q', rotate: 'r', scale: 's' }[key])])),
+      frameSelectedShortcut: initialShortcutBindingsRef.current.frameSelected?.key ?? 'f',
     })
     const wallDrawingController = new WallDrawingController(engine, {
       onCommit: (start, end) => callbacksRef.current.onWallDrawCommit(start, end),
@@ -198,7 +204,9 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
     engine.setTool(initialToolRef.current)
     engine.setSelected(initial.selectedEntityId)
     engineRef.current = engine
+    thumbnailCaptureRef.current = () => cameraViewRef.current?.captureStill({ width: 320, includeGuides: false }) ?? Promise.resolve(null)
     return () => {
+      thumbnailCaptureRef.current = null
       removeSelectionListener()
       engineRef.current = null
       cameraViewRef.current = null
@@ -233,6 +241,10 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
   useEffect(() => {
     engineRef.current?.setTool(tool)
   }, [tool])
+
+  useEffect(() => {
+    engineRef.current?.setShortcutBindings(Object.fromEntries((['select', 'move', 'rotate', 'scale'] as const).map((key) => [key, shortcutBindings[key]?.key ?? ({ select: 'e', move: 'q', rotate: 'r', scale: 's' }[key])])), shortcutBindings.frameSelected?.key ?? 'f')
+  }, [shortcutBindings])
 
   useEffect(() => {
     wallDrawingRef.current?.setActive(wallDrawing)
@@ -311,7 +323,7 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
       <div className={`v2-stage-viewport v2-view-${view}`} ref={stageRef}>
         {graphicsContextMessage ? <div className="v2-runtime-notice" role="alert"><strong>Graphics unavailable</strong><span>{graphicsContextMessage}</span><button className="v2-button v2-button-primary" onClick={() => window.location.reload()} type="button">Reload App</button></div> : null}
         {view === 'blocking' ? <div className="v2-stage-header">
-          <span className="v2-stage-pill">Blocking View</span>
+          <button className={`v2-camera-preview-toggle${cameraPreview ? ' is-active' : ''}`} onClick={() => onCameraPreviewChange(!cameraPreview)} type="button">{cameraPreview ? 'Hide Camera Preview' : 'Camera Preview'}</button>
           <span>Stage</span>
         </div> : null}
         {view === 'blocking' ? (
@@ -321,13 +333,12 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
                 const selectedProp = props.find((prop) => prop.id === selectedEntityId)
                 const scaleAvailable = Boolean(selectedProp && ['cube', 'sphere', 'cylinder'].includes(selectedProp.propType ?? selectedProp.shape))
                 return <button className={tool === item ? 'is-active' : ''} key={item} disabled={isPlaying || (item === 'scale' && !scaleAvailable)} onClick={() => onToolChange(item)} type="button">
-                  <span>{item === 'select' ? 'E' : item === 'move' ? 'Q' : item === 'rotate' ? 'R' : 'S'}</span>{item[0].toUpperCase() + item.slice(1)}
+                  <span>{(shortcutBindings[item]?.key ?? ({ select: 'e', move: 'q', rotate: 'r', scale: 's' }[item])).toUpperCase()}</span>{item[0].toUpperCase() + item.slice(1)}
                 </button>
               })}
             </div>
             <div className="v2-stage-hint">E Select · Q Move · R Rotate · S Scale · Left drag orbit · Right drag pan · Two-finger scroll pan · Pinch zoom</div>
             {wallDrawing ? <div className="v2-wall-draw-status"><strong>DRAW WALL</strong><span>{wallDrawState.start ? wallDrawState.end ? `${wallDrawState.length.toFixed(2)} m · Click to commit next segment` : 'Move to set wall length' : 'Click a ground point to start'}</span><small>Shift 45° · Ctrl/Cmd grid · Esc cancel</small></div> : null}
-            <button className={`v2-camera-preview-toggle${cameraPreview ? ' is-active' : ''}`} onClick={() => onCameraPreviewChange(!cameraPreview)} type="button">{cameraPreview ? 'Hide Camera Preview' : 'Camera Preview'}</button>
             {cameraPreview ? <div className="v2-camera-preview-ui" style={{ aspectRatio: activeCamera ? deliveryAspect(activeCamera) : 16 / 9 }} onClick={() => { if (activeCamera) onOpenCameraView() }} role={activeCamera ? 'button' : undefined} tabIndex={activeCamera ? 0 : undefined}>
               {activeCamera ? <>
                 <div className="v2-camera-preview-label" aria-label={previewCameraLabel(activeCamera.name, activeCamera.focalLengthMm, previewWidth)}><strong>{previewCameraLabel(activeCamera.name, activeCamera.focalLengthMm, previewWidth)}</strong></div>
@@ -345,7 +356,7 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
               <CameraFrameOverlays camera={activeCamera} sourceAspect={imageAspect} imageRect={imageRect} selectedFrameGuideId={selectedFrameGuideId} compact={cameraOverlayMode(viewportSize.width) === 'compact'} />
             </div>
             <div className="v2-camera-view-controls" aria-label="Camera View controls">
-              <label>Still <select value={captureWidth} onChange={(event) => setCaptureWidth(Number(event.target.value) as StillCaptureWidth)}>{STILL_CAPTURE_WIDTHS.map((width) => <option key={width} value={width}>{width}px</option>)}</select></label>
+              <label>Still <select className="v2-select" value={captureWidth} onChange={(event) => setCaptureWidth(Number(event.target.value) as StillCaptureWidth)}>{STILL_CAPTURE_WIDTHS.map((width) => <option key={width} value={width}>{width}px</option>)}</select></label>
               <label><input type="checkbox" checked={includeCaptureGuides} onChange={(event) => setIncludeCaptureGuides(event.target.checked)} /> Include Guides</label>
               <button onClick={captureFrame} type="button">Capture Frame</button>
             </div>

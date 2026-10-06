@@ -7,7 +7,7 @@ export const STILL_CAPTURE_WIDTHS = [1280, 1920, 2560] as const
 export type StillCaptureWidth = typeof STILL_CAPTURE_WIDTHS[number]
 
 export type StillCaptureOptions = {
-  width: StillCaptureWidth
+  width: StillCaptureWidth | number
   includeGuides: boolean
 }
 

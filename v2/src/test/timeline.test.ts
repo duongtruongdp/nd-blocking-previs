@@ -6,7 +6,7 @@ import { createDefaultProps } from '../scene/testEntities'
 import { cameraProjectionForDocument } from '../runtime/cameraMath'
 import { createPlaybackClock, playbackFrameAt, playbackReachedMarkOut } from '../timeline/playbackClock'
 import { evaluateTimeline } from '../timeline/timelineEvaluator'
-import { TIMELINE_FRAME_RATES, frameToSeconds, interpolateAngleRadians, interpolateScalar, interpolateVector, secondsToFrame, setTimelineMark, upsertTimelineKeyframe } from '../timeline/timelineMath'
+import { TIMELINE_FRAME_RATES, frameToSeconds, frameToTimelineX, interpolateAngleRadians, interpolateScalar, interpolateVector, moveTimelineKeyframe, secondsToFrame, setTimelineMark, timelineXToFrame, upsertTimelineKeyframe } from '../timeline/timelineMath'
 
 describe('V2 timeline foundation', () => {
   it('keeps supported frame rates rational and converts frames without float time storage', () => {
@@ -85,6 +85,22 @@ describe('V2 timeline foundation', () => {
     expect(setTimelineMark(timeline, 'in', 90)).toMatchObject({ markIn: 90, markOut: 120 })
     expect(setTimelineMark(timeline, 'out', 10)).toMatchObject({ markIn: 0, markOut: 10 })
     expect(setTimelineMark({ ...timeline, markIn: 40 }, 'out', 10).markIn).toBe(10)
+  })
+
+  it('uses one frame/X mapping for ruler, playhead, and keyframes', () => {
+    const geometry = { left: 104, width: 876, startFrame: 0, endFrame: 120 }
+    for (const frame of [0, 1, 24, 48, 96, 120]) {
+      expect(timelineXToFrame(frameToTimelineX(frame, geometry), geometry)).toBe(frame)
+    }
+  })
+
+  it('moves one keyframe without changing its value and replaces a collision', () => {
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, 'actor-01', 'Actor', 'position', 48, [1, 2, 3])
+    timeline = upsertTimelineKeyframe(timeline, 'actor-01', 'Actor', 'position', 72, [9, 9, 9])
+    const moved = moveTimelineKeyframe(timeline, 'actor-01:position', 'actor-01:position:48', 72)
+    expect(moved.tracks[0].keyframes).toHaveLength(1)
+    expect(moved.tracks[0].keyframes[0]).toMatchObject({ frame: 72, value: [1, 2, 3], id: 'actor-01:position:48' })
   })
 
   it('advances at the rational frame rate and stops at Mark Out', () => {

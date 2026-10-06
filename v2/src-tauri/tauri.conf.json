@@ -28,6 +28,20 @@
   },
   "bundle": {
     "active": true,
+    "fileAssociations": [
+      {
+        "ext": ["ndblock"],
+        "name": "ND Blocking Project",
+        "description": "ND Blocking Project",
+        "mimeType": "application/x-ndblock",
+        "role": "Editor",
+        "rank": "Owner",
+        "exportedType": {
+          "identifier": "net.duongtruongdp.blocking.project",
+          "conformsTo": ["public.data"]
+        }
+      }
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/64x64.png",

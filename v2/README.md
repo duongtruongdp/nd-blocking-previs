@@ -51,7 +51,8 @@ hosting, HTTPS, browser capability, staging, and WordPress separation guidance.
 
 ## Desktop shell
 
-V2.12 adds a native Project Library to the optional Tauri 2 desktop shell
+V2.13 adds a polished native Project Library, local thumbnails, `.ndblock`
+file association, and single-instance open routing to the optional Tauri 2 desktop shell
 around this same frontend. The browser build still opens directly in the
 editor; desktop starts in the library and uses the platform adapter for recent
 metadata, native project file operations, export locations, and the native

@@ -1,6 +1,7 @@
 # ND Blocking & Previs V2 desktop shell
 
-V2.12 adds a native Project Library to the Tauri 2 shell around the existing
+V2.13 adds a polished native Project Library and `.ndblock` file-opening path
+to the Tauri 2 shell around the existing
 V2 React, domain, and Stage runtime. The browser build still opens directly in
 the editor; the desktop build opens the library first and mounts the editor
 only after a Project is created or opened. The `.ndblock` project document and
@@ -23,6 +24,13 @@ with `npm run build:web` and does not depend on Tauri.
 
 The application identifier is `net.duongtruongdp.blocking`. The default window
 is resizable and starts at 1280 × 800 with no custom titlebar.
+
+The desktop bundle registers `.ndblock` as `ND Blocking Project` with the
+native operating system. A first launch opens an associated file directly in
+the editor. Later launches use the single-instance route to focus the existing
+window and deliver the requested path to the same Project-open controller.
+The association is declared in `v2/src-tauri/tauri.conf.json` and uses the
+existing neutral ND application icon.
 
 ## Platform boundary
 
@@ -68,13 +76,26 @@ The library supports:
   copy is added to Recent without opening it.
 - Delete Project File as a separate confirmed operation that removes only the
   selected `.ndblock` and then removes its recent metadata.
+- Recent cards use a compact two- or three-column grid with a 320 × 180-class
+  local thumbnail. After a successful desktop Project save, the read-only
+  Camera View capture path produces a small thumbnail without entering a
+  continuous render loop or changing the Project/Scene document. Thumbnail
+  bytes are stored in the platform app-data cache, keyed by recent-entry
+  metadata; stale thumbnails are acceptable and cleanup follows recent-entry
+  cleanup. If capture or storage fails, the branded ND fallback remains.
+- The card overflow menu provides Open, Rename File, Duplicate, Remove from
+  Recent, Delete Project File, and Show in Finder or Show in Explorer. Reveal
+  uses the official Tauri opener plugin and safely reports a missing path.
+- Desktop `.ndblock` drag-and-drop accepts the first supported Project path;
+  unsupported drops are ignored. The browser build has no global drop handler.
 
 Recent paths are restored across desktop launches through the filesystem
 scope persistence plugin, while recent metadata is stored locally in
-`recent-projects.json`. There are no thumbnails, autosave, recovery snapshots,
-cloud synchronization, templates, or alternate project formats in this
-milestone. Returning from the editor to Projects uses the existing Save /
-Don't Save / Cancel dirty-document guard.
+`recent-projects.json`. Thumbnail cache bytes are separate from both the
+`.ndblock` file and `ProjectDocument`. There are no autosave, recovery
+snapshots, cloud synchronization, templates, or alternate project formats in
+this milestone. Returning from the editor to Projects and opening another
+Project use the Save / Don't Save / Cancel dirty-document guard.
 
 The desktop close guard presents Save / Don't Save / Cancel when the project is
 dirty. The browser keeps its existing `beforeunload` behavior. There is no
@@ -95,6 +116,8 @@ capabilities guide](https://v2.tauri.app/security/capabilities/) and the
 [dialog](https://v2.tauri.app/plugin/dialog/) and
 [filesystem](https://v2.tauri.app/plugin/file-system/), [Store](https://v2.tauri.app/plugin/store/),
 and [Persisted Scope](https://v2.tauri.app/plugin/persisted-scope/) plugin documentation.
+Reveal behavior follows the [Tauri opener plugin](https://v2.tauri.app/plugin/opener/),
+while the desktop open handoff uses the [single-instance plugin](https://v2.tauri.app/plugin/single-instance/).
 
 ## Platform notes
 
@@ -136,5 +159,15 @@ Run `npm run desktop:dev` and verify:
     supported browser export format.
 22. Back to Projects and closing with unsaved changes show Save / Don't Save /
     Cancel and each choice behaves correctly.
+23. A saved Project shows a thumbnail or branded ND fallback in the library.
+24. Show in Finder / Show in Explorer reveals an existing Project file.
+25. Rename preserves the recent card thumbnail, Duplicate copies it when
+    available, and Remove from Recent / Delete Project File clean it up.
+26. Double-clicking an `.ndblock` opens the existing desktop instance or
+    focuses the current one and routes the Project path.
+27. Dropping multiple files opens only the first `.ndblock`; unsupported drops
+    are ignored.
+28. A dirty Project opened through association or drop offers Save, Don't
+    Save, and Cancel.
 
 This checklist is not a substitute for a Windows acceptance pass.

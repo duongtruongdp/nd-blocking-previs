@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { RECENT_PROJECT_LIMIT, basename, createRecentProjectEntry, duplicateFilename, filenameWithoutExtension, parseRecentProjects, projectFilenameFromInput, recentProjectIdentity, removeRecentProject, siblingPath, sortRecentProjects, updateRecentProjectPath, upsertRecentProject } from '../platform/projectLibrary'
+import { RECENT_PROJECT_LIMIT, basename, createRecentProjectEntry, duplicateFilename, filenameWithoutExtension, firstSupportedProjectPath, isProjectFilePath, parseRecentProjects, projectFilenameFromInput, recentProjectIdentity, recentProjectThumbnailKey, removeRecentProject, siblingPath, sortRecentProjects, updateRecentProjectPath, upsertRecentProject } from '../platform/projectLibrary'
 
 function entry(path: string, lastOpenedAt: string, missing = false) {
   return createRecentProjectEntry({ path, displayName: filenameWithoutExtension(path), lastOpenedAt, lastKnownModifiedAt: null, lastKnownSceneCount: 3, missing })
@@ -64,5 +64,18 @@ describe('recent Project library rules', () => {
     expect(siblingPath('C:\\Projects\\Shot.ndblock', duplicateFilename('C:\\Projects\\Shot.ndblock', 1))).toBe('C:\\Projects\\Shot Copy.ndblock')
     expect(siblingPath('/Projects/Shot.ndblock', duplicateFilename('/Projects/Shot.ndblock', 3))).toBe('/Projects/Shot Copy 3.ndblock')
     expect(basename('/Projects/Shot.ndblock')).toBe('Shot.ndblock')
+  })
+
+  it('creates stable thumbnail metadata without changing the project file', () => {
+    expect(recentProjectThumbnailKey('/Projects/Shot.ndblock')).toBe(recentProjectThumbnailKey('/Projects/Shot.ndblock'))
+    expect(recentProjectThumbnailKey('/Projects/Shot.ndblock')).not.toBe(recentProjectThumbnailKey('/Projects/Other.ndblock'))
+    expect(parseRecentProjects([{ path: '/Projects/Shot.ndblock', displayName: 'Shot', lastOpenedAt: '2026-01-01T00:00:00.000Z' }])[0].thumbnailKey).toBe(recentProjectThumbnailKey('/Projects/Shot.ndblock'))
+  })
+
+  it('routes only the first supported dropped project file', () => {
+    expect(isProjectFilePath('/shots/TAKE.NDBLOCK')).toBe(true)
+    expect(isProjectFilePath('/shots/TAKE.ndscene')).toBe(false)
+    expect(firstSupportedProjectPath(['/shots/notes.txt', '/shots/TAKE.ndblock', '/shots/SECOND.ndblock'])).toBe('/shots/TAKE.ndblock')
+    expect(firstSupportedProjectPath(['/shots/notes.txt'])).toBeNull()
   })
 })

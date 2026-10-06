@@ -165,9 +165,10 @@ export class ProceduralCameraRuntime {
     addBox('Base Plate', [0.78, 0.10, 0.82], [0, -0.34, 0.14], BODY_DARK)
     addBox('Top Deck', [0.62, 0.08, 0.48], [0, 0.34, 0.23], BODY_DARK)
 
-    addBox('Handle Support Front', [0.08, 0.22, 0.08], [-0.24, 0.49, 0.16], BODY_DARK)
-    addBox('Handle Support Rear', [0.08, 0.22, 0.08], [0.24, 0.49, 0.16], BODY_DARK)
-    addBox('Top Handle', [0.62, 0.14, 0.16], [0, 0.60, 0.16], BODY_LIGHT)
+    // The camera looks down -Z; the handle runs rear-to-front on that same axis.
+    addBox('Handle Support Rear', [0.08, 0.22, 0.08], [0, 0.49, 0.40], BODY_DARK)
+    addBox('Handle Support Front', [0.08, 0.22, 0.08], [0, 0.49, -0.18], BODY_DARK)
+    addBox('Top Handle', [0.16, 0.14, 0.62], [0, 0.60, 0.11], BODY_LIGHT)
 
     addCylinder('Lens Mount', 0.27, 0.13, [0, 0, -0.42], BODY_LIGHT)
     addCylinder('Rear Lens Barrel', 0.25, 0.18, [0, 0, -0.56], BODY_DARK)

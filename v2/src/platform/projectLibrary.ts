@@ -3,6 +3,7 @@ export const RECENT_PROJECT_LIMIT = 16
 export type RecentProjectEntry = {
   readonly id: string
   readonly path: string
+  readonly thumbnailKey: string
   readonly displayName: string
   readonly lastOpenedAt: string
   readonly lastKnownModifiedAt: string | null
@@ -11,7 +12,7 @@ export type RecentProjectEntry = {
   readonly modifiedSinceLastOpen: boolean
 }
 
-export type RecentProjectInput = Omit<RecentProjectEntry, 'id' | 'missing' | 'modifiedSinceLastOpen'> & { id?: string; missing?: boolean; modifiedSinceLastOpen?: boolean }
+export type RecentProjectInput = Omit<RecentProjectEntry, 'id' | 'thumbnailKey' | 'missing' | 'modifiedSinceLastOpen'> & { id?: string; thumbnailKey?: string; missing?: boolean; modifiedSinceLastOpen?: boolean }
 
 export function recentProjectIdentity(path: string): string {
   const normalized = path.replaceAll('\\', '/').replace(/\/+/g, '/')
@@ -22,6 +23,7 @@ export function createRecentProjectEntry(input: RecentProjectInput): RecentProje
   return {
     id: input.id ?? recentProjectIdentity(input.path),
     path: input.path,
+    thumbnailKey: input.thumbnailKey ?? recentProjectThumbnailKey(input.path),
     displayName: input.displayName,
     lastOpenedAt: input.lastOpenedAt,
     lastKnownModifiedAt: input.lastKnownModifiedAt,
@@ -29,6 +31,23 @@ export function createRecentProjectEntry(input: RecentProjectInput): RecentProje
     missing: input.missing ?? false,
     modifiedSinceLastOpen: input.modifiedSinceLastOpen ?? false,
   }
+}
+
+export function recentProjectThumbnailKey(path: string): string {
+  let hash = 2166136261
+  for (const character of recentProjectIdentity(path)) {
+    hash ^= character.codePointAt(0) ?? 0
+    hash = Math.imul(hash, 16777619)
+  }
+  return `project-${(hash >>> 0).toString(16).padStart(8, '0')}`
+}
+
+export function isProjectFilePath(path: string): boolean {
+  return path.trim().toLowerCase().endsWith('.ndblock')
+}
+
+export function firstSupportedProjectPath(paths: readonly string[]): string | null {
+  return paths.find(isProjectFilePath) ?? null
 }
 
 export function sortRecentProjects(entries: readonly RecentProjectEntry[]): RecentProjectEntry[] {
@@ -60,6 +79,7 @@ export function parseRecentProjects(value: unknown): RecentProjectEntry[] {
     return [createRecentProjectEntry({
       id: typeof record.id === 'string' ? record.id : undefined,
       path: record.path,
+      thumbnailKey: typeof record.thumbnailKey === 'string' ? record.thumbnailKey : undefined,
       displayName: record.displayName || filenameWithoutExtension(record.path),
       lastOpenedAt: record.lastOpenedAt,
       lastKnownModifiedAt: typeof record.lastKnownModifiedAt === 'string' ? record.lastKnownModifiedAt : null,

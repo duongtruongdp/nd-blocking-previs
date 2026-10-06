@@ -17,6 +17,12 @@ describe('platform adapter foundation', () => {
     await expect(webPlatformAdapter.chooseExportLocation('shot.webm', 'webm')).resolves.toBeNull()
   })
 
+  it('keeps desktop-only library features inert in the browser adapter', async () => {
+    expect(webPlatformAdapter.revealProjectLabel).toBe('Show in Finder')
+    await expect(webPlatformAdapter.loadProjectThumbnail('project-test')).resolves.toBeNull()
+    await expect(webPlatformAdapter.initialProjectPath()).resolves.toBeNull()
+  })
+
   it('maps unsaved close choices to native close decisions', () => {
     expect(closeDecisionForUnsavedChoice('discard')).toBe('close')
     expect(closeDecisionForUnsavedChoice('cancel')).toBe('cancel')

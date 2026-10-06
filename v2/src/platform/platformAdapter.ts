@@ -1,4 +1,5 @@
 import { parseRecentProjects, type RecentProjectEntry } from './projectLibrary'
+import type { ShortcutPreferences } from '../core/shortcutRegistry'
 
 export type PlatformKind = 'web' | 'desktop'
 
@@ -13,6 +14,12 @@ export type PlatformFile = {
 export type PlatformFileStat = {
   readonly modifiedAt: string | null
 }
+
+export type DesktopDropEvent =
+  | { readonly type: 'enter'; readonly paths: readonly string[] }
+  | { readonly type: 'over' }
+  | { readonly type: 'drop'; readonly paths: readonly string[] }
+  | { readonly type: 'leave' }
 
 export type PlatformSaveResult = {
   readonly cancelled: boolean
@@ -51,8 +58,20 @@ export type PlatformAdapter = {
   renameProjectFile: (path: string, nextPath: string) => Promise<void>
   copyProjectFile: (path: string, nextPath: string) => Promise<void>
   deleteProjectFile: (path: string) => Promise<void>
+  revealProjectFile: (path: string) => Promise<void>
+  readonly revealProjectLabel: string
+  initialProjectPath: () => Promise<string | null>
+  subscribeProjectOpen: (handler: (path: string) => void) => Promise<() => void>
+  subscribeProjectDrop: (handler: (event: DesktopDropEvent) => void) => Promise<() => void>
   loadRecentProjects: () => Promise<RecentProjectEntry[]>
   saveRecentProjects: (entries: readonly RecentProjectEntry[]) => Promise<void>
+  saveProjectThumbnail: (key: string, blob: Blob) => Promise<void>
+  loadProjectThumbnail: (key: string) => Promise<string | null>
+  copyProjectThumbnail: (sourceKey: string, targetKey: string) => Promise<void>
+  deleteProjectThumbnail: (key: string) => Promise<void>
+  cleanupProjectThumbnails: (activeKeys: readonly string[]) => Promise<void>
+  loadShortcutPreferences: () => Promise<ShortcutPreferences>
+  saveShortcutPreferences: (preferences: ShortcutPreferences) => Promise<void>
   promptUnsavedClose?: () => Promise<UnsavedCloseChoice>
   registerCloseGuard?: (handler: () => Promise<CloseDecision>) => Promise<() => void>
 }
@@ -121,8 +140,22 @@ export const webPlatformAdapter: PlatformAdapter = {
   renameProjectFile: async () => { throw new PlatformFileError('Project file operations are available in the desktop app.') },
   copyProjectFile: async () => { throw new PlatformFileError('Project file operations are available in the desktop app.') },
   deleteProjectFile: async () => { throw new PlatformFileError('Project file operations are available in the desktop app.') },
+  revealProjectFile: async () => { throw new PlatformFileError('Project file operations are available in the desktop app.') },
+  revealProjectLabel: 'Show in Finder',
+  initialProjectPath: async () => null,
+  subscribeProjectOpen: async () => () => {},
+  subscribeProjectDrop: async () => () => {},
   loadRecentProjects: async () => [],
   saveRecentProjects: async () => {},
+  saveProjectThumbnail: async () => {},
+  loadProjectThumbnail: async () => null,
+  copyProjectThumbnail: async () => {},
+  deleteProjectThumbnail: async () => {},
+  cleanupProjectThumbnails: async () => {},
+  loadShortcutPreferences: async () => {
+    try { return JSON.parse(window.localStorage.getItem('nd-blocking-shortcuts') ?? '{}') as ShortcutPreferences } catch { return {} }
+  },
+  saveShortcutPreferences: async (preferences) => { window.localStorage.setItem('nd-blocking-shortcuts', JSON.stringify(preferences)) },
 }
 
 function isTauriRuntime(): boolean {
@@ -148,8 +181,20 @@ function createTauriPlatformAdapter(): PlatformAdapter {
     renameProjectFile: nativeRenameProjectFile,
     copyProjectFile: nativeCopyProjectFile,
     deleteProjectFile: nativeDeleteProjectFile,
+    revealProjectFile: nativeRevealProjectFile,
+    revealProjectLabel: typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent) ? 'Show in Explorer' : 'Show in Finder',
+    initialProjectPath: nativeInitialProjectPath,
+    subscribeProjectOpen: nativeSubscribeProjectOpen,
+    subscribeProjectDrop: nativeSubscribeProjectDrop,
     loadRecentProjects: nativeLoadRecentProjects,
     saveRecentProjects: nativeSaveRecentProjects,
+    saveProjectThumbnail: nativeSaveProjectThumbnail,
+    loadProjectThumbnail: nativeLoadProjectThumbnail,
+    copyProjectThumbnail: nativeCopyProjectThumbnail,
+    deleteProjectThumbnail: nativeDeleteProjectThumbnail,
+    cleanupProjectThumbnails: nativeCleanupProjectThumbnails,
+    loadShortcutPreferences: nativeLoadShortcutPreferences,
+    saveShortcutPreferences: nativeSaveShortcutPreferences,
     promptUnsavedClose: nativePromptUnsavedClose,
     registerCloseGuard: nativeRegisterCloseGuard,
   }
@@ -281,6 +326,98 @@ async function nativeDeleteProjectFile(path: string): Promise<void> {
   }
 }
 
+async function nativeRevealProjectFile(path: string): Promise<void> {
+  try {
+    const { revealItemInDir } = await import('@tauri-apps/plugin-opener')
+    await revealItemInDir(path)
+  } catch (error: unknown) {
+    throw nativeFileError('The Project could not be revealed in Finder or Explorer.', error)
+  }
+}
+
+async function nativeInitialProjectPath(): Promise<string | null> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<string | null>('startup_project_path')
+  } catch (error: unknown) {
+    if (import.meta.env.DEV) console.error('[ND Blocking & Previs] Startup Project path could not be read', error)
+    return null
+  }
+}
+
+async function nativeSubscribeProjectOpen(handler: (path: string) => void): Promise<() => void> {
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<string>('nd://open-project', (event) => handler(event.payload))
+}
+
+async function nativeSubscribeProjectDrop(handler: (event: DesktopDropEvent) => void): Promise<() => void> {
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  return getCurrentWindow().onDragDropEvent((event) => {
+    if (event.payload.type === 'enter') handler({ type: 'enter', paths: event.payload.paths })
+    else if (event.payload.type === 'over') handler({ type: 'over' })
+    else if (event.payload.type === 'drop') handler({ type: 'drop', paths: event.payload.paths })
+    else handler({ type: 'leave' })
+  })
+}
+
+const THUMBNAIL_DIRECTORY = 'project-thumbnails'
+
+function thumbnailPath(key: string): string {
+  return `${THUMBNAIL_DIRECTORY}/${key}.png`
+}
+
+function bytesToDataUrl(bytes: Uint8Array): string {
+  let binary = ''
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte) })
+  return `data:image/png;base64,${btoa(binary)}`
+}
+
+async function nativeSaveProjectThumbnail(key: string, blob: Blob): Promise<void> {
+  const { BaseDirectory, mkdir, writeFile } = await import('@tauri-apps/plugin-fs')
+  await mkdir(THUMBNAIL_DIRECTORY, { baseDir: BaseDirectory.AppLocalData, recursive: true })
+  await writeFile(thumbnailPath(key), new Uint8Array(await blob.arrayBuffer()), { baseDir: BaseDirectory.AppLocalData })
+}
+
+async function nativeLoadProjectThumbnail(key: string): Promise<string | null> {
+  try {
+    const { BaseDirectory, readFile } = await import('@tauri-apps/plugin-fs')
+    return bytesToDataUrl(await readFile(thumbnailPath(key), { baseDir: BaseDirectory.AppLocalData }))
+  } catch (error: unknown) {
+    if (import.meta.env.DEV) console.error('[ND Blocking & Previs] Project thumbnail could not be loaded', error)
+    return null
+  }
+}
+
+async function nativeCopyProjectThumbnail(sourceKey: string, targetKey: string): Promise<void> {
+  try {
+    const { BaseDirectory, copyFile } = await import('@tauri-apps/plugin-fs')
+    await copyFile(thumbnailPath(sourceKey), thumbnailPath(targetKey), { fromPathBaseDir: BaseDirectory.AppLocalData, toPathBaseDir: BaseDirectory.AppLocalData })
+  } catch (error: unknown) {
+    if (import.meta.env.DEV) console.error('[ND Blocking & Previs] Project thumbnail could not be copied', error)
+  }
+}
+
+async function nativeDeleteProjectThumbnail(key: string): Promise<void> {
+  try {
+    const { BaseDirectory, remove } = await import('@tauri-apps/plugin-fs')
+    await remove(thumbnailPath(key), { baseDir: BaseDirectory.AppLocalData })
+  } catch (error: unknown) {
+    if (import.meta.env.DEV) console.error('[ND Blocking & Previs] Project thumbnail could not be removed', error)
+  }
+}
+
+async function nativeCleanupProjectThumbnails(activeKeys: readonly string[]): Promise<void> {
+  try {
+    const { BaseDirectory, readDir } = await import('@tauri-apps/plugin-fs')
+    const active = new Set(activeKeys.map((key) => `${key}.png`))
+    for (const entry of await readDir(THUMBNAIL_DIRECTORY, { baseDir: BaseDirectory.AppLocalData })) {
+      if (entry.isFile && !active.has(entry.name)) await nativeDeleteProjectThumbnail(entry.name.replace(/\.png$/i, ''))
+    }
+  } catch (error: unknown) {
+    if (import.meta.env.DEV) console.error('[ND Blocking & Previs] Project thumbnail cleanup failed', error)
+  }
+}
+
 async function nativeLoadRecentProjects(): Promise<RecentProjectEntry[]> {
   try {
     const { load } = await import('@tauri-apps/plugin-store')
@@ -300,6 +437,28 @@ async function nativeSaveRecentProjects(entries: readonly RecentProjectEntry[]):
     await store.save()
   } catch (error: unknown) {
     if (import.meta.env.DEV) console.error('[ND Blocking & Previs] Recent Project metadata could not be saved', error)
+  }
+}
+
+async function nativeLoadShortcutPreferences(): Promise<ShortcutPreferences> {
+  try {
+    const { load } = await import('@tauri-apps/plugin-store')
+    const store = await load('app-preferences.json', { autoSave: false })
+    return (await store.get<ShortcutPreferences>('shortcuts')) ?? {}
+  } catch (error: unknown) {
+    if (import.meta.env.DEV) console.error('[ND Blocking & Previs] Shortcut preferences could not be loaded', error)
+    return {}
+  }
+}
+
+async function nativeSaveShortcutPreferences(preferences: ShortcutPreferences): Promise<void> {
+  try {
+    const { load } = await import('@tauri-apps/plugin-store')
+    const store = await load('app-preferences.json', { autoSave: false })
+    await store.set('shortcuts', preferences)
+    await store.save()
+  } catch (error: unknown) {
+    if (import.meta.env.DEV) console.error('[ND Blocking & Previs] Shortcut preferences could not be saved', error)
   }
 }
 

@@ -21,6 +21,13 @@ export function deleteShortcutForKey(key: string, isTextEditing: boolean): boole
   return !isTextEditing && (key === 'Delete' || key === 'Backspace')
 }
 
+export function destructiveShortcutTarget(key: string, isTextEditing: boolean, hasTimelineKeyframe: boolean, hasEntity: boolean): 'keyframe' | 'entity' | null {
+  if (!deleteShortcutForKey(key, isTextEditing)) return null
+  if (hasTimelineKeyframe) return 'keyframe'
+  if (hasEntity) return 'entity'
+  return null
+}
+
 export function timelinePlayPauseShortcut(key: string, isTextEditing: boolean): boolean {
   return key === ' ' && !isTextEditing
 }

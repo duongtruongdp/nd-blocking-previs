@@ -1,4 +1,4 @@
-import type { ActorDocument, ActorVector3, CameraDocument, SceneDocument, TimelineProperty, TimelineValue } from '../core/sceneDocument'
+import type { ActorDocument, ActorVector3, CameraDocument, PropDocument, SceneDocument, TimelineProperty, TimelineValue } from '../core/sceneDocument'
 import { applySceneEntityTransform } from '../core/sceneDocument'
 import { evaluateTimeline } from './timelineEvaluator'
 
@@ -22,7 +22,7 @@ export function shouldApplyTimelineEvaluation(entityId: string, transformingEnti
   return entityId !== transformingEntityId && !suspendedEntityIds.has(entityId)
 }
 
-export function captureTimelineValue(entity: ActorDocument | CameraDocument, property: TimelineProperty): TimelineValue | undefined {
+export function captureTimelineValue(entity: ActorDocument | CameraDocument | PropDocument, property: TimelineProperty): TimelineValue | undefined {
   if (property === 'position') return [...entity.position] as ActorVector3
   if (property === 'rotation') return [...entity.rotation] as ActorVector3
   if (property === 'heading') return entity.rotation[1]
@@ -31,10 +31,11 @@ export function captureTimelineValue(entity: ActorDocument | CameraDocument, pro
 
 export function commitTimelineTransform(document: SceneDocument, change: TimelineTransformCommit): TimelineTransformCommitResult {
   const actor = document.actors.find((item) => item.id === change.entityId)
+  const prop = document.props.find((item) => item.id === change.entityId)
   const camera = document.cameras.find((item) => item.id === change.entityId)
-  if (!actor && !camera) return { document: applySceneEntityTransform(document, change), changedKeyframe: false, suspendEvaluation: false }
+  if (!actor && !prop && !camera) return { document: applySceneEntityTransform(document, change), changedKeyframe: false, suspendEvaluation: false }
 
-  const rotationProperty = camera ? 'rotation' : 'heading'
+  const rotationProperty = camera || prop ? 'rotation' : 'heading'
   const hasPositionTrack = document.timeline.tracks.some((track) => track.entityId === change.entityId && track.property === 'position')
   const hasRotationTrack = document.timeline.tracks.some((track) => track.entityId === change.entityId && track.property === rotationProperty)
   const hasFocalTrack = Boolean(camera && document.timeline.tracks.some((track) => track.entityId === change.entityId && track.property === 'focalLengthMm'))
@@ -43,6 +44,11 @@ export function commitTimelineTransform(document: SceneDocument, change: Timelin
   const nextDocument: SceneDocument = {
     ...document,
     actors: document.actors.map((item) => item.id === change.entityId ? {
+      ...item,
+      position: [...change.position] as ActorVector3,
+      rotation: [...change.rotation] as ActorVector3,
+    } : item),
+    props: document.props.map((item) => item.id === change.entityId ? {
       ...item,
       position: [...change.position] as ActorVector3,
       rotation: [...change.rotation] as ActorVector3,

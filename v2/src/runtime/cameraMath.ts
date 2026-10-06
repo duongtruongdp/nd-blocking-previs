@@ -22,7 +22,15 @@ export function verticalFovDegrees(focalLengthMm: number, captureMode: CaptureMo
 export function cameraProjectionForDocument(document: CameraDocument): { definition: CameraDefinition; captureMode: CaptureModeDefinition; aspect: number; displayAspect: number; squeeze: number; fov: number; horizontalFov: number } | null {
   const definition = resolveCameraDefinition(document.cameraDefinitionId)
   if (!definition) return null
-  const captureMode = resolveCaptureMode(definition, document.captureModeId)
+  const resolvedMode = resolveCaptureMode(definition, document.captureModeId)
+  const snapshot = document.cameraSnapshot
+  const snapshotDiffers = snapshot && (
+    Math.abs(snapshot.activeWidthMm - resolvedMode.activeWidthMm) > 1e-9
+    || Math.abs(snapshot.activeHeightMm - resolvedMode.activeHeightMm) > 1e-9
+    || snapshot.recordingWidthPx !== resolvedMode.recordingWidthPx
+    || snapshot.recordingHeightPx !== resolvedMode.recordingHeightPx
+  )
+  const captureMode = snapshotDiffers ? { ...resolvedMode, name: snapshot.captureModeName, activeWidthMm: snapshot.activeWidthMm, activeHeightMm: snapshot.activeHeightMm, recordingWidthPx: snapshot.recordingWidthPx, recordingHeightPx: snapshot.recordingHeightPx } : resolvedMode
   const aspect = activeCaptureAspect(captureMode)
   const squeeze = lensSqueezeForDocument(document)
   return { definition, captureMode, aspect, displayAspect: aspect * squeeze, squeeze, fov: verticalFovDegrees(document.focalLengthMm, captureMode), horizontalFov: horizontalFovDegrees(document.focalLengthMm, captureMode, squeeze) }

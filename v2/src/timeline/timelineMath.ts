@@ -93,6 +93,10 @@ export function upsertTimelineKeyframe(timeline: TimelineDocument, entityId: str
 export function removeTimelineKeyframe(timeline: TimelineDocument, trackId: string, keyframeId: string): TimelineDocument {
   return {
     ...timeline,
-    tracks: timeline.tracks.map((track) => track.id === trackId ? { ...track, keyframes: track.keyframes.filter((keyframe) => keyframe.id !== keyframeId) } : track),
+    tracks: timeline.tracks.flatMap((track) => {
+      if (track.id !== trackId) return [track]
+      const keyframes = track.keyframes.filter((keyframe) => keyframe.id !== keyframeId)
+      return keyframes.length > 0 ? [{ ...track, keyframes }] : []
+    }),
   }
 }

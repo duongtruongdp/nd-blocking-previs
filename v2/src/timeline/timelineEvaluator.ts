@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { ActorVector3, CameraDocument, SceneDocument, TimelineProperty, TimelineTrack, TimelineValue } from '../core/sceneDocument'
+import type { ActorVector3, CameraDocument, PropDocument, SceneDocument, TimelineProperty, TimelineTrack, TimelineValue } from '../core/sceneDocument'
 import { interpolateAngleRadians, interpolateScalar, interpolateVector } from './timelineMath'
 
 export type EvaluatedEntityState = {
@@ -67,6 +67,7 @@ function evaluateEntity(base: { id: string; position: ActorVector3; rotation: Ac
 export function evaluateTimeline(document: SceneDocument, frame: number): Record<string, EvaluatedEntityState> {
   const evaluated: Record<string, EvaluatedEntityState> = {}
   document.actors.forEach((actor) => { evaluated[actor.id] = evaluateEntity(actor, document.timeline.tracks, frame) })
+  document.props.forEach((prop: PropDocument) => { evaluated[prop.id] = evaluateEntity(prop, document.timeline.tracks, frame) })
   document.cameras.forEach((camera: CameraDocument) => { evaluated[camera.id] = evaluateEntity(camera, document.timeline.tracks, frame, camera.focalLengthMm) })
   return evaluated
 }

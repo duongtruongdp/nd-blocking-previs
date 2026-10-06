@@ -59,6 +59,19 @@ describe('V2.6B timeline transform ownership and keyframe capture', () => {
     expect(propResult.document.props[0].position).toEqual([2, 0, -3])
   })
 
+  it('captures and commits animated Prop transforms through the generic ownership path', () => {
+    const prop = createDefaultProps()[0]
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, prop.id, 'Prop', 'position', 0, [0, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, prop.id, 'Prop', 'rotation', 0, [0, 0, 0])
+    const document = { ...createEmptySceneDocument(), props: [prop], timeline }
+    const result = commitTimelineTransform(document, change(prop.id))
+    expect(captureTimelineValue({ ...prop, position: [4, 1, -2], rotation: [0.2, 0.4, 0.1] }, 'position')).toEqual([4, 1, -2])
+    expect(captureTimelineValue({ ...prop, position: [4, 1, -2], rotation: [0.2, 0.4, 0.1] }, 'rotation')).toEqual([0.2, 0.4, 0.1])
+    expect(result.document.props[0].position).toEqual([2, 0, -3])
+    expect(result.suspendEvaluation).toBe(true)
+  })
+
   it('captures the current visible Actor value when creating a first keyframe', () => {
     const actor = createActorDocument('actor-01', 'Actor 01', [2, 0, -3])
     const value = captureTimelineValue(actor, 'position')

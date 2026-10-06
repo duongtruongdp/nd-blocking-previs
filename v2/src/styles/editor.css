@@ -43,7 +43,11 @@ button:disabled { cursor: default; opacity: 0.52; }
 .v2-brand { gap: var(--space-2); font-weight: 700; letter-spacing: -0.02em; white-space: nowrap; }
 .v2-brand-mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 11px; background: var(--accent); color: #fff; font-size: 11px; letter-spacing: 0.08em; box-shadow: 4px 4px 10px rgba(118, 105, 201, 0.25); }
 .v2-scene-title { color: var(--text-secondary); font-weight: 600; }
+.v2-unsaved-dot { margin-left: 5px; color: var(--accent); font-size: 17px; vertical-align: -1px; }
+.v2-file-error { max-width: 300px; overflow: hidden; color: #a74a48; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .v2-topbar-actions { gap: var(--space-3); margin-left: auto; }
+.v2-file-actions { display: flex; align-items: center; gap: 4px; }
+.v2-hidden-file-input { display: none; }
 .v2-segmented { gap: 4px; padding: 4px; border-radius: 12px; background: var(--surface-inset); box-shadow: var(--shadow-inset); }
 .v2-segmented button, .v2-button, .v2-add-button, .v2-timeline-marks button, .v2-transport button { border: 0; border-radius: 9px; background: transparent; color: var(--text-secondary); }
 .v2-segmented button { padding: 8px 12px; }
@@ -212,12 +216,14 @@ h2 { margin: 3px 0 0; font-size: 16px; letter-spacing: -0.02em; }
 .v2-frame-readout input:focus { outline: 1px solid rgba(118, 105, 201, .45); border-radius: 3px; }
 .v2-timeline-marks { gap: 8px; margin-left: auto; }
 .v2-timeline-marks button { padding: 8px 12px; background: var(--surface-inset); box-shadow: var(--shadow-inset); }
-.v2-timeline-track-area { position: relative; height: calc(100% - 62px); min-height: 92px; }
-.v2-track-label { position: absolute; top: 15px; left: 20px; color: var(--text-muted); font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
-.v2-ruler { position: absolute; z-index: 2; top: 0; right: 20px; left: 104px; height: 38px; border-bottom: 1px solid var(--line-soft); cursor: pointer; }
+.v2-timeline-track-area { position: relative; display: grid; grid-template-columns: 104px minmax(0, 1fr); grid-template-rows: 38px minmax(0, 1fr); height: calc(100% - 62px); min-height: 92px; }
+.v2-track-label { grid-column: 1; grid-row: 1; padding: 15px 0 0 20px; color: var(--text-muted); font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; user-select: none; }
+.v2-ruler { position: relative; z-index: 2; grid-column: 2; grid-row: 1; height: 38px; margin-right: 20px; border-bottom: 1px solid var(--line-soft); cursor: ew-resize; user-select: none; }
 .v2-ruler span { position: absolute; top: 14px; color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; transform: translateX(-50%); }
 .v2-timeline-ruler-range { position: absolute; z-index: 1; top: 2px; height: 7px; border-radius: 4px; background: rgba(118, 105, 201, .28); box-shadow: inset 0 1px 0 rgba(118, 105, 201, .5); pointer-events: none; }
-.v2-timeline-range-layer { position: absolute; z-index: 1; top: 38px; right: 20px; bottom: 0; left: 104px; pointer-events: none; }
+.v2-timeline-track-viewport { position: relative; grid-column: 1 / -1; grid-row: 2; min-height: 0; overflow: hidden; }
+.v2-timeline-track-scroll { position: absolute; z-index: 2; inset: 0 0 0 0; overflow-x: hidden; overflow-y: auto; scrollbar-color: rgba(112, 119, 151, .55) var(--surface-inset); scrollbar-width: thin; }
+.v2-timeline-range-layer { position: absolute; z-index: 1; top: 0; right: 20px; bottom: 0; left: 104px; pointer-events: none; }
 .v2-timeline-range-outside, .v2-timeline-range-active { position: absolute; top: 0; bottom: 0; }
 .v2-timeline-range-outside { background: rgba(25, 31, 49, .10); }
 .v2-timeline-range-active { background: rgba(118, 105, 201, .12); box-shadow: inset 0 2px 0 rgba(118, 105, 201, .42), inset 0 -1px 0 rgba(118, 105, 201, .18); }
@@ -227,17 +233,28 @@ h2 { margin: 3px 0 0; font-size: 16px; letter-spacing: -0.02em; }
 .v2-timeline-mark span::after { position: absolute; bottom: -4px; left: 5px; width: 0; height: 0; border-top: 4px solid var(--surface-raised); border-right: 3px solid transparent; border-left: 3px solid transparent; content: ''; }
 .v2-timeline-mark-out span { left: auto; right: 4px; color: var(--text-secondary); }
 .v2-timeline-mark-out span::after { right: 5px; left: auto; }
-.v2-timeline-playhead { position: absolute; z-index: 4; top: 0; bottom: -1000px; width: 1px; background: var(--accent); pointer-events: none; }
+.v2-timeline-playhead-lane { position: absolute; z-index: 4; top: 0; right: 20px; bottom: 0; left: 104px; pointer-events: none; }
+.v2-timeline-playhead { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); pointer-events: none; }
 .v2-timeline-playhead::before { position: absolute; top: 4px; left: -4px; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); content: ''; }
-.v2-timeline-tracks { position: absolute; z-index: 2; top: 38px; right: 20px; bottom: 0; left: 0; display: grid; align-content: start; }
+.v2-timeline-tracks { position: relative; right: 20px; left: 0; display: grid; align-content: start; }
+.v2-timeline-group-header { display: grid; grid-template-columns: 104px minmax(0, 1fr); min-height: 30px; border-bottom: 1px solid rgba(112, 119, 151, .1); background: var(--surface-inset); user-select: none; }
+.v2-timeline-group-header.is-selected { background: rgba(118, 105, 201, .1); }
+.v2-timeline-group-label { display: flex; align-items: center; min-width: 0; }
+.v2-timeline-disclosure { display: inline-flex; align-items: center; justify-content: flex-start; width: 32px; padding: 0 0 0 20px; border: 0; background: transparent; color: var(--accent); font-size: 9px; cursor: pointer; user-select: none; }
+.v2-timeline-group-name { display: inline-flex; align-items: baseline; gap: 7px; min-width: 0; padding: 0 8px 0 4px; border: 0; background: transparent; color: var(--text-secondary); font-size: 10px; font-weight: 700; text-align: left; cursor: pointer; user-select: none; }
+.v2-timeline-group-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-timeline-group-name small { color: var(--text-muted); font-size: 8px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.v2-timeline-group-lane { grid-column: 2; grid-row: 1; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; color: var(--text-muted); font-size: 8px; font-variant-numeric: tabular-nums; pointer-events: none; }
 .v2-timeline-track { display: grid; grid-template-columns: 104px minmax(0, 1fr); min-height: 28px; border-bottom: 1px solid rgba(112, 119, 151, .08); }
 .v2-timeline-track.is-selected .v2-timeline-track-name { color: var(--accent); font-weight: 700; }
-.v2-timeline-track-name { overflow: hidden; padding: 8px 8px 7px 20px; color: var(--text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.v2-timeline-track-name { overflow: hidden; padding: 7px 8px 6px 36px; color: var(--text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; user-select: none; }
 .v2-timeline-track-lane { position: relative; min-width: 0; background: rgba(245, 246, 252, .34); }
 .v2-timeline-keyframe { position: absolute; top: 9px; width: 10px; height: 10px; margin: 0 0 0 -5px; padding: 0; transform: rotate(45deg); border: 1px solid var(--accent); border-radius: 2px; background: var(--surface-raised); cursor: pointer; }
 .v2-timeline-keyframe.is-current { background: var(--accent); box-shadow: 0 0 0 2px rgba(118, 105, 201, .16); }
 .v2-timeline-keyframe.is-selected { outline: 2px solid rgba(73, 55, 173, .42); outline-offset: 2px; }
-.v2-timeline-empty { position: absolute; top: 58px; right: 20px; left: 104px; color: var(--text-muted); text-align: center; }
+.v2-timeline-empty { position: absolute; top: 20px; right: 20px; left: 104px; color: var(--text-muted); text-align: center; user-select: none; }
+.v2-timeline, .v2-timeline-toolbar, .v2-timeline-track-area, .v2-ruler, .v2-timeline-track-viewport, .v2-timeline-group-header, .v2-timeline-track, .v2-timeline-mark, .v2-timeline-playhead { user-select: none; }
+.v2-timeline input, .v2-timeline textarea, .v2-timeline select { user-select: text; }
 .v2-playback-shield { position: absolute; z-index: 5; inset: 0; cursor: default; }
 .v2-keyframe-button { margin-left: 5px; padding: 0; border: 0; background: transparent; color: var(--text-muted); font-size: 12px; line-height: 1; cursor: pointer; }
 .v2-keyframe-button.has-track { color: var(--text-secondary); }

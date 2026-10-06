@@ -1,6 +1,6 @@
 # ND Blocking & Previs — Architecture and Implementation Plan
 
-Status: V2 Camera Integration B current: generic Camera registration, active-camera state, production Camera View rendering, and Camera Inspector synchronization are implemented through the frozen V2 StageEngine API; manual browser acceptance remains required; timeline editing remains intentionally unimplemented.
+Status: V2.8A current: generic Camera registration, active-camera state, production Camera View rendering, Timeline playback/keyframes, Prop Position/Rotation animation, and portable `.ndscene` persistence are implemented through the frozen V2 StageEngine API; manual browser acceptance remains required.
 Scope: Phase 1 foundation, workspace shell, Actor/Prop blocking, locked Actor/Pose system, verified camera data, and serializable Camera objects.
 
 Milestone 0 decisions are implemented in the domain source and specified by these focused contracts:
@@ -737,6 +737,33 @@ overlay never changes production projection, capture crop, export output, or
 timeline evaluation. Edits use the existing camera update/history path, while
 guide selection remains transient UI state. Blocking View intentionally shows
 no frame rectangles.
+
+### V2.8 Portable `.ndscene` Save / Load
+
+V2.8 adds an explicit `{ format: "ndscene", version: 1, scene }` JSON
+envelope. The file contains creative SceneDocument data, including current
+frame convenience state, active Camera, complete Frame Guides, Timeline, and
+rational frame rate; it excludes selection, playback, editor navigation,
+history, runtime objects, DOM state, and export state. The core serializer,
+validator, migration boundary, and filename sanitizer are browser-independent.
+
+Each saved Camera carries a resolved physical capture snapshot alongside its
+stable database and Capture Mode IDs. On load, current database records are
+used when their geometry matches; otherwise the saved active dimensions and
+recording raster remain authoritative for framing. Save/Load/New are Web-shell
+actions only, so Project Library, `.ndblock`, cloud storage, and Tauri remain
+out of scope.
+
+### V2.8A Timeline UX / Scalability + Prop Keyframes
+
+The Timeline remains a bounded editor region with a fixed toolbar and ruler;
+only its track viewport scrolls vertically. Animated tracks are grouped by
+Scene entity in Actor / Prop / Camera order with local disclosure state owned
+by the Timeline UI. Prop Position and Rotation use the existing generic
+TimelineTrack, evaluator, transform ownership, Camera View, and export paths.
+Spacebar playback uses the same toggle action as the transport and ignores
+text-editing controls. Timeline surfaces suppress accidental browser text
+selection without disabling selection inside real inputs.
 
 Milestone 2I is complete. The production Actor baseline contains Male 01 and Female 01, 18 stable semantic poses (six Standing, six Sitting, six Lying), shared semantic definitions adapted through Rig Profiles, support/contact-aware Sitting and Lying, height-preserving Actor placement, and a development-only Pose Calibration tool hidden from normal use. The full Actor/Pose development phase is locked.
 

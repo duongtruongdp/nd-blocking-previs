@@ -29,6 +29,19 @@ export type PropShape = 'cube' | 'sphere' | 'cylinder'
 
 export type CameraLensType = 'Spherical' | 'Anamorphic'
 export type CameraDeliveryFrame = 'sensor' | '16:9' | '1.85' | '2.00' | '2.39'
+
+export type CameraPhysicalSnapshot = {
+  manufacturer: string
+  model: string
+  captureModeName: string
+  activeWidthMm: number
+  activeHeightMm: number
+  recordingWidthPx: number
+  recordingHeightPx: number
+  sensorFormatLabel: string
+  databaseVersionAtSave: number
+}
+
 export type FrameGuideLineStyle = 'solid' | 'dashed'
 
 export type FrameGuide = {
@@ -45,7 +58,7 @@ export type FrameGuide = {
   safeMarginPercent: number
 }
 
-export type TimelineEntityType = 'Actor' | 'Camera'
+export type TimelineEntityType = 'Actor' | 'Prop' | 'Camera'
 export type TimelineProperty = 'position' | 'heading' | 'rotation' | 'focalLengthMm'
 export type TimelineInterpolation = 'linear' | 'hold'
 export type TimelineValue = number | ActorVector3
@@ -87,6 +100,7 @@ export type CameraDocument = {
   anamorphicSqueeze: 1 | 1.3 | 1.33 | 1.5 | 1.6 | 1.8 | 2
   deliveryAspectRatio: CameraDeliveryFrame
   frameGuides: FrameGuide[]
+  cameraSnapshot?: CameraPhysicalSnapshot
 }
 
 export type PropDocument = {

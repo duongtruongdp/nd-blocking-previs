@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { EditorHistory } from '../core/editorHistory'
 import { createActorDocument, createCameraDocument, createEmptySceneDocument } from '../core/sceneDocument'
 import { CAMERA_DATABASE } from '../core/cameraDatabase'
+import { createDefaultProps } from '../scene/testEntities'
 import { cameraProjectionForDocument } from '../runtime/cameraMath'
 import { createPlaybackClock, playbackFrameAt, playbackReachedMarkOut } from '../timeline/playbackClock'
 import { evaluateTimeline } from '../timeline/timelineEvaluator'
@@ -51,6 +52,19 @@ describe('V2 timeline foundation', () => {
     expect(halfway[camera.id].rotation[1]).toBeCloseTo(Math.PI / 4, 5)
     expect(evaluateTimeline(document, 24)[camera.id].focalLengthMm).toBe(54.5)
     expect(document.cameras[0].focalLengthMm).toBe(35)
+  })
+
+  it('evaluates Prop position and rotation through the same generic path', () => {
+    const prop = createDefaultProps()[0]
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, prop.id, 'Prop', 'position', 0, [0, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, prop.id, 'Prop', 'position', 48, [4, 2, -2])
+    timeline = upsertTimelineKeyframe(timeline, prop.id, 'Prop', 'rotation', 0, [0, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, prop.id, 'Prop', 'rotation', 48, [0, Math.PI / 2, 0])
+    const document = { ...createEmptySceneDocument(), props: [prop], timeline }
+    const halfway = evaluateTimeline(document, 24)[prop.id]
+    expect(halfway.position).toEqual([2, 1, -1])
+    expect(halfway.rotation[1]).toBeCloseTo(Math.PI / 4, 5)
   })
 
   it('keeps Delivery Frame separate from physical FOV during focal animation', () => {

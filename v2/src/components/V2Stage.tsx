@@ -181,18 +181,16 @@ export function V2Stage({ view, actors, props, cameras, activeCameraId, selected
   }, [actors, cameras, evaluatedEntities, suspendedTimelineEntityIds, transformingEntityId])
 
   useEffect(() => {
-    engineRef.current?.setProps(props as readonly StagePropDefinition[])
-  }, [props])
-
-  useEffect(() => {
     engineRef.current?.setSelected(selectedEntityId)
   }, [selectedEntityId])
 
   useEffect(() => {
     const evaluatedActors = actors.map((actor) => shouldApplyTimelineEvaluation(actor.id, transformingEntityId, suspendedTimelineEntityIds) && evaluatedEntities[actor.id] ? { ...actor, ...evaluatedEntities[actor.id] } : actor)
+    const evaluatedProps = props.map((prop) => shouldApplyTimelineEvaluation(prop.id, transformingEntityId, suspendedTimelineEntityIds) && evaluatedEntities[prop.id] ? { ...prop, ...evaluatedEntities[prop.id] } : prop)
     const evaluatedCameras = cameras.map((camera) => shouldApplyTimelineEvaluation(camera.id, transformingEntityId, suspendedTimelineEntityIds) && evaluatedEntities[camera.id] ? { ...camera, ...evaluatedEntities[camera.id], focalLengthMm: evaluatedEntities[camera.id].focalLengthMm ?? camera.focalLengthMm } : camera)
     const activeCamera = evaluatedCameras.find((camera) => camera.id === activeCameraId) ?? null
-    cameraViewRef.current?.setDocuments(evaluatedActors, props, activeCamera)
+    engineRef.current?.setProps(evaluatedProps as readonly StagePropDefinition[])
+    cameraViewRef.current?.setDocuments(evaluatedActors, evaluatedProps, activeCamera)
     cameraViewRef.current?.setVisible(view === 'camera' && activeCamera !== null)
   }, [view, actors, props, cameras, activeCameraId, evaluatedEntities, suspendedTimelineEntityIds, transformingEntityId])
 

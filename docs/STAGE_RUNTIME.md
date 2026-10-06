@@ -176,6 +176,27 @@ preview export. They are not shown in Blocking View and are never burned into
 exported video. Guide edits are committed through the existing camera
 document/history update path.
 
+## V2.8 portable SceneDocument files
+
+The V2 Web shell saves and loads a versioned `.ndscene` JSON envelope. The
+portable file contains only creative SceneDocument data; StageEngine objects,
+Three.js state, selection, editor navigation, undo/redo history, playback
+state, and export state are reconstructed or reset at the application boundary.
+Loading validates the envelope, migrates supported older versions, clears the
+history baseline, clears selection, and reconciles existing Stage entities
+against the loaded Actors, Props, and Cameras without changing StageEngine
+interaction algorithms. Browser download and file-picker behavior remain in
+the Web shell so future desktop adapters can reuse the serializer.
+
+## V2.8A Timeline UX and Prop animation
+
+Timeline rows are grouped by animated entity while the toolbar and ruler stay
+outside the vertically scrollable track viewport. Disclosure state is local
+editor state and is not part of SceneDocument. Props use the same Position and
+Rotation Timeline tracks and evaluator as Actors and Cameras; the evaluated
+values feed Blocking View, Camera View, and the existing export renderer.
+StageEngine interaction algorithms remain unchanged.
+
 The empty Stage uses invalidate-on-demand rendering. A frame is requested when:
 
 - the Stage is first initialized;

@@ -23,7 +23,7 @@ export function V2DetailsPanel({ actor, prop, camera, activeCameraId, timeline, 
     <aside className="v2-panel v2-details-panel" aria-label="Details">
       <span className="v2-eyebrow">Details</span>
       <h2>Inspector</h2>
-      {camera ? <CameraInspector camera={camera} activeCameraId={activeCameraId} timeline={timeline} onCameraChange={onCameraChange} onSetActiveCamera={onSetActiveCamera} onAddKeyframe={onAddKeyframe} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={onFrameGuideSelection} /> : actor ? <ActorInspector actor={actor} timeline={timeline} onAddKeyframe={onAddKeyframe} /> : prop ? <PropInspector prop={prop} /> : <EmptyInspector />}
+      {camera ? <CameraInspector camera={camera} activeCameraId={activeCameraId} timeline={timeline} onCameraChange={onCameraChange} onSetActiveCamera={onSetActiveCamera} onAddKeyframe={onAddKeyframe} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={onFrameGuideSelection} /> : actor ? <ActorInspector actor={actor} timeline={timeline} onAddKeyframe={onAddKeyframe} /> : prop ? <PropInspector prop={prop} timeline={timeline} onAddKeyframe={onAddKeyframe} /> : <EmptyInspector />}
     </aside>
   )
 }
@@ -106,8 +106,8 @@ function ActorInspector({ actor, timeline, onAddKeyframe }: { actor: ActorDocume
   return <EntityInspector eyebrow="Actor" name={actor.name} position={actor.position} rotation={actor.rotation} positionKeyframe={<KeyframeButton active={hasTimelineKeyframe(timeline, actor.id, 'position')} hasTrack={hasTimelineTrack(timeline, actor.id, 'position')} onClick={() => onAddKeyframe(actor.id, 'position')} label="Add Actor Position keyframe" />} rotationKeyframe={<KeyframeButton active={hasTimelineKeyframe(timeline, actor.id, 'heading')} hasTrack={hasTimelineTrack(timeline, actor.id, 'heading')} onClick={() => onAddKeyframe(actor.id, 'heading')} label="Add Actor Heading keyframe" />}><span className="v2-eyebrow v2-inspector-subsection">Pose</span><span className="v2-readonly-value">Standing</span></EntityInspector>
 }
 
-function PropInspector({ prop }: { prop: PropDocument }) {
-  return <EntityInspector eyebrow="Prop" name={prop.name} position={prop.position} rotation={prop.rotation} />
+function PropInspector({ prop, timeline, onAddKeyframe }: { prop: PropDocument; timeline: TimelineDocument; onAddKeyframe: V2DetailsPanelProps['onAddKeyframe'] }) {
+  return <EntityInspector eyebrow="Prop" name={prop.name} position={prop.position} rotation={prop.rotation} positionKeyframe={<KeyframeButton active={hasTimelineKeyframe(timeline, prop.id, 'position')} hasTrack={hasTimelineTrack(timeline, prop.id, 'position')} onClick={() => onAddKeyframe(prop.id, 'position')} label="Add Prop Position keyframe" />} rotationKeyframe={<KeyframeButton active={hasTimelineKeyframe(timeline, prop.id, 'rotation')} hasTrack={hasTimelineTrack(timeline, prop.id, 'rotation')} onClick={() => onAddKeyframe(prop.id, 'rotation')} label="Add Prop Rotation keyframe" />} />
 }
 
 function EntityInspector({ eyebrow, name, position, rotation, positionKeyframe, rotationKeyframe, children }: { eyebrow: string; name: string; position: [number, number, number]; rotation: [number, number, number]; positionKeyframe?: ReactNode; rotationKeyframe?: ReactNode; children?: ReactNode }) {

@@ -15,3 +15,7 @@ export function editorShortcutForKey(input: EditorShortcutInput): EditorShortcut
   if (key === 'z') return input.shiftKey ? 'redo' : 'undo'
   return null
 }
+
+export function timelinePlayPauseShortcut(key: string, isTextEditing: boolean): boolean {
+  return key === ' ' && !isTextEditing
+}

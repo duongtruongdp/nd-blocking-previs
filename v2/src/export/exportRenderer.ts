@@ -74,8 +74,9 @@ export class VideoExportRenderer {
     this.document.props.forEach((prop) => {
       const runtime = this.propRuntimes.get(prop.id)
       if (!runtime) return
-      runtime.root.position.set(...prop.position)
-      runtime.root.rotation.set(...prop.rotation)
+      const evaluatedProp = evaluated[prop.id]
+      runtime.root.position.set(...(evaluatedProp?.position ?? prop.position))
+      runtime.root.rotation.set(...(evaluatedProp?.rotation ?? prop.rotation))
     })
 
     const projection = cameraProjectionForDocument(cameraDocument)

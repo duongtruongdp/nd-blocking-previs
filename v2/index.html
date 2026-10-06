@@ -5,9 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#eef0fa" />
     <title>ND Blocking &amp; Previs V2</title>
+    <style>
+      .v2-bootstrap { min-height: 100vh; display: grid; place-items: center; background: #eef0fa; color: #24324a; font: 600 14px system-ui, sans-serif; }
+      .v2-bootstrap-mark { display: grid; gap: 10px; place-items: center; }
+      .v2-bootstrap-mark strong { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; background: #143b6b; color: #fff; font-size: 11px; letter-spacing: .08em; }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="v2-bootstrap" aria-live="polite"><div class="v2-bootstrap-mark"><strong>ND</strong><span>Loading Blocking &amp; Previs…</span></div></div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

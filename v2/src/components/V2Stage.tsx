@@ -149,6 +149,8 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
   const [viewportSize, setViewportSize] = useState({ width: 1, height: 1 })
   const [captureWidth, setCaptureWidth] = useState<StillCaptureWidth>(1920)
   const [includeCaptureGuides, setIncludeCaptureGuides] = useState(false)
+  const [captureError, setCaptureError] = useState<string | null>(null)
+  const [graphicsContextMessage, setGraphicsContextMessage] = useState<string | null>(null)
   const callbacksRef = useRef({ onSelectionChange, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onWallDrawCommit, onWallDrawState, onWallDrawExit })
   const debugEnabled = import.meta.env.DEV && new URLSearchParams(window.location.search).get('interactionDebug') === '1'
 
@@ -157,11 +159,12 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
   }, [onSelectionChange, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onWallDrawCommit, onWallDrawState, onWallDrawExit])
 
   useEffect(() => {
-    if (!stageRef.current) return
+    const stageElement = stageRef.current
+    if (!stageElement) return
     const actorRuntimes = actorRuntimesRef.current
     const cameraRuntimes = cameraRuntimesRef.current
     const scenicRuntimes = scenicRuntimesRef.current
-    const engine = new StageEngine(stageRef.current, {
+    const engine = new StageEngine(stageElement, {
       onToolChanged: (nextTool) => callbacksRef.current.onToolChange(nextTool),
       onTransformStart: (change) => callbacksRef.current.onTransformStart(change),
       onTransformEnd: (change) => callbacksRef.current.onTransformEnd(change),
@@ -177,8 +180,15 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
       onExit: () => callbacksRef.current.onWallDrawExit(),
     })
     wallDrawingRef.current = wallDrawingController
-    const cameraView = new CameraViewRuntime(stageRef.current)
+    const cameraView = new CameraViewRuntime(stageElement)
     cameraViewRef.current = cameraView
+    const handleContextLost = (event: Event) => {
+      event.preventDefault()
+      setGraphicsContextMessage('The graphics context was lost. Reload the app to continue safely.')
+    }
+    const handleContextRestored = () => setGraphicsContextMessage('Graphics were restored. Reload the app before continuing.')
+    stageElement.addEventListener('webglcontextlost', handleContextLost, true)
+    stageElement.addEventListener('webglcontextrestored', handleContextRestored, true)
     const removeSelectionListener = engine.onSelectionChanged((entityId) => callbacksRef.current.onSelectionChange(entityId))
     const initial = initialStageRef.current
     syncActors(engine, initial.actors, actorRuntimes)
@@ -193,6 +203,8 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
       engineRef.current = null
       cameraViewRef.current = null
       wallDrawingRef.current = null
+      stageElement.removeEventListener('webglcontextlost', handleContextLost, true)
+      stageElement.removeEventListener('webglcontextrestored', handleContextRestored, true)
       wallDrawingController.dispose()
       cameraView.dispose()
       engine.dispose()
@@ -287,14 +299,17 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
   const captureFrame = () => {
     const runtime = cameraViewRef.current
     if (!runtime) return
+    setCaptureError(null)
     void runtime.captureStill({ width: captureWidth, includeGuides: includeCaptureGuides }).then((blob) => {
       if (blob) onCaptureFrameReady(blob, { width: captureWidth, includeGuides: includeCaptureGuides })
-    })
+      else setCaptureError('Still capture is unavailable for this Camera. Try again or reload the app.')
+    }).catch(() => setCaptureError('Still capture failed. Try again or reload the app.'))
   }
 
   return (
     <section className="v2-stage-panel" aria-label="Stage">
       <div className={`v2-stage-viewport v2-view-${view}`} ref={stageRef}>
+        {graphicsContextMessage ? <div className="v2-runtime-notice" role="alert"><strong>Graphics unavailable</strong><span>{graphicsContextMessage}</span><button className="v2-button v2-button-primary" onClick={() => window.location.reload()} type="button">Reload App</button></div> : null}
         {view === 'blocking' ? <div className="v2-stage-header">
           <span className="v2-stage-pill">Blocking View</span>
           <span>Stage</span>
@@ -334,6 +349,7 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
               <label><input type="checkbox" checked={includeCaptureGuides} onChange={(event) => setIncludeCaptureGuides(event.target.checked)} /> Include Guides</label>
               <button onClick={captureFrame} type="button">Capture Frame</button>
             </div>
+            {captureError ? <div className="v2-capture-error" role="alert">{captureError}</div> : null}
           </div>
         ) : (
           <div className="v2-stage-empty"><div className="v2-stage-empty-mark">◇</div><strong>No active Camera</strong><span>Add a Camera and set it active to view the shot.</span></div>

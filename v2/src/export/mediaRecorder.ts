@@ -1,12 +1,9 @@
-export const WEBM_MIME_TYPES = [
-  'video/webm;codecs=vp9',
-  'video/webm;codecs=vp8',
-  'video/webm',
-] as const
+import { supportedWebmMimeTypes as detectSupportedWebmMimeTypes, WEBM_MIME_TYPES } from '../platform/browserCapabilities'
+
+export { WEBM_MIME_TYPES }
 
 export function supportedWebmMimeTypes(): string[] {
-  if (typeof MediaRecorder === 'undefined') return []
-  return WEBM_MIME_TYPES.filter((mimeType) => MediaRecorder.isTypeSupported(mimeType))
+  return detectSupportedWebmMimeTypes()
 }
 
 export function selectWebmMimeType(): string | null {
@@ -16,4 +13,3 @@ export function selectWebmMimeType(): string | null {
 export function mediaRecorderErrorMessage(): string {
   return 'This browser cannot export WebM video. Try a current Chromium-based browser.'
 }
-

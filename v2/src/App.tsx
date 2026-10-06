@@ -23,7 +23,7 @@ import { clampTimelineFrame, removeTimelineKeyframe, setTimelineMark, upsertTime
 import { captureTimelineValue, commitTimelineTransform, type TimelineTransformCommit } from './timeline/transformOwnership'
 import { V2ExportModal } from './components/V2ExportModal'
 import { exportFilename } from './export/exportMath'
-import { exportVideo, isExportCancelled } from './export/videoExporter'
+import { isExportCancelled, userFacingExportError } from './export/exportErrors'
 import type { VideoExportProgress, VideoExportSettings, VideoExportStatus } from './export/exportTypes'
 import { parseSceneFile, prepareSceneForSave, sceneFilename, serializeScene, SceneFileError } from './core/scenePersistence'
 import { parseProjectFile, prepareProjectForSave, projectFilename, ProjectFileError, serializeProject } from './core/projectPersistence'
@@ -57,7 +57,7 @@ function nextEntityIndex(scene: SceneDocument, prefix: string): number {
   return Math.max(0, ...ids.map((id) => Number(new RegExp(`^${prefix}-(\\d+)$`, 'i').exec(id)?.[1] ?? 0))) + 1
 }
 
-export function V2App() {
+function V2EditorApp() {
   const [view, setView] = useState<'blocking' | 'camera'>('blocking')
   const [projectDocument, setProjectDocument] = useState(createDefaultV2Project)
   const activeSceneEntry = projectDocument.scenes.find((entry) => entry.id === projectDocument.activeSceneId) ?? projectDocument.scenes[0]
@@ -835,7 +835,7 @@ export function V2App() {
     }
     const controller = new AbortController()
     exportAbortRef.current = controller
-    void exportVideo({ document: snapshot, settings, signal: controller.signal, onProgress: (progress) => { setExportStatus('exporting'); setExportProgress(progress) } }).then((blob) => {
+    void import('./export/videoExporter').then(({ exportVideo }) => exportVideo({ document: snapshot, settings, signal: controller.signal, onProgress: (progress) => { setExportStatus('exporting'); setExportProgress(progress) } })).then((blob) => {
       setExportStatus('finalizing')
       const camera = snapshot.cameras.find((item) => item.id === settings.cameraId)
       const url = URL.createObjectURL(blob)
@@ -851,7 +851,7 @@ export function V2App() {
         setExportError('Export cancelled.')
       } else {
         setExportStatus('error')
-        setExportError(error instanceof Error ? error.message : 'Video export failed. Try again.')
+        setExportError(userFacingExportError(error))
       }
     }).finally(() => {
       exportAbortRef.current = null
@@ -1008,4 +1008,20 @@ export function V2App() {
       {exportOpen ? <V2ExportModal document={sceneDocument} projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} settings={exportSettings} status={exportStatus} progress={exportProgress} error={exportError} onSettingsChange={setExportSettings} onExport={startExport} onCancel={cancelExport} onClose={() => setExportOpen(false)} /> : null}
     </main>
   )
+}
+
+function V2DesktopViewportNotice() {
+  const [isCompact, setIsCompact] = useState(() => window.innerWidth < 900 || window.innerHeight < 620)
+
+  useEffect(() => {
+    const update = () => setIsCompact(window.innerWidth < 900 || window.innerHeight < 620)
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
+
+  return isCompact ? <div className="v2-viewport-notice" role="status">ND Blocking &amp; Previs is designed for desktop-sized screens.</div> : null
+}
+
+export function V2App() {
+  return <><V2DesktopViewportNotice /><V2EditorApp /></>
 }

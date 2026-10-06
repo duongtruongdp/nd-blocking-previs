@@ -4,7 +4,7 @@ import { frameRateLabel } from '../timeline/timelineMath'
 import { deliveryAspectForCamera, dimensionsForDeliveryAspect, exportFrameCount, formatExportDuration } from '../export/exportMath'
 import { mediaRecorderErrorMessage } from '../export/mediaRecorder'
 import { EXPORT_WIDTHS, type ExportFormat, type ExportWidth, type VideoExportSettings, type VideoExportStatus } from '../export/exportTypes'
-import { detectExportFormatCapabilities, preferredExportFormat, type ExportFormatCapabilities } from '../export/formatSupport'
+import { detectExportFormatCapabilities, exportFormatMessage, preferredExportFormat, type ExportFormatCapabilities } from '../export/formatSupport'
 
 type V2ExportModalProps = {
   document: SceneDocument
@@ -79,7 +79,7 @@ export function V2ExportModal({ document, projectName, sceneName, settings, stat
           <label className="v2-export-field"><span>Resolution</span><select value={settings.width} disabled={busy} onChange={(event) => onSettingsChange({ ...settings, width: Number(event.target.value) as ExportWidth })}>{EXPORT_WIDTHS.map((width) => { const size = dimensionsForDeliveryAspect(width, cameraAspect); return <option key={width} value={width}>{size.width} × {size.height}</option> })}</select></label>
           {availableFormats.length > 1 ? <label className="v2-export-field"><span>Format</span><select value={settings.format} disabled={busy || checkingFormats} onChange={(event) => onSettingsChange({ ...settings, format: event.target.value as ExportFormat })}>{availableFormats.map((format) => <option key={format} value={format}>{format === 'mp4' ? 'MP4' : 'WebM'}</option>)}</select></label> : <ExportReadout label="Format" value={checkingFormats ? 'Checking…' : formatSupported ? (settings.format === 'mp4' ? 'MP4' : 'WebM') : 'Unavailable'} />}
         </div>
-        {error || (!checkingFormats && !formatSupported && camera) ? <p className="v2-export-error" role="alert">{error ?? (settings.format === 'mp4' ? 'MP4 unavailable in this browser.' : mediaRecorderErrorMessage())}</p> : null}
+        {error || (!checkingFormats && !formatSupported && camera) ? <p className="v2-export-error" role="alert">{error ?? (formatSupported ? '' : exportFormatMessage(capabilities, settings.format) || mediaRecorderErrorMessage())}</p> : null}
         {statusLabel ? <div className="v2-export-progress" aria-live="polite"><div className="v2-export-progress-heading"><span>{statusLabel}</span><span>{progress ? `${progress.completedFrames} / ${progress.totalFrames}` : '…'}</span></div><div className="v2-export-progress-track"><span style={{ width: `${progress && progress.totalFrames > 0 ? (progress.completedFrames / progress.totalFrames) * 100 : 0}%` }} /></div></div> : null}
         <div className="v2-modal-actions">
           {busy ? <button className="v2-button" onClick={onCancel} type="button">Cancel Export</button> : <button className="v2-button" onClick={onClose} type="button">Cancel</button>}

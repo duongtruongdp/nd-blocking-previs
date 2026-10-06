@@ -135,7 +135,3 @@ async function exportMp4({ document, settings, signal, onProgress }: VideoExport
 export async function exportVideo(request: VideoExportRequest): Promise<Blob> {
   return request.settings.format === 'mp4' ? exportMp4(request) : exportWebm(request)
 }
-
-export function isExportCancelled(error: unknown): boolean {
-  return error instanceof ExportCancelledError || (error instanceof Error && error.name === 'AbortError')
-}

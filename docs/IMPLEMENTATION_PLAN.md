@@ -1061,3 +1061,20 @@ its current character count as its intrinsic size, with the same responsive
 maximum and a compact minimum. The right-side file, View, and Export actions
 remain non-shrinking, so flexible empty space is owned by the Header between
 the context and actions. Rename semantics and persistence are unchanged.
+
+## V2.WEB1 Production web hardening
+
+V2 production deployment is isolated under `v2/` and emits a self-contained
+`v2/dist/` static directory. Vite reads optional `VITE_BASE_PATH`, with `/` for
+a subdomain and `/blocking/` for a path deployment; there is no router or
+service-worker cache. A central browser-capability seam covers WebGL, video,
+canvas, file, and Blob APIs. WebGL/context-loss states, a React error boundary,
+desktop viewport guidance, bootstrap loading UI, and friendly capture/export
+errors protect the normal editor experience.
+
+The MP4/WebM export capability check and Mediabunny export path are split from
+the initial editor load. Existing DPR caps, deterministic export stepping,
+resource disposal, Blob URL revocation, dirty reload warnings, and standard
+file-input/download fallbacks remain in place. This milestone adds no backend,
+accounts, telemetry, PWA, or Tauri integration. Staging acceptance remains a
+manual gate documented in `docs/WEB_DEPLOYMENT.md`.

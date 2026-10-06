@@ -477,3 +477,21 @@ input with a responsive maximum; long names remain ellipsized and cannot push
 the file, View, or Export actions out of the Header. Flexible space remains
 between the Project context and right-side actions. Rename commit, dirty state,
 and persistence behavior are unchanged.
+
+## V2.WEB1 Production web hardening
+
+V2 is a standalone static build with an environment-driven Vite base path. The
+default output is `v2/dist/` for a root/subdomain deployment; `VITE_BASE_PATH`
+supports a path such as `/blocking/`. The browser capability helper centralizes
+WebGL, WebCodecs, MediaRecorder/WebM, canvas capture, file, and Blob-download
+checks. WebGL failure and context loss produce a user-facing recovery state,
+while the React error boundary prevents raw runtime exceptions from becoming a
+blank editor. MP4/WebM export detection is explicit and the heavy export path
+is loaded on demand.
+
+The Stage keeps its capped device-pixel-ratio and existing disposal paths.
+Still capture reports friendly failures; export tracks, temporary canvases,
+renderers, and Blob URLs are cleaned up. No service worker, cloud storage,
+authentication, analytics, or backend was added. Deployment and staging checks,
+HTTPS, cache policy, WordPress separation, and browser limitations are recorded
+in `docs/WEB_DEPLOYMENT.md`.

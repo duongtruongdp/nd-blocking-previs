@@ -40,3 +40,11 @@ Actor or Camera value, then press the diamond to capture that value at the
 current frame. Movement and value edits do not create keys automatically.
 Existing keys at the current frame are updated in place, while pending manual
 overrides remain visible until they are captured or the playhead changes.
+
+## Production web deployment
+
+The V2 production output is `v2/dist/`. Build it with
+`npx vite build --config v2/vite.config.ts`; set `VITE_BASE_PATH=/blocking/`
+for a subpath deployment. The app has no required secrets, backend, or service
+worker. See [`docs/WEB_DEPLOYMENT.md`](../docs/WEB_DEPLOYMENT.md) for static
+hosting, HTTPS, browser capability, staging, and WordPress separation guidance.

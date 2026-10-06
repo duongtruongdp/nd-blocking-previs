@@ -16,4 +16,25 @@ describe('runtime entity registry', () => {
     expect(registry.resolveHit(child)).toBeUndefined()
     child.geometry.dispose()
   })
+
+  it('resolves nested character and camera meshes to their owning entities', () => {
+    const registry = new RuntimeRegistry()
+    const actorRoot = new THREE.Group()
+    const actorModel = new THREE.Group()
+    const actorMesh = new THREE.SkinnedMesh(new THREE.BoxGeometry(1, 1, 1))
+    actorModel.add(actorMesh)
+    actorRoot.add(actorModel)
+    const cameraRoot = new THREE.Group()
+    const cameraBody = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1))
+    cameraRoot.add(cameraBody)
+
+    registry.register('actor-1', actorRoot)
+    registry.register('camera-1', cameraRoot)
+
+    expect(registry.resolveHit(actorMesh)).toBe('actor-1')
+    expect(registry.resolveHit(cameraBody)).toBe('camera-1')
+
+    actorMesh.geometry.dispose()
+    cameraBody.geometry.dispose()
+  })
 })

@@ -24,6 +24,7 @@ import { createMinimumValidProject, findEntity } from '../domain/project'
 import type { CameraFrameGuide, LensProfile, Placement, ProjectDocument, Vec3 } from '../domain/types'
 
 export type BlockingTool = 'select' | 'move' | 'rotate'
+export type BlockingViewMode = 'blocking' | 'camera'
 export type BlockingEntityKind = 'actor' | 'prop' | 'camera'
 
 export type BlockingSelection = {
@@ -35,6 +36,7 @@ export type BlockingState = {
   project: ProjectDocument
   selection: BlockingSelection
   tool: BlockingTool
+  viewMode: BlockingViewMode
 }
 
 type Listener = () => void
@@ -44,6 +46,7 @@ class BlockingStore {
     project: createMinimumValidProject(),
     selection: { entityId: null, kind: null },
     tool: 'select',
+    viewMode: 'blocking',
   }
 
   private readonly listeners = new Set<Listener>()
@@ -61,6 +64,11 @@ class BlockingStore {
   setTool(tool: BlockingTool): void {
     if (this.state.tool === tool) return
     this.update({ tool })
+  }
+
+  setViewMode(viewMode: BlockingViewMode): void {
+    if (this.state.viewMode === viewMode) return
+    this.update({ viewMode })
   }
 
   selectEntity(entityId: string | null): void {
@@ -199,6 +207,7 @@ class BlockingStore {
     this.update({
       project: deleteEntity(this.state.project, entityId),
       selection: { entityId: null, kind: null },
+      ...(this.state.viewMode === 'camera' && this.state.selection.kind === 'camera' ? { viewMode: 'blocking' as const } : {}),
     })
   }
 

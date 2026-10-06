@@ -68,6 +68,21 @@ export const ACTOR_PROPORTIONS = {
   },
 } as const
 
+const CAMERA_VISUAL = {
+  frontGlassCenterZ: -0.55,
+  frontGlassDepth: 0.025,
+  frontLensDiameter: 0.155,
+  matteBox: {
+    width: 0.155 * 1.75,
+    height: 0.155 * 1.6,
+    depth: 0.07,
+    thickness: 0.03,
+  },
+} as const
+
+export const CAMERA_OPTICAL_ORIGIN_Z = CAMERA_VISUAL.frontGlassCenterZ - CAMERA_VISUAL.frontGlassDepth / 2
+const CAMERA_MATTE_BOX_CENTER_Z = CAMERA_OPTICAL_ORIGIN_Z - CAMERA_VISUAL.matteBox.depth / 2
+
 export class BlockingAssetLibrary {
   readonly boxGeometry = new THREE.BoxGeometry(1, 1, 1)
   readonly cylinderGeometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 16)
@@ -120,6 +135,7 @@ export function createBlockingProxy(
       : createPropProxy(entity, library)
   group.userData.entityId = entity.id
   group.userData.entityKind = isActorEntity(entity) ? 'actor' : isCameraEntity(entity) ? 'camera' : 'prop'
+  if (isCameraEntity(entity)) group.userData.currentCamera = entity
   updateBlockingProxy(group, entity)
   return group
 }
@@ -134,6 +150,7 @@ export function updateBlockingProxy(
     group.scale.setScalar(actor.appearance.heightM)
     updateActorRuntimeAppearance(group, actor)
   } else if (isCameraEntity(entity)) {
+    group.userData.currentCamera = entity
     updateCameraProxy(group, entity)
   } else {
     const prop = entity as PropDocument
@@ -152,13 +169,44 @@ function isCameraEntity(entity: BlockingEntity): entity is CameraDocument {
 function createCameraProxy(camera: CameraDocument, library: BlockingAssetLibrary): THREE.Group {
   const group = new THREE.Group()
   group.name = 'CameraRoot'
-  const bodyMaterial = library.material('#8d7860')
-  const lensMaterial = library.material('#b6c2cc')
-  addPart(group, library.boxGeometry, bodyMaterial, [0, 0, 0.02], [0.3, 0.2, 0.34], 'camera-body')
-  const lens = addPart(group, library.cylinderGeometry, lensMaterial, [0, 0, -0.22], [0.09, 0.14, 0.09], 'camera-lens')
-  lens.rotation.x = Math.PI / 2
-  const direction = addPart(group, library.boxGeometry, lensMaterial, [0, 0, -0.42], [0.025, 0.025, 0.22], 'camera-forward')
+  const bodyMaterial = library.material('#2d353d')
+  const bodyEdgeMaterial = library.material('#404b54')
+  const panelMaterial = library.material('#20272d')
+  const handleMaterial = library.material('#4b5861')
+  const lensMaterial = library.material('#151b21')
+  const lensRingMaterial = library.material('#343f48')
+  const glassMaterial = library.material('#1e2d36')
+  glassMaterial.roughness = 0.28
+  glassMaterial.metalness = 0.22
+  const detailMaterial = library.material('#71808a')
+
+  addPart(group, library.boxGeometry, bodyMaterial, [0, 0, 0.02], [0.44, 0.3, 0.42], 'camera-body')
+  addPart(group, library.boxGeometry, bodyEdgeMaterial, [0, 0.16, 0.02], [0.34, 0.045, 0.3], 'camera-top-section')
+  addPart(group, library.boxGeometry, bodyEdgeMaterial, [0, -0.17, 0.02], [0.4, 0.05, 0.34], 'camera-base-plate')
+  addPart(group, library.boxGeometry, bodyEdgeMaterial, [0, 0.01, 0.25], [0.4, 0.25, 0.16], 'camera-rear-module')
+  addPart(group, library.boxGeometry, panelMaterial, [0.232, 0.01, 0.06], [0.025, 0.19, 0.27], 'camera-side-panel')
+
+  addPart(group, library.boxGeometry, handleMaterial, [0, 0.255, 0.13], [0.055, 0.16, 0.055], 'camera-handle-support-rear')
+  addPart(group, library.boxGeometry, handleMaterial, [0, 0.255, -0.13], [0.055, 0.16, 0.055], 'camera-handle-support-front')
+  addPart(group, library.boxGeometry, handleMaterial, [0, 0.36, 0.02], [0.075, 0.075, 0.35], 'camera-top-handle')
+
+  addLensPart(group, library, lensRingMaterial, [0, 0, -0.235], [0.2, 0.07, 0.2], 'camera-lens-mount')
+  addLensPart(group, library, lensMaterial, [0, 0, -0.3], [0.205, 0.1, 0.205], 'camera-lens')
+  addLensPart(group, library, lensRingMaterial, [0, 0, -0.385], [0.235, 0.075, 0.235], 'camera-focus-ring')
+  addLensPart(group, library, lensMaterial, [0, 0, -0.47], [0.205, 0.105, 0.205], 'camera-front-barrel')
+  addLensPart(group, library, glassMaterial, [0, 0, CAMERA_VISUAL.frontGlassCenterZ], [CAMERA_VISUAL.frontLensDiameter, CAMERA_VISUAL.frontGlassDepth, CAMERA_VISUAL.frontLensDiameter], 'camera-front-glass')
+
+  addMatteBox(group, library, bodyEdgeMaterial)
+
+  ;[-0.06, 0, 0.06].forEach((y, index) => addPart(group, library.boxGeometry, detailMaterial, [0.252, y + 0.07, 0.08], [0.018, 0.025, 0.105], `camera-side-vent-${index}`))
+  ;[-0.055, 0.01, 0.075].forEach((y, index) => addPart(group, library.boxGeometry, detailMaterial, [0.255, y - 0.07, 0.02], [0.022, 0.045, 0.045], `camera-side-button-${index}`))
+
+  const direction = new THREE.Object3D()
+  direction.name = 'camera-forward'
+  direction.position.set(0, 0, CAMERA_OPTICAL_ORIGIN_Z)
   direction.userData.cameraDirection = true
+  direction.userData.stageSelectable = false
+  group.add(direction)
 
   const runtimeCamera = new THREE.PerspectiveCamera()
   runtimeCamera.name = 'FilmCameraRuntime'
@@ -169,9 +217,34 @@ function createCameraProxy(camera: CameraDocument, library: BlockingAssetLibrary
   const frustum = new THREE.Group()
   frustum.name = 'CameraFrustumGuide'
   frustum.userData.cameraFrustum = true
+  frustum.userData.stageSelectable = false
   group.add(frustum)
   updateCameraProxy(group, camera)
   return group
+}
+
+function addLensPart(
+  group: THREE.Group,
+  library: BlockingAssetLibrary,
+  material: THREE.Material,
+  position: readonly [number, number, number],
+  scale: readonly [number, number, number],
+  name: string,
+): THREE.Mesh {
+  const lensPart = addPart(group, library.cylinderGeometry, material, position, scale, name)
+  lensPart.rotation.x = Math.PI / 2
+  return lensPart
+}
+
+function addMatteBox(group: THREE.Group, library: BlockingAssetLibrary, material: THREE.Material): void {
+  const { width, height, depth, thickness } = CAMERA_VISUAL.matteBox
+  const halfWidth = width / 2
+  const halfHeight = height / 2
+  const centerZ = CAMERA_MATTE_BOX_CENTER_Z
+  addPart(group, library.boxGeometry, material, [-halfWidth + thickness / 2, 0, centerZ], [thickness, height, depth], 'camera-matte-box-left')
+  addPart(group, library.boxGeometry, material, [halfWidth - thickness / 2, 0, centerZ], [thickness, height, depth], 'camera-matte-box-right')
+  addPart(group, library.boxGeometry, material, [0, halfHeight - thickness / 2, centerZ], [width, thickness, depth], 'camera-matte-box-top')
+  addPart(group, library.boxGeometry, material, [0, -halfHeight + thickness / 2, centerZ], [width, thickness, depth], 'camera-matte-box-bottom')
 }
 
 function updateCameraProxy(group: THREE.Group, camera: CameraDocument): void {
@@ -202,25 +275,16 @@ function updateCameraProxy(group: THREE.Group, camera: CameraDocument): void {
   const guideDepth = Math.min(12, Math.max(1, camera.lens.focusDistanceM))
   const halfHeight = Math.tan(verticalFov / 2) * guideDepth
   const halfWidth = halfHeight * runtimeCamera.aspect
-  const nearDepth = Math.min(0.35, guideDepth * 0.25)
-  const nearHalfHeight = Math.tan(verticalFov / 2) * nearDepth
-  const nearHalfWidth = nearHalfHeight * runtimeCamera.aspect
-  const near = [
-    new THREE.Vector3(-nearHalfWidth, nearHalfHeight, -nearDepth),
-    new THREE.Vector3(nearHalfWidth, nearHalfHeight, -nearDepth),
-    new THREE.Vector3(nearHalfWidth, -nearHalfHeight, -nearDepth),
-    new THREE.Vector3(-nearHalfWidth, -nearHalfHeight, -nearDepth),
-  ]
+  const origin = new THREE.Vector3(0, 0, CAMERA_OPTICAL_ORIGIN_Z)
   const far = [
-    new THREE.Vector3(-halfWidth, halfHeight, -guideDepth),
-    new THREE.Vector3(halfWidth, halfHeight, -guideDepth),
-    new THREE.Vector3(halfWidth, -halfHeight, -guideDepth),
-    new THREE.Vector3(-halfWidth, -halfHeight, -guideDepth),
+    new THREE.Vector3(-halfWidth, halfHeight, CAMERA_OPTICAL_ORIGIN_Z - guideDepth),
+    new THREE.Vector3(halfWidth, halfHeight, CAMERA_OPTICAL_ORIGIN_Z - guideDepth),
+    new THREE.Vector3(halfWidth, -halfHeight, CAMERA_OPTICAL_ORIGIN_Z - guideDepth),
+    new THREE.Vector3(-halfWidth, -halfHeight, CAMERA_OPTICAL_ORIGIN_Z - guideDepth),
   ]
   const points = [
-    ...near, near[0],
-    ...far, far[0],
-    near[0], far[0], near[1], far[1], near[2], far[2], near[3], far[3],
+    origin, far[0], origin, far[1], origin, far[2], origin, far[3],
+    far[0], far[1], far[1], far[2], far[2], far[3], far[3], far[0],
   ]
   const guide = new THREE.LineSegments(
     new THREE.BufferGeometry().setFromPoints(points),
@@ -301,6 +365,7 @@ function createActorProxy(actor: ActorDocument, library: BlockingAssetLibrary): 
     'facing-tick',
   )
   facingTick.userData.facingIndicator = true
+  facingTick.userData.stageSelectable = false
   facingTick.visible = false
 
   return group

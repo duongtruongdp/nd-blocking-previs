@@ -32,10 +32,20 @@ export function TopBar() {
       <div className="top-bar-spacer" />
 
       <div className="view-switcher" aria-label="View mode">
-        <button type="button" className="view-button is-active" aria-pressed="true">
+        <button
+          type="button"
+          className={`view-button ${state.viewMode === 'blocking' ? 'is-active' : ''}`}
+          aria-pressed={state.viewMode === 'blocking'}
+          onClick={() => blockingStore.setViewMode('blocking')}
+        >
           Blocking View
         </button>
-        <button type="button" className="view-button" disabled title="Camera View arrives in a later milestone">
+        <button
+          type="button"
+          className={`view-button ${state.viewMode === 'camera' ? 'is-active' : ''}`}
+          aria-pressed={state.viewMode === 'camera'}
+          onClick={() => blockingStore.setViewMode('camera')}
+        >
           Camera View
         </button>
       </div>

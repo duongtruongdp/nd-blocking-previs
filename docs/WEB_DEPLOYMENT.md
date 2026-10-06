@@ -5,6 +5,27 @@ browser and leaves the device only through user-initiated `.ndscene`, `.ndblock`
 still-image, or video downloads. There is no API, account, analytics, cloud
 storage, or service worker in this build.
 
+## Production target and architecture
+
+The production editor URL is:
+
+```text
+https://blocking.duongtruongdp.net/
+```
+
+This is a standalone static Vite application. The subdomain opens the editor
+directly; it does not contain a marketing screen and it does not depend on
+WordPress, PHP, a database, an API, a service worker, or a rewrite rule. The
+main WordPress site remains responsible for the public landing page at
+`https://duongtruongdp.net/blocking/`, which may link to this app in the same
+tab or a new tab.
+
+The app is local-first. Scene, Project, Camera, Timeline, and export data stay
+in browser memory until the user explicitly loads or downloads a file. The
+subdomain and the WordPress origin should be treated as separate origins: do
+not assume shared cookies, localStorage, sessionStorage, or authentication
+state between them.
+
 ## Build and preview
 
 Run these commands from the repository root:
@@ -15,13 +36,39 @@ npm run build
 npx vite preview --config v2/vite.config.ts
 ```
 
-The deployable output is `v2/dist/`. Upload the contents of that directory to
-a static host. `npm run build` validates the legacy root application; the V2
-production build is:
+The root `npm run build` continues to validate the legacy root application.
+The exact V2 production build for the standalone subdomain is:
 
 ```sh
-npx vite build --config v2/vite.config.ts
+npm run build:web
 ```
+
+It uses the default `VITE_BASE_PATH=/` and writes the deployable output to
+`v2/dist/`. The equivalent explicit command is:
+
+```sh
+VITE_BASE_PATH=/ npm run build:web
+```
+
+The staging build is:
+
+```sh
+npm run build:web:staging
+```
+
+It uses the same root base and emits source maps for controlled diagnosis.
+Keep staging source maps access-controlled and do not upload them to the
+public production host.
+
+Preview the production artifact, rather than the development server:
+
+```sh
+npx vite preview --config v2/vite.config.ts --host 127.0.0.1
+```
+
+The deployable output is `v2/dist/`. Upload the *contents* of that directory
+to the subdomain document root; do not upload the containing `dist` directory
+as a nested folder.
 
 ## Deployment URL shapes
 
@@ -31,7 +78,8 @@ The preferred deployment is a dedicated HTTPS subdomain:
 https://blocking.duongtruongdp.net/
 ```
 
-Use the default base `/` and point the subdomain DocumentRoot at `v2/dist/`.
+Use the default base `/` and point the subdomain DocumentRoot at the uploaded
+contents of `v2/dist/`.
 
 For a subpath deployment:
 
@@ -59,6 +107,67 @@ artifacts to the public production host unless that exposure is intentional.
 Staging can use the same command with a staging base, for example
 `blocking-staging.duongtruongdp.net` with `/`. Do not put API keys or private
 data in frontend environment files.
+
+## Subdomain, DNS, and HTTPS setup
+
+The exact labels depend on the hosting provider, but the provider workflow is:
+
+1. Create the subdomain `blocking` and assign it a dedicated static document
+   root. If the host separates DNS from hosting, create the document root in
+   the hosting control panel first.
+2. Create either an `A` record pointing `blocking.duongtruongdp.net` at the
+   host's published IPv4 address, or a `CNAME` pointing it at the host's
+   documented hostname. Use the provider's recommended record when it offers
+   a managed static-site target; do not guess an IP address.
+3. Wait for DNS propagation, then confirm the hostname resolves with `dig`
+   or the provider's DNS diagnostics.
+4. Issue or enable a certificate for
+   `blocking.duongtruongdp.net`, redirect HTTP to HTTPS, and verify the
+   certificate covers the exact hostname. The application must be served over
+   HTTPS in production.
+
+The upload does not require WordPress `.htaccess`, PHP, or a WordPress plugin.
+If the provider uses Apache/Nginx configuration, configure the subdomain's
+virtual host/document root there. One-page hosting only needs `/` to serve
+`index.html` and `/assets/*` to serve the static hashed files. There are no
+client-side routes in this milestone, so do not add a catch-all rewrite. If
+future routing is introduced, define the fallback deliberately and test direct
+loads of each route.
+
+## Expected document-root layout
+
+After upload, the subdomain document root should look like this:
+
+```text
+<subdomain-document-root>/
+├── index.html
+└── assets/
+    ├── index-<hash>.js
+    ├── index-<hash>.css
+    ├── src-<hash>.js
+    └── videoExporter-<hash>.js
+```
+
+`index.html` must be directly at `/`. The incorrect layout is
+`<document-root>/dist/index.html`, which would make the root URL return a
+directory/404 instead of opening the editor.
+
+## Cache and release policy
+
+- `index.html`: `Cache-Control: no-cache` (or a short revalidation lifetime),
+  so a release can point users at new hashed assets.
+- `/assets/*`: `Cache-Control: public, max-age=31536000, immutable`; filenames
+  are content-hashed and safe to retain.
+- Do not put a service-worker cache in front of the app. There is no service
+  worker/PWA in this project.
+- Keep the subdomain outside WordPress page-cache rules. If Cloudflare or
+  another CDN is used, configure it as a static origin for this subdomain and
+  purge only the subdomain's `index.html` when releasing.
+
+For a release, upload the new assets and `index.html` together when possible.
+Keep the previous `index.html` and asset directory as a named backup. Rollback
+is restoring that previous static set, then revalidating `/` and the asset
+URLs. No database migration or application-state rollback is required.
 
 ## Hosting requirements
 
@@ -105,16 +214,21 @@ development-only `?interactionDebug=1` diagnostic remains off in production.
 
 Before staging acceptance:
 
-1. Build the root app and V2 app.
-2. Inspect `v2/dist/index.html` and `v2/dist/assets/` for valid references.
+1. Build the root app and V2 app with `npm run build`, then
+   `npm run build:web`.
+2. Inspect `v2/dist/index.html` and `v2/dist/assets/` for valid root-relative
+   references. The production artifact must contain no `.map` files and no
+   `/blocking/assets/` references.
 3. Build once with `VITE_BASE_PATH=/blocking/` and verify the generated asset
-   URLs begin with `/blocking/`.
+   URLs begin with `/blocking/`; this is a compatibility check only, not the
+   production subdomain build.
 4. Serve `v2/dist/` through a static server or `vite preview`, not only Vite
-   dev middleware.
-5. Test New Project, Actor/Prop/Camera, Wall drawing, Camera Preview, Camera
-   View, Timeline, still capture, MP4/WebM fallback, `.ndscene`, `.ndblock`,
-   dirty reload warning, and reload recovery in Chrome, Edge, and Safari as
-   available.
+   dev middleware. Check `/`, every CSS/JS asset in `index.html`, and the
+   lazy `videoExporter` chunk for HTTP 200.
+5. Run the manual staging checklist in
+   [WEB_DEPLOY_CHECKLIST.md](WEB_DEPLOY_CHECKLIST.md) in Chrome, Safari, and
+   Edge as available. Firefox remains best-effort and mobile is outside the
+   acceptance gate.
 6. Repeat Scene switching, Camera View/Blocking View, Preview toggle, still
    capture, and export to check for stale renderers, listeners, tracks, or
    Blob URLs.
@@ -126,3 +240,28 @@ chunk. Three.js and the core editor remain the largest initial contributors.
 
 Staging browser acceptance is a required gate and is not implied by automated
 tests or a successful build.
+
+## Security, privacy, and dependency audit
+
+The app has no runtime network dependency after its static bundle loads. The
+Camera database is bundled, and export code is loaded from the same-origin
+hashed asset directory on demand. There are no external fonts, CDN scripts,
+analytics, account services, or remote asset URLs required by the editor.
+
+The production bundle should be reviewed for insecure `http://` asset/runtime
+references before release. A restrictive CSP can be added at the hosting
+layer after checking the generated bundle; do not add `unsafe-eval` merely as
+a default. If a future dependency requires it, document that exception and
+scope it to the smallest practical deployment. The app does not require
+iframe embedding. If WordPress later embeds it, configure `frame-ancestors`
+and the embedding permissions at the hosting layer deliberately; do not infer
+shared storage or cookies across the two origins.
+
+The build identity is available in the generated document as:
+
+```html
+<meta name="nd-build" content="v2-web1a" />
+```
+
+This is a quiet diagnostic marker for distinguishing a deployed artifact from
+another local or staging copy; it is not shown in the editor UI.

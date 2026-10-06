@@ -6,6 +6,8 @@ export class RuntimeRegistry {
 
   register(entityId: string, root: THREE.Object3D): void {
     this.roots.set(entityId, root)
+    root.userData.entityId = entityId
+    root.userData.stageSelectable = true
     root.traverse((object) => this.hitIds.set(object, entityId))
   }
 

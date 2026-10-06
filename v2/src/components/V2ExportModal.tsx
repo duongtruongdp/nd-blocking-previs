@@ -8,6 +8,8 @@ import { detectExportFormatCapabilities, preferredExportFormat, type ExportForma
 
 type V2ExportModalProps = {
   document: SceneDocument
+  projectName: string
+  sceneName: string
   settings: VideoExportSettings
   status: VideoExportStatus
   progress: { completedFrames: number; totalFrames: number; currentFrame: number } | null
@@ -26,7 +28,7 @@ const DELIVERY_OPTIONS: Array<{ value: CameraDeliveryFrame; label: string }> = [
   { value: '2.39', label: '2.39:1' },
 ]
 
-export function V2ExportModal({ document, settings, status, progress, error, onSettingsChange, onExport, onCancel, onClose }: V2ExportModalProps) {
+export function V2ExportModal({ document, projectName, sceneName, settings, status, progress, error, onSettingsChange, onExport, onCancel, onClose }: V2ExportModalProps) {
   const camera = settings.cameraId ? document.cameras.find((item) => item.id === settings.cameraId) : null
   const cameraAspect = deliveryAspectForCamera(settings.deliveryAspectRatio, settings.cameraId, document)
   const frameCount = exportFrameCount(settings.markIn, settings.markOut)
@@ -67,6 +69,8 @@ export function V2ExportModal({ document, settings, status, progress, error, onS
           {!busy ? <button className="v2-modal-close" onClick={onClose} type="button" aria-label="Close export panel">×</button> : null}
         </div>
         <div className="v2-export-fields">
+          <ExportReadout label="Project" value={projectName} />
+          <ExportReadout label="Scene" value={sceneName} />
           <ExportReadout label="Camera" value={camera?.name ?? 'No active Camera'} />
           <ExportReadout label="Range" value={`${settings.markIn} – ${settings.markOut}`} />
           <ExportReadout label="Duration" value={formatExportDuration(settings.markIn, settings.markOut, settings.frameRate)} />

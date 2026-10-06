@@ -7,6 +7,8 @@ import { V2TopBar } from './components/V2TopBar'
 import { webPlatformAdapter } from './platform/platformAdapter'
 import { createDefaultProps } from './scene/testEntities'
 import { applySceneEntityTransform, createActorDocument, createCameraDocument, createEmptySceneDocument, type ActorDocument, type CameraDocument, type RationalFrameRate, type SceneDocument, type TimelineProperty } from './core/sceneDocument'
+import type { ProjectDocument, ProjectSceneEntry } from './core/projectDocument'
+import { cloneSceneWithIdentity, createProjectDocument } from './core/projectDocument'
 import { CAMERA_DATABASE } from './core/cameraDatabase'
 import { defaultCameraPlacement } from './core/cameraPlacement'
 import { cameraRotationLookingAt } from './runtime/cameraMath'
@@ -24,15 +26,32 @@ import { exportFilename } from './export/exportMath'
 import { exportVideo, isExportCancelled } from './export/videoExporter'
 import type { VideoExportProgress, VideoExportSettings, VideoExportStatus } from './export/exportTypes'
 import { parseSceneFile, prepareSceneForSave, sceneFilename, serializeScene, SceneFileError } from './core/scenePersistence'
-import { creativeSceneChanged, creativeSceneFingerprint } from './core/sceneDirty'
+import { parseProjectFile, prepareProjectForSave, projectFilename, ProjectFileError, serializeProject } from './core/projectPersistence'
+import { creativeSceneChanged } from './core/sceneDirty'
+import { creativeProjectFingerprint } from './core/projectDirty'
 
-function createDefaultV2Scene(): SceneDocument {
-  return { ...createEmptySceneDocument(), props: createDefaultProps() }
+function createDefaultV2Scene(id = 'scene-01', name = 'Scene 01', includeDefaultProps = true): SceneDocument {
+  const scene = createEmptySceneDocument()
+  return {
+    ...scene,
+    metadata: { ...scene.metadata, id, name },
+    props: includeDefaultProps ? createDefaultProps() : [],
+  }
+}
+
+function createDefaultV2Project(): ProjectDocument {
+  return createProjectDocument('project-01', 'Untitled Project', createDefaultV2Scene())
+}
+
+function nextSceneNumber(entries: readonly ProjectSceneEntry[]): number {
+  return Math.max(0, ...entries.map((entry) => Number(/scene-(\d+)/i.exec(entry.id)?.[1] ?? 0))) + 1
 }
 
 export function V2App() {
   const [view, setView] = useState<'blocking' | 'camera'>('blocking')
-  const [sceneDocument, setSceneDocument] = useState(createDefaultV2Scene)
+  const [projectDocument, setProjectDocument] = useState(createDefaultV2Project)
+  const activeSceneEntry = projectDocument.scenes.find((entry) => entry.id === projectDocument.activeSceneId) ?? projectDocument.scenes[0]
+  const sceneDocument = activeSceneEntry.scene
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null)
   const [selectedFrameGuideId, setSelectedFrameGuideId] = useState<string | null>(null)
   const [isDirty, setIsDirty] = useState(false)
@@ -51,8 +70,9 @@ export function V2App() {
   const [timelineHeight, setTimelineHeight] = useState(TIMELINE_HEIGHT_DEFAULT)
   const [isResizingTimeline, setIsResizingTimeline] = useState(false)
   const appShellRef = useRef<HTMLElement>(null)
+  const projectDocumentRef = useRef<ProjectDocument>(projectDocument)
   const sceneDocumentRef = useRef<SceneDocument>(sceneDocument)
-  const savedSceneFingerprintRef = useRef(creativeSceneFingerprint(sceneDocument))
+  const savedProjectFingerprintRef = useRef(creativeProjectFingerprint(projectDocument))
   const selectedEntityIdRef = useRef<string | null>(selectedEntityId)
   const clipboardRef = useRef<EditorClipboard | null>(null)
   const historyRef = useRef<EditorHistory>(new EditorHistory(100))
@@ -80,9 +100,10 @@ export function V2App() {
   const formatTransform = (position: [number, number, number], rotation: [number, number, number]) => `P(${position.map((value) => value.toFixed(2)).join(',')}) R(${rotation.map((value) => value.toFixed(2)).join(',')})`
 
   useEffect(() => {
+    projectDocumentRef.current = projectDocument
     sceneDocumentRef.current = sceneDocument
     selectedEntityIdRef.current = selectedEntityId
-  }, [sceneDocument, selectedEntityId])
+  }, [projectDocument, sceneDocument, selectedEntityId])
 
   useEffect(() => {
     isPlayingRef.current = isPlaying
@@ -92,6 +113,22 @@ export function V2App() {
 
   const setClampedTimelineHeight = (requestedHeight: number) => {
     setTimelineHeight(clampTimelineHeight(requestedHeight, availableWorkspaceHeight()))
+  }
+
+  const replaceProjectDocument = (next: ProjectDocument) => {
+    projectDocumentRef.current = next
+    setProjectDocument(next)
+  }
+
+  const updateActiveSceneDocument = (nextScene: SceneDocument, touchProject = true) => {
+    const current = projectDocumentRef.current
+    const nextProject: ProjectDocument = {
+      ...current,
+      updatedAt: touchProject ? new Date().toISOString() : current.updatedAt,
+      scenes: current.scenes.map((entry) => entry.id === current.activeSceneId ? { ...entry, name: nextScene.metadata.name, scene: nextScene } : entry),
+    }
+    sceneDocumentRef.current = nextScene
+    replaceProjectDocument(nextProject)
   }
 
   const startTimelineResize = (event: PointerEvent<HTMLDivElement>) => {
@@ -134,7 +171,7 @@ export function V2App() {
   const applyEditorSnapshot = (snapshot: EditorHistorySnapshot, suspendedIds: ReadonlySet<string> = new Set()) => {
     sceneDocumentRef.current = snapshot.document
     selectedEntityIdRef.current = snapshot.selectedEntityId
-    setSceneDocument(snapshot.document)
+    updateActiveSceneDocument(snapshot.document)
     setSelectedEntityId(snapshot.selectedEntityId)
     setSuspendedTimelineEntityIds(suspendedIds)
   }
@@ -147,7 +184,7 @@ export function V2App() {
     const after = { ...before, timeline: { ...before.timeline, currentFrame } }
     setSuspendedTimelineEntityIds(new Set())
     sceneDocumentRef.current = after
-    setSceneDocument(after)
+    updateActiveSceneDocument(after, false)
   }
 
   const recordAction = (label: string, before: SceneDocument, beforeSelection: string | null, after: SceneDocument, afterSelection: string | null) => {
@@ -156,10 +193,10 @@ export function V2App() {
       before: { document: before, selectedEntityId: beforeSelection },
       after: { document: after, selectedEntityId: afterSelection },
     })
-    setIsDirty(creativeSceneChanged(before, after) || creativeSceneFingerprint(after) !== savedSceneFingerprintRef.current)
+    if (creativeSceneChanged(before, after)) setIsDirty(true)
   }
 
-  const resetForLoadedScene = (document: SceneDocument) => {
+  const resetEditorForProject = (project: ProjectDocument, clean = true) => {
     playbackRef.current = null
     setIsPlaying(false)
     setSuspendedTimelineEntityIds(new Set())
@@ -168,47 +205,156 @@ export function V2App() {
     setSelectedFrameGuideId(null)
     setSceneFileError(null)
     historyRef.current = new EditorHistory(100)
-    savedSceneFingerprintRef.current = creativeSceneFingerprint(document)
-    applyEditorSnapshot({ document, selectedEntityId: null })
-    setIsDirty(false)
+    const active = project.scenes.find((entry) => entry.id === project.activeSceneId) ?? project.scenes[0]
+    sceneDocumentRef.current = active.scene
+    replaceProjectDocument(project)
+    setSelectedEntityId(null)
+    setSuspendedTimelineEntityIds(new Set())
+    if (clean) savedProjectFingerprintRef.current = creativeProjectFingerprint(project)
+    setIsDirty(!clean)
   }
 
-  const saveScene = () => {
+  const switchScene = (sceneId: string) => {
+    const current = projectDocumentRef.current
+    if (current.activeSceneId === sceneId) return
+    const target = current.scenes.find((entry) => entry.id === sceneId)
+    if (!target) return
+    playbackRef.current = null
+    setIsPlaying(false)
+    setTransformingEntityId(null)
+    transformTransactionRef.current = null
+    historyRef.current = new EditorHistory(100)
+    setSelectedEntityId(null)
+    setSelectedFrameGuideId(null)
+    setSuspendedTimelineEntityIds(new Set())
+    sceneDocumentRef.current = target.scene
+    replaceProjectDocument({ ...current, activeSceneId: target.id })
+  }
+
+  const saveProject = () => {
     const savedAt = new Date().toISOString()
-    const prepared = prepareSceneForSave(sceneDocumentRef.current, savedAt)
     try {
-      const text = serializeScene(prepared, savedAt)
+      const prepared = prepareProjectForSave(projectDocumentRef.current, savedAt)
+      const text = serializeProject(prepared, savedAt)
       const url = window.URL.createObjectURL(new Blob([text], { type: 'application/json' }))
       const anchor = window.document.createElement('a')
       anchor.href = url
-      anchor.download = sceneFilename(prepared.metadata.name)
+      anchor.download = projectFilename(prepared.name)
       anchor.click()
       window.setTimeout(() => window.URL.revokeObjectURL(url), 0)
-      sceneDocumentRef.current = prepared
-      savedSceneFingerprintRef.current = creativeSceneFingerprint(prepared)
-      setSceneDocument(prepared)
+      sceneDocumentRef.current = prepared.scenes.find((entry) => entry.id === prepared.activeSceneId)!.scene
+      replaceProjectDocument(prepared)
+      savedProjectFingerprintRef.current = creativeProjectFingerprint(prepared)
       setSceneFileError(null)
       setIsDirty(false)
     } catch (error: unknown) {
-      setSceneFileError(error instanceof SceneFileError ? error.message : 'This scene could not be saved.')
+      setSceneFileError(error instanceof ProjectFileError ? error.message : 'This Project could not be saved.')
     }
   }
 
-  const loadScene = (file: File) => {
-    if (isDirty && !window.confirm('Discard unsaved scene changes and load this Scene?')) return
+  const exportScene = (sceneId = projectDocumentRef.current.activeSceneId) => {
+    const savedAt = new Date().toISOString()
+    const sceneEntry = projectDocumentRef.current.scenes.find((entry) => entry.id === sceneId)
+    if (!sceneEntry) return
+    const scene = prepareSceneForSave(sceneEntry.scene, savedAt)
+    try {
+      const text = serializeScene(scene, savedAt)
+      const url = window.URL.createObjectURL(new Blob([text], { type: 'application/json' }))
+      const anchor = window.document.createElement('a')
+      anchor.href = url
+      anchor.download = sceneFilename(scene.metadata.name)
+      anchor.click()
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 0)
+      setSceneFileError(null)
+    } catch (error: unknown) {
+      setSceneFileError(error instanceof SceneFileError ? error.message : 'This Scene could not be exported.')
+    }
+  }
+
+  const loadProject = (file: File) => {
+    if (isDirty && !window.confirm('Discard unsaved Project changes and load this Project?')) return
     void file.text().then((text) => {
-      const loaded = parseSceneFile(text)
-      resetForLoadedScene(loaded)
+      const loaded = parseProjectFile(text)
+      resetEditorForProject(loaded)
       setView('blocking')
     }).catch((error: unknown) => {
-      setSceneFileError(error instanceof SceneFileError ? error.message : 'This scene file could not be opened.')
+      setSceneFileError(error instanceof ProjectFileError ? error.message : 'This Project file could not be opened.')
     })
   }
 
-  const newScene = () => {
-    if (isDirty && !window.confirm('Discard unsaved scene changes and start a New Scene?')) return
-    resetForLoadedScene(createDefaultV2Scene())
+  const newProject = () => {
+    if (isDirty && !window.confirm('Discard unsaved Project changes and start a New Project?')) return
+    resetEditorForProject(createDefaultV2Project())
     setView('blocking')
+  }
+
+  const renameProject = (name: string) => {
+    const trimmed = name.trim()
+    if (!trimmed || trimmed === projectDocumentRef.current.name) return
+    replaceProjectDocument({ ...projectDocumentRef.current, name: trimmed, updatedAt: new Date().toISOString() })
+    setIsDirty(true)
+  }
+
+  const addScene = () => {
+    const current = projectDocumentRef.current
+    const number = nextSceneNumber(current.scenes)
+    const id = `scene-${String(number).padStart(2, '0')}`
+    const name = `Scene ${String(number).padStart(2, '0')}`
+    const scene = createDefaultV2Scene(id, name, false)
+    resetEditorForProject({ ...current, scenes: [...current.scenes, { id, name, scene }], activeSceneId: id, updatedAt: new Date().toISOString() }, false)
+    setView('blocking')
+  }
+
+  const renameScene = (sceneId: string, name: string) => {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    const current = projectDocumentRef.current
+    const entry = current.scenes.find((item) => item.id === sceneId)
+    if (!entry || entry.name === trimmed) return
+    const scene = { ...entry.scene, metadata: { ...entry.scene.metadata, name: trimmed, updatedAt: new Date().toISOString() } }
+    replaceProjectDocument({ ...current, updatedAt: new Date().toISOString(), scenes: current.scenes.map((item) => item.id === sceneId ? { ...item, name: trimmed, scene } : item) })
+    if (current.activeSceneId === sceneId) sceneDocumentRef.current = scene
+    setIsDirty(true)
+  }
+
+  const duplicateScene = (sceneId: string) => {
+    const current = projectDocumentRef.current
+    const original = current.scenes.find((entry) => entry.id === sceneId)
+    if (!original) return
+    const number = nextSceneNumber(current.scenes)
+    const id = `scene-${String(number).padStart(2, '0')}`
+    const name = `${original.name} Copy`
+    const scene = cloneSceneWithIdentity(original.scene, id, name, `copy-${String(number).padStart(2, '0')}`)
+    resetEditorForProject({ ...current, updatedAt: new Date().toISOString(), scenes: [...current.scenes, { id, name, scene }], activeSceneId: id }, false)
+  }
+
+  const deleteScene = (sceneId: string) => {
+    const current = projectDocumentRef.current
+    if (current.scenes.length <= 1) return
+    const index = current.scenes.findIndex((entry) => entry.id === sceneId)
+    if (index < 0 || !window.confirm(`Delete ${current.scenes[index].name}?`)) return
+    const scenes = current.scenes.filter((entry) => entry.id !== sceneId)
+    const activeSceneId = current.activeSceneId === sceneId ? scenes[Math.min(index, scenes.length - 1)].id : current.activeSceneId
+    const next = { ...current, updatedAt: new Date().toISOString(), scenes, activeSceneId }
+    if (activeSceneId !== current.activeSceneId) resetEditorForProject(next, false)
+    else {
+      replaceProjectDocument(next)
+      setIsDirty(true)
+    }
+  }
+
+  const importScene = (file: File) => {
+    void file.text().then((text) => {
+      const loaded = parseSceneFile(text)
+      const current = projectDocumentRef.current
+      const number = nextSceneNumber(current.scenes)
+      const id = current.scenes.some((entry) => entry.id === loaded.metadata.id) ? `scene-${String(number).padStart(2, '0')}` : loaded.metadata.id
+      const name = current.scenes.some((entry) => entry.name === loaded.metadata.name) ? `${loaded.metadata.name} Copy` : loaded.metadata.name
+      const scene = { ...loaded, metadata: { ...loaded.metadata, id, name } }
+      resetEditorForProject({ ...current, updatedAt: new Date().toISOString(), scenes: [...current.scenes, { id, name, scene }], activeSceneId: id }, false)
+    }).catch((error: unknown) => {
+      setSceneFileError(error instanceof SceneFileError ? error.message : 'This Scene file could not be imported.')
+    })
   }
 
   const addActor = () => {
@@ -379,7 +525,7 @@ export function V2App() {
     if (startFrame !== timeline.currentFrame) {
       const after = { ...sceneDocumentRef.current, timeline: { ...timeline, currentFrame: startFrame } }
       sceneDocumentRef.current = after
-      setSceneDocument(after)
+      updateActiveSceneDocument(after, false)
     }
     setSuspendedTimelineEntityIds(new Set())
     playbackRef.current = createPlaybackClock(startFrame, performance.now())
@@ -403,7 +549,7 @@ export function V2App() {
       if (frame !== timeline.currentFrame) {
         const after = { ...sceneDocumentRef.current, timeline: { ...timeline, currentFrame: frame } }
         sceneDocumentRef.current = after
-        setSceneDocument(after)
+        updateActiveSceneDocument(after, false)
       }
       if (playbackReachedMarkOut(clock, now, timeline.frameRate, timeline.markOut)) {
         playbackRef.current = null
@@ -503,7 +649,7 @@ export function V2App() {
     const entry = historyRef.current.undo()
     if (!entry) return false
     applyEditorSnapshot(entry.before)
-    setIsDirty(creativeSceneFingerprint(entry.before.document) !== savedSceneFingerprintRef.current)
+    setIsDirty(creativeProjectFingerprint(projectDocumentRef.current) !== savedProjectFingerprintRef.current)
     return true
   }
 
@@ -511,7 +657,7 @@ export function V2App() {
     const entry = historyRef.current.redo()
     if (!entry) return false
     applyEditorSnapshot(entry.after)
-    setIsDirty(creativeSceneFingerprint(entry.after.document) !== savedSceneFingerprintRef.current)
+    setIsDirty(creativeProjectFingerprint(projectDocumentRef.current) !== savedProjectFingerprintRef.current)
     return true
   }
 
@@ -555,8 +701,8 @@ export function V2App() {
 
   return (
     <main ref={appShellRef} className={`v2-app-shell${isResizingTimeline ? ' is-resizing-timeline' : ''}`} style={appShellStyle}>
-      <V2TopBar sceneName={sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} view={view} onViewChange={setView} onNewScene={newScene} onSaveScene={saveScene} onLoadScene={loadScene} onExport={openExport} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'finalizing'} />
-      <V2ScenePanel actors={sceneDocument.actors} props={sceneDocument.props} cameras={sceneDocument.cameras} activeCameraId={sceneDocument.activeCameraId} selectedEntityId={selectedEntityId} onAddActor={addActor} onAddCamera={addCamera} onSetActiveCamera={setActiveCamera} onSelectEntity={handleSelectionChange} />
+      <V2TopBar projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} view={view} onViewChange={setView} onNewProject={newProject} onSaveProject={saveProject} onLoadProject={loadProject} onExport={openExport} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'finalizing'} />
+      <V2ScenePanel projectName={projectDocument.name} scenes={projectDocument.scenes} activeSceneId={projectDocument.activeSceneId} actors={sceneDocument.actors} props={sceneDocument.props} cameras={sceneDocument.cameras} activeCameraId={sceneDocument.activeCameraId} selectedEntityId={selectedEntityId} onProjectNameChange={renameProject} onSelectScene={switchScene} onAddScene={addScene} onRenameScene={renameScene} onDuplicateScene={duplicateScene} onDeleteScene={deleteScene} onImportScene={importScene} onExportScene={exportScene} onAddActor={addActor} onAddCamera={addCamera} onSetActiveCamera={setActiveCamera} onSelectEntity={handleSelectionChange} />
       <V2Stage
         view={view}
         actors={sceneDocument.actors}
@@ -605,7 +751,7 @@ export function V2App() {
       ><span aria-hidden="true" /></div>
       <V2Timeline timeline={sceneDocument.timeline} tracks={sceneDocument.timeline.tracks} entities={timelineEntities} selectedEntityId={selectedEntityId} isPlaying={isPlaying} onFrameChange={setCurrentFrame} onFrameRateChange={changeFrameRate} onTogglePlayback={togglePlayback} onStepFrame={stepFrame} onMarkIn={() => changeMark('in')} onMarkOut={() => changeMark('out')} onDeleteKeyframe={deleteKeyframe} onEntitySelect={handleSelectionChange} onScrubStart={() => setIsScrubbing(true)} onScrubEnd={() => setIsScrubbing(false)} />
       {exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'finalizing' ? <div className="v2-export-lock" aria-hidden="true" /> : null}
-      {exportOpen ? <V2ExportModal document={sceneDocument} settings={exportSettings} status={exportStatus} progress={exportProgress} error={exportError} onSettingsChange={setExportSettings} onExport={startExport} onCancel={cancelExport} onClose={() => setExportOpen(false)} /> : null}
+      {exportOpen ? <V2ExportModal document={sceneDocument} projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} settings={exportSettings} status={exportStatus} progress={exportProgress} error={exportError} onSettingsChange={setExportSettings} onExport={startExport} onCancel={cancelExport} onClose={() => setExportOpen(false)} /> : null}
     </main>
   )
 }

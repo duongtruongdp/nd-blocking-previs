@@ -42,7 +42,9 @@ button:disabled { cursor: default; opacity: 0.52; }
 
 .v2-brand { gap: var(--space-2); font-weight: 700; letter-spacing: -0.02em; white-space: nowrap; }
 .v2-brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 10px; letter-spacing: 0.08em; box-shadow: 3px 3px 8px rgba(118, 105, 201, 0.22); }
-.v2-scene-title { color: var(--text-secondary); font-weight: 600; }
+.v2-project-context { display: flex; align-items: baseline; gap: 8px; min-width: 0; color: var(--text-secondary); font-weight: 600; }
+.v2-project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-project-scene { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 .v2-unsaved-dot { margin-left: 5px; color: var(--accent); font-size: 17px; vertical-align: -1px; }
 .v2-file-error { max-width: 300px; overflow: hidden; color: #a74a48; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .v2-topbar-actions { gap: 8px; margin-left: auto; }
@@ -88,6 +90,23 @@ h2 { margin: 3px 0 0; font-size: 16px; letter-spacing: -0.02em; }
 .v2-add-menu-label { padding: 5px 9px 2px; color: var(--text-muted); font-size: 9px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
 .v2-menu-icon { display: grid; place-items: center; width: 16px; height: 16px; border: 1px solid currentColor; border-radius: 50%; font-size: 10px; }
 .v2-scene-sections { display: grid; gap: 7px; }
+.v2-project-section, .v2-scenes-section { display: grid; gap: 7px; margin-bottom: 10px; padding: 10px 11px; border-radius: var(--radius-medium); background: var(--surface-inset); box-shadow: var(--shadow-inset); }
+.v2-project-name-input { width: 100%; min-width: 0; padding: 7px 8px; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--surface-raised); color: var(--text-secondary); font: inherit; font-weight: 600; }
+.v2-project-name-input:focus { outline: 2px solid rgba(118, 105, 201, .28); outline-offset: 1px; }
+.v2-scene-list { display: grid; gap: 3px; }
+.v2-scene-row { position: relative; display: flex; align-items: center; min-width: 0; border: 1px solid transparent; border-radius: 8px; }
+.v2-scene-row.is-active { border-color: rgba(118, 105, 201, .24); background: rgba(255, 255, 255, .78); }
+.v2-scene-select { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; padding: 6px 7px; border: 0; background: transparent; color: var(--text-secondary); text-align: left; cursor: pointer; }
+.v2-scene-row.is-active .v2-scene-select { color: var(--accent); font-weight: 700; }
+.v2-scene-index { color: var(--text-muted); font-size: 9px; font-variant-numeric: tabular-nums; }
+.v2-scene-menu-button { width: 27px; height: 25px; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); font-size: 10px; cursor: pointer; }
+.v2-scene-menu-button:hover { background: var(--accent-soft); color: var(--accent); }
+.v2-scene-row-menu { position: absolute; z-index: 8; top: calc(100% + 4px); right: 3px; display: grid; gap: 2px; width: 132px; padding: 5px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--surface-raised); box-shadow: var(--shadow-float); }
+.v2-scene-row-menu button { padding: 6px 7px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); text-align: left; font-size: 10px; cursor: pointer; }
+.v2-scene-row-menu button:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
+.v2-scene-row-menu button.is-danger { color: #a74a48; }
+.v2-scene-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+.v2-scene-actions .v2-small-action { padding: 5px 6px; }
 .v2-scene-section { padding: 10px 11px; border-radius: var(--radius-medium); background: var(--surface-inset); box-shadow: var(--shadow-inset); }
 .v2-section-title { justify-content: space-between; color: var(--text-secondary); font-size: 11px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
 .v2-count { color: var(--text-muted); font-variant-numeric: tabular-nums; }

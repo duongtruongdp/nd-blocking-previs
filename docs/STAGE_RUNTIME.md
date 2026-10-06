@@ -240,3 +240,22 @@ through the existing container `ResizeObserver`, so the renderer and camera
 projection are resized in place. The Timeline toolbar and frame ruler remain
 fixed while only its track viewport scrolls. No workspace dimensions or
 collapse state are part of `SceneDocument` or `.ndscene` serialization.
+
+## V2.9 Project layer
+
+The Web shell now keeps one `ProjectDocument` above the active
+`SceneDocument`. Only the active Scene is reconciled into Stage runtime
+objects; inactive Scenes remain plain serializable documents, so switching
+among many Scenes does not create multiple StageEngines, renderers, or
+playback loops. A Scene switch clears selection and playback, resets the
+active Scene history baseline, and restores that Scene's current frame and
+active Camera from its own document.
+
+`.ndblock` is a versioned JSON envelope containing the Project metadata and
+embedded SceneDocuments. Its platform-neutral serializer validates Project
+identity, non-empty unique Scene IDs, active-scene resolution, and every
+embedded Scene through the existing `.ndscene` validator. Project structure
+undo is intentionally separate from Scene editing undo. Scene duplication
+deep-copies and remaps entity, Frame Guide, Track, Keyframe, and active Camera
+IDs. `.ndscene` import adds a Scene to the current Project; individual Scene
+export remains available and does not clear Project dirty state.

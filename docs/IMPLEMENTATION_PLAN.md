@@ -1,6 +1,6 @@
 # ND Blocking & Previs — Architecture and Implementation Plan
 
-Status: V2.8A + V2.UI1 current: portable `.ndscene` persistence, compact workspace header, session-only resizable Timeline layout, fixed Timeline toolbar/ruler, and guarded Mark In/Mark Out shortcuts are implemented through the frozen V2 StageEngine API; manual browser acceptance remains required.
+Status: V2.9 current: ProjectDocument, multi-Scene editing, portable `.ndblock` persistence, `.ndscene` coexistence, compact workspace header, and resizable Timeline are implemented through the frozen V2 StageEngine API; manual browser acceptance remains required.
 
 V2.UI1 keeps workspace dimensions outside SceneDocument and `.ndscene`
 serialization. Timeline height defaults to 240px, clamps to a 140px minimum,
@@ -8,6 +8,25 @@ and uses a viewport-aware upper bound that preserves a 240px Stage minimum.
 The existing Stage ResizeObserver handles Stage and Camera View changes in
 place; Timeline track rows scroll inside their viewport while the toolbar and
 ruler remain fixed.
+
+V2.9 introduces a ProjectDocument above SceneDocument. A Project contains an
+ordered non-empty list of embedded SceneDocuments and an activeSceneId. The
+portable `{ format: "ndblock", version: 1, project }` envelope is separate
+from `.ndscene`; project persistence validates each embedded Scene through the
+existing SceneDocument validator and rejects unsupported newer versions.
+Scene IDs are stable at the Project boundary. Scene-local Actor, Prop, Camera,
+Frame Guide, Timeline Track, and Keyframe IDs remain local for imported Scenes,
+while Duplicate Scene creates new IDs and remaps every Timeline reference and
+active Camera. Only the active Scene owns runtime objects; inactive Scenes are
+plain serializable documents.
+
+Project structure actions are intentionally outside the active Scene undo
+history. Switching Scenes clears selection, playback, transform transactions,
+and the active Scene history baseline without changing creative data. Project
+dirty state covers Project name, Scene structure/names, and creative data in
+any Scene; active Scene selection, playback, and editor navigation do not mark
+the Project dirty. Saving the Project clears the Project dirty state; exporting
+an individual `.ndscene` does not.
 Scope: Phase 1 foundation, workspace shell, Actor/Prop blocking, locked Actor/Pose system, verified camera data, and serializable Camera objects.
 
 Milestone 0 decisions are implemented in the domain source and specified by these focused contracts:

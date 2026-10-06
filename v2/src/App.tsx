@@ -4,7 +4,9 @@ import { V2ScenePanel } from './components/V2ScenePanel'
 import { V2Stage, type V2TransformDebugState } from './components/V2Stage'
 import { V2Timeline } from './components/V2Timeline'
 import { V2TopBar } from './components/V2TopBar'
-import { webPlatformAdapter } from './platform/platformAdapter'
+import { V2ProjectLibrary } from './components/V2ProjectLibrary'
+import { closeDecisionForUnsavedChoice, platformAdapter, PlatformFileError } from './platform/platformAdapter'
+import { basename, createRecentProjectEntry, duplicateFilename, filenameWithoutExtension, projectFilenameFromInput, recentProjectIdentity, removeRecentProject, siblingPath, sortRecentProjects, updateRecentProjectPath, upsertRecentProject, type RecentProjectEntry } from './platform/projectLibrary'
 import { createDefaultProps } from './scene/testEntities'
 import { applySceneEntityTransform, createActorDocument, createCameraDocument, createEmptySceneDocument, createOpeningDocument, createPropDocument, createSunDocument, createWallDocument, type ActorDocument, type ActorVector3, type CameraDocument, type OpeningDocument, type PropDocument, type RationalFrameRate, type SceneDocument, type ScenicPropType, type SunDocument, type TimelineProperty, type WallDocument } from './core/sceneDocument'
 import type { ProjectDocument, ProjectSceneEntry } from './core/projectDocument'
@@ -48,6 +50,21 @@ function createDefaultV2Project(): ProjectDocument {
   return createProjectDocument('project-01', 'Untitled Project', createDefaultV2Scene())
 }
 
+async function refreshRecentProjectStatus(entries: readonly RecentProjectEntry[]): Promise<RecentProjectEntry[]> {
+  const refreshed = await Promise.all(entries.map(async (entry) => {
+    const exists = await platformAdapter.fileExists(entry.path)
+    if (!exists) return { ...entry, missing: true }
+    const stat = await platformAdapter.statFile(entry.path)
+    return {
+      ...entry,
+      missing: false,
+      modifiedSinceLastOpen: Boolean(entry.lastKnownModifiedAt && stat?.modifiedAt && entry.lastKnownModifiedAt !== stat.modifiedAt),
+      lastKnownModifiedAt: stat?.modifiedAt ?? entry.lastKnownModifiedAt,
+    }
+  }))
+  return sortRecentProjects(refreshed)
+}
+
 function nextSceneNumber(entries: readonly ProjectSceneEntry[]): number {
   return Math.max(0, ...entries.map((entry) => Number(/scene-(\d+)/i.exec(entry.id)?.[1] ?? 0))) + 1
 }
@@ -59,12 +76,16 @@ function nextEntityIndex(scene: SceneDocument, prefix: string): number {
 
 function V2EditorApp() {
   const [view, setView] = useState<'blocking' | 'camera'>('blocking')
+  const [workspaceMode, setWorkspaceMode] = useState<'library' | 'editor'>(() => platformAdapter.kind === 'desktop' ? 'library' : 'editor')
   const [projectDocument, setProjectDocument] = useState(createDefaultV2Project)
   const activeSceneEntry = projectDocument.scenes.find((entry) => entry.id === projectDocument.activeSceneId) ?? projectDocument.scenes[0]
   const sceneDocument = activeSceneEntry.scene
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null)
   const [selectedFrameGuideId, setSelectedFrameGuideId] = useState<string | null>(null)
   const [isDirty, setIsDirty] = useState(false)
+  const [recentProjects, setRecentProjects] = useState<RecentProjectEntry[]>([])
+  const [recentProjectsLoading, setRecentProjectsLoading] = useState(platformAdapter.kind === 'desktop')
+  const [recentProjectsError, setRecentProjectsError] = useState<string | null>(null)
   const [sceneFileError, setSceneFileError] = useState<string | null>(null)
   const [transformTool, setTransformTool] = useState<StageTool>('select')
   const [isPlaying, setIsPlaying] = useState(false)
@@ -86,6 +107,10 @@ function V2EditorApp() {
   const appShellRef = useRef<HTMLElement>(null)
   const projectDocumentRef = useRef<ProjectDocument>(projectDocument)
   const sceneDocumentRef = useRef<SceneDocument>(sceneDocument)
+  const currentProjectPathRef = useRef<string | null>(null)
+  const recentProjectsRef = useRef<RecentProjectEntry[]>([])
+  const isDirtyRef = useRef(isDirty)
+  const workspaceModeRef = useRef(workspaceMode)
   const savedProjectFingerprintRef = useRef(creativeProjectFingerprint(projectDocument))
   const selectedEntityIdRef = useRef<string | null>(selectedEntityId)
   const clipboardRef = useRef<EditorClipboard | null>(null)
@@ -95,9 +120,10 @@ function V2EditorApp() {
   const playbackFrameRequestRef = useRef<number | null>(null)
   const exportAbortRef = useRef<AbortController | null>(null)
   const togglePlaybackRef = useRef<() => void>(() => {})
+  const newProjectRef = useRef<() => void>(() => {})
+  const loadProjectRef = useRef<() => void>(() => {})
   const isPlayingRef = useRef(isPlaying)
   const timelineResizeRef = useRef<{ startY: number; startHeight: number } | null>(null)
-  void webPlatformAdapter
   const evaluatedEntities = evaluateTimeline(sceneDocument, sceneDocument.timeline.currentFrame)
   const selectedActorBase = sceneDocument.actors.find((actor) => actor.id === selectedEntityId) ?? null
   const selectedPropBase = sceneDocument.props.find((prop) => prop.id === selectedEntityId) ?? null
@@ -126,7 +152,31 @@ function V2EditorApp() {
     projectDocumentRef.current = projectDocument
     sceneDocumentRef.current = sceneDocument
     selectedEntityIdRef.current = selectedEntityId
-  }, [projectDocument, sceneDocument, selectedEntityId])
+    isDirtyRef.current = isDirty
+    workspaceModeRef.current = workspaceMode
+    recentProjectsRef.current = recentProjects
+  }, [projectDocument, sceneDocument, selectedEntityId, isDirty, workspaceMode, recentProjects])
+
+  useEffect(() => {
+    if (platformAdapter.kind !== 'desktop') return
+    let active = true
+    void platformAdapter.loadRecentProjects().then(async (entries) => {
+      const refreshed = await refreshRecentProjectStatus(entries)
+      if (!active) return
+      recentProjectsRef.current = refreshed
+      setRecentProjects(refreshed)
+      setRecentProjectsError(null)
+      await platformAdapter.saveRecentProjects(refreshed)
+    }).catch(() => {
+      if (!active) return
+      recentProjectsRef.current = []
+      setRecentProjects([])
+      setRecentProjectsError('Recent Projects could not be loaded.')
+    }).finally(() => {
+      if (active) setRecentProjectsLoading(false)
+    })
+    return () => { active = false }
+  }, [])
 
   useEffect(() => {
     isPlayingRef.current = isPlaying
@@ -219,7 +269,7 @@ function V2EditorApp() {
     if (creativeSceneChanged(before, after)) setIsDirty(true)
   }
 
-  const resetEditorForProject = (project: ProjectDocument, clean = true) => {
+  const resetEditorForProject = (project: ProjectDocument, clean = true, currentPath = currentProjectPathRef.current) => {
     playbackRef.current = null
     setIsPlaying(false)
     setSuspendedTimelineEntityIds(new Set())
@@ -230,6 +280,7 @@ function V2EditorApp() {
     historyRef.current = new EditorHistory(100)
     const active = project.scenes.find((entry) => entry.id === project.activeSceneId) ?? project.scenes[0]
     sceneDocumentRef.current = active.scene
+    currentProjectPathRef.current = currentPath
     replaceProjectDocument(project)
     setSelectedEntityId(null)
     setSuspendedTimelineEntityIds(new Set())
@@ -254,61 +305,216 @@ function V2EditorApp() {
     replaceProjectDocument({ ...current, activeSceneId: target.id })
   }
 
-  const saveProject = () => {
+  const persistRecentProjects = async (entries: readonly RecentProjectEntry[]) => {
+    const next = sortRecentProjects(entries)
+    recentProjectsRef.current = next
+    setRecentProjects(next)
+    await platformAdapter.saveRecentProjects(next)
+  }
+
+  const recentEntryForProject = async (path: string, project: ProjectDocument, lastOpenedAt = new Date().toISOString()): Promise<RecentProjectEntry> => {
+    const stat = await platformAdapter.statFile(path)
+    return createRecentProjectEntry({
+      path,
+      displayName: project.name || filenameWithoutExtension(path),
+      lastOpenedAt,
+      lastKnownModifiedAt: stat?.modifiedAt ?? null,
+      lastKnownSceneCount: project.scenes.length,
+      missing: false,
+      modifiedSinceLastOpen: false,
+    })
+  }
+
+  const updateRecentForProject = async (path: string, project: ProjectDocument, lastOpenedAt = new Date().toISOString(), oldPath?: string) => {
+    const entry = await recentEntryForProject(path, project, lastOpenedAt)
+    const next = oldPath ? updateRecentProjectPath(recentProjectsRef.current, oldPath, entry) : upsertRecentProject(recentProjectsRef.current, entry)
+    await persistRecentProjects(next)
+  }
+
+  const saveProject = async (): Promise<boolean> => {
     const savedAt = new Date().toISOString()
     try {
       const prepared = prepareProjectForSave(projectDocumentRef.current, savedAt)
       const text = serializeProject(prepared, savedAt)
-      const url = window.URL.createObjectURL(new Blob([text], { type: 'application/json' }))
-      const anchor = window.document.createElement('a')
-      anchor.href = url
-      anchor.download = projectFilename(prepared.name)
-      anchor.click()
-      window.setTimeout(() => window.URL.revokeObjectURL(url), 0)
+      const result = await platformAdapter.saveProjectFile(text, projectFilename(prepared.name), currentProjectPathRef.current)
+      if (result.cancelled) return false
+      currentProjectPathRef.current = result.path
       sceneDocumentRef.current = prepared.scenes.find((entry) => entry.id === prepared.activeSceneId)!.scene
       replaceProjectDocument(prepared)
       savedProjectFingerprintRef.current = creativeProjectFingerprint(prepared)
       setSceneFileError(null)
       setIsDirty(false)
+      if (result.path) await updateRecentForProject(result.path, prepared)
+      return true
     } catch (error: unknown) {
-      setSceneFileError(error instanceof ProjectFileError ? error.message : 'This Project could not be saved.')
+      setSceneFileError(error instanceof ProjectFileError || error instanceof PlatformFileError ? error.message : 'This Project could not be saved.')
+      return false
     }
   }
 
-  const exportScene = (sceneId = projectDocumentRef.current.activeSceneId) => {
+  const saveProjectAs = async (): Promise<boolean> => {
+    const savedAt = new Date().toISOString()
+    try {
+      const prepared = prepareProjectForSave(projectDocumentRef.current, savedAt)
+      const result = await platformAdapter.saveProjectFileAs(serializeProject(prepared, savedAt), projectFilename(prepared.name))
+      if (result.cancelled) return false
+      currentProjectPathRef.current = result.path
+      sceneDocumentRef.current = prepared.scenes.find((entry) => entry.id === prepared.activeSceneId)!.scene
+      replaceProjectDocument(prepared)
+      savedProjectFingerprintRef.current = creativeProjectFingerprint(prepared)
+      setSceneFileError(null)
+      setIsDirty(false)
+      if (result.path) await updateRecentForProject(result.path, prepared)
+      return true
+    } catch (error: unknown) {
+      setSceneFileError(error instanceof ProjectFileError || error instanceof PlatformFileError ? error.message : 'This Project could not be saved.')
+      return false
+    }
+  }
+
+  const exportScene = async (sceneId = projectDocumentRef.current.activeSceneId) => {
     const savedAt = new Date().toISOString()
     const sceneEntry = projectDocumentRef.current.scenes.find((entry) => entry.id === sceneId)
     if (!sceneEntry) return
     const scene = prepareSceneForSave(sceneEntry.scene, savedAt)
     try {
-      const text = serializeScene(scene, savedAt)
-      const url = window.URL.createObjectURL(new Blob([text], { type: 'application/json' }))
-      const anchor = window.document.createElement('a')
-      anchor.href = url
-      anchor.download = sceneFilename(scene.metadata.name)
-      anchor.click()
-      window.setTimeout(() => window.URL.revokeObjectURL(url), 0)
+      const result = await platformAdapter.saveSceneFile(serializeScene(scene, savedAt), sceneFilename(scene.metadata.name))
+      if (result.cancelled) return
       setSceneFileError(null)
     } catch (error: unknown) {
-      setSceneFileError(error instanceof SceneFileError ? error.message : 'This Scene could not be exported.')
+      setSceneFileError(error instanceof SceneFileError || error instanceof PlatformFileError ? error.message : 'This Scene could not be exported.')
     }
   }
 
-  const loadProject = (file: File) => {
-    if (isDirty && !window.confirm('Discard unsaved Project changes and load this Project?')) return
-    void file.text().then((text) => {
-      const loaded = parseProjectFile(text)
-      resetEditorForProject(loaded)
-      setView('blocking')
-    }).catch((error: unknown) => {
-      setSceneFileError(error instanceof ProjectFileError ? error.message : 'This Project file could not be opened.')
-    })
+  const enterLoadedProject = async (file: { path: string | null; text: string }) => {
+    const loaded = parseProjectFile(file.text)
+    resetEditorForProject(loaded, true, file.path)
+    setView('blocking')
+    setWorkspaceMode('editor')
+    if (file.path) await updateRecentForProject(file.path, loaded)
+  }
+
+  const loadProject = async () => {
+    try {
+      const file = await platformAdapter.openProjectFile()
+      if (!file) return
+      if (isDirtyRef.current && !window.confirm('Discard unsaved Project changes and load this Project?')) return
+      await enterLoadedProject(file)
+    } catch (error: unknown) {
+      setSceneFileError(error instanceof ProjectFileError || error instanceof PlatformFileError ? error.message : 'This Project file could not be opened.')
+    }
   }
 
   const newProject = () => {
     if (isDirty && !window.confirm('Discard unsaved Project changes and start a New Project?')) return
-    resetEditorForProject(createDefaultV2Project())
+    resetEditorForProject(createDefaultV2Project(), true, null)
     setView('blocking')
+    setWorkspaceMode('editor')
+  }
+
+  useEffect(() => {
+    newProjectRef.current = newProject
+    loadProjectRef.current = loadProject
+  }, [newProject, loadProject])
+
+  const openRecentProject = async (entry: RecentProjectEntry) => {
+    try {
+      if (!await platformAdapter.fileExists(entry.path)) {
+        await persistRecentProjects(recentProjectsRef.current.map((candidate) => candidate.id === entry.id ? { ...candidate, missing: true } : candidate))
+        return
+      }
+      const file = await platformAdapter.openProjectFileAt(entry.path)
+      if (!file) return
+      if (isDirtyRef.current && !window.confirm('Discard unsaved Project changes and load this Project?')) return
+      await enterLoadedProject(file)
+    } catch (error: unknown) {
+      setRecentProjectsError(error instanceof ProjectFileError || error instanceof PlatformFileError ? error.message : 'This Project file could not be opened.')
+    }
+  }
+
+  const locateRecentProject = async (entry: RecentProjectEntry) => {
+    try {
+      const file = await platformAdapter.locateProjectFile()
+      if (!file) return
+      const loaded = parseProjectFile(file.text)
+      resetEditorForProject(loaded, true, file.path)
+      setView('blocking')
+      setWorkspaceMode('editor')
+      if (file.path) await updateRecentForProject(file.path, loaded, new Date().toISOString(), entry.path)
+    } catch (error: unknown) {
+      setRecentProjectsError(error instanceof ProjectFileError || error instanceof PlatformFileError ? error.message : 'This Project file could not be opened.')
+    }
+  }
+
+  const removeRecent = async (entry: RecentProjectEntry) => {
+    await persistRecentProjects(removeRecentProject(recentProjectsRef.current, entry.path))
+  }
+
+  const renameRecentFile = async (entry: RecentProjectEntry) => {
+    const requested = window.prompt('Rename File', basename(entry.path))
+    if (requested === null) return
+    const filename = projectFilenameFromInput(requested)
+    if (!filename) {
+      setRecentProjectsError('Choose a valid Project filename.')
+      return
+    }
+    const nextPath = siblingPath(entry.path, filename)
+    if (recentProjectIdentity(nextPath) === recentProjectIdentity(entry.path)) return
+    try {
+      if (await platformAdapter.fileExists(nextPath)) {
+        setRecentProjectsError('A Project file with that name already exists.')
+        return
+      }
+      await platformAdapter.renameProjectFile(entry.path, nextPath)
+      const nextEntry = { ...entry, id: recentProjectIdentity(nextPath), path: nextPath, missing: false, modifiedSinceLastOpen: false }
+      await persistRecentProjects(updateRecentProjectPath(recentProjectsRef.current, entry.path, nextEntry))
+      setRecentProjectsError(null)
+    } catch (error: unknown) {
+      setRecentProjectsError(error instanceof PlatformFileError ? error.message : 'This Project file could not be renamed.')
+    }
+  }
+
+  const duplicateRecentFile = async (entry: RecentProjectEntry) => {
+    try {
+      let copyIndex = 1
+      let nextPath = siblingPath(entry.path, duplicateFilename(entry.path, copyIndex))
+      while (await platformAdapter.fileExists(nextPath)) {
+        copyIndex += 1
+        nextPath = siblingPath(entry.path, duplicateFilename(entry.path, copyIndex))
+      }
+      await platformAdapter.copyProjectFile(entry.path, nextPath)
+      const stat = await platformAdapter.statFile(nextPath)
+      const nextEntry = createRecentProjectEntry({ ...entry, id: undefined, path: nextPath, lastOpenedAt: new Date().toISOString(), lastKnownModifiedAt: stat?.modifiedAt ?? entry.lastKnownModifiedAt, missing: false, modifiedSinceLastOpen: false })
+      await persistRecentProjects(upsertRecentProject(recentProjectsRef.current, nextEntry))
+      setRecentProjectsError(null)
+    } catch (error: unknown) {
+      setRecentProjectsError(error instanceof PlatformFileError ? error.message : 'This Project file could not be duplicated.')
+    }
+  }
+
+  const deleteRecentFile = async (entry: RecentProjectEntry) => {
+    const confirmed = window.confirm(`Delete “${entry.displayName}”?\n\nThis will permanently delete the .ndblock file from disk.`)
+    if (!confirmed) return
+    try {
+      await platformAdapter.deleteProjectFile(entry.path)
+      await persistRecentProjects(removeRecentProject(recentProjectsRef.current, entry.path))
+      setRecentProjectsError(null)
+    } catch (error: unknown) {
+      setRecentProjectsError(error instanceof PlatformFileError ? error.message : 'This Project file could not be deleted.')
+    }
+  }
+
+  const returnToLibrary = async () => {
+    if (isDirtyRef.current) {
+      const choice = platformAdapter.promptUnsavedClose ? await platformAdapter.promptUnsavedClose() : 'cancel'
+      const decision = closeDecisionForUnsavedChoice(choice, choice !== 'save' || await saveProject())
+      if (decision === 'cancel') return
+      if (choice === 'discard') setIsDirty(false)
+    }
+    setWorkspaceMode('library')
+    setView('blocking')
+    const refreshed = await refreshRecentProjectStatus(recentProjectsRef.current)
+    await persistRecentProjects(refreshed)
   }
 
   const renameProject = (name: string) => {
@@ -366,18 +572,20 @@ function V2EditorApp() {
     }
   }
 
-  const importScene = (file: File) => {
-    void file.text().then((text) => {
-      const loaded = parseSceneFile(text)
+  const importScene = async () => {
+    try {
+      const file = await platformAdapter.openSceneFile()
+      if (!file) return
+      const loaded = parseSceneFile(file.text)
       const current = projectDocumentRef.current
       const number = nextSceneNumber(current.scenes)
       const id = current.scenes.some((entry) => entry.id === loaded.metadata.id) ? `scene-${String(number).padStart(2, '0')}` : loaded.metadata.id
       const name = current.scenes.some((entry) => entry.name === loaded.metadata.name) ? `${loaded.metadata.name} Copy` : loaded.metadata.name
       const scene = { ...loaded, metadata: { ...loaded.metadata, id, name } }
       resetEditorForProject({ ...current, updatedAt: new Date().toISOString(), scenes: [...current.scenes, { id, name, scene }], activeSceneId: id }, false)
-    }).catch((error: unknown) => {
-      setSceneFileError(error instanceof SceneFileError ? error.message : 'This Scene file could not be imported.')
-    })
+    } catch (error: unknown) {
+      setSceneFileError(error instanceof SceneFileError || error instanceof PlatformFileError ? error.message : 'This Scene file could not be imported.')
+    }
   }
 
   const addActor = () => {
@@ -433,16 +641,31 @@ function V2EditorApp() {
     if (nextView !== 'blocking' && wallDrawing) exitWallDrawing()
   }
 
-  const handleCaptureFrameReady = (blob: Blob, _options: StillCaptureOptions) => {
-    const current = sceneDocumentRef.current
-    const camera = current.cameras.find((item) => item.id === current.activeCameraId)
-    if (!camera) return
+  const saveGeneratedFile = async (blob: Blob, fileName: string, extension: string): Promise<boolean> => {
+    if (platformAdapter.kind === 'desktop') {
+      const path = await platformAdapter.chooseExportLocation(fileName, extension)
+      if (!path) return false
+      await platformAdapter.writeExportFile(path, new Uint8Array(await blob.arrayBuffer()))
+      return true
+    }
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = cameraStillFilename(projectDocumentRef.current.name, current.metadata.name, camera.name, current.timeline.currentFrame)
+    link.download = fileName
     link.click()
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    return true
+  }
+
+  const handleCaptureFrameReady = async (blob: Blob, _options: StillCaptureOptions) => {
+    const current = sceneDocumentRef.current
+    const camera = current.cameras.find((item) => item.id === current.activeCameraId)
+    if (!camera) return
+    try {
+      await saveGeneratedFile(blob, cameraStillFilename(projectDocumentRef.current.name, current.metadata.name, camera.name, current.timeline.currentFrame), 'png')
+    } catch (error: unknown) {
+      setSceneFileError(error instanceof PlatformFileError ? error.message : 'The still image could not be saved.')
+    }
   }
 
   const addOpening = (openingType: 'door' | 'window') => {
@@ -835,15 +1058,15 @@ function V2EditorApp() {
     }
     const controller = new AbortController()
     exportAbortRef.current = controller
-    void import('./export/videoExporter').then(({ exportVideo }) => exportVideo({ document: snapshot, settings, signal: controller.signal, onProgress: (progress) => { setExportStatus('exporting'); setExportProgress(progress) } })).then((blob) => {
+    void import('./export/videoExporter').then(({ exportVideo }) => exportVideo({ document: snapshot, settings, signal: controller.signal, onProgress: (progress) => { setExportStatus('exporting'); setExportProgress(progress) } })).then(async (blob) => {
       setExportStatus('finalizing')
       const camera = snapshot.cameras.find((item) => item.id === settings.cameraId)
-      const url = URL.createObjectURL(blob)
-      const anchor = window.document.createElement('a')
-      anchor.href = url
-      anchor.download = exportFilename(snapshot.metadata.name, camera?.name ?? 'Camera', settings.markIn, settings.markOut, settings.format)
-      anchor.click()
-      window.setTimeout(() => URL.revokeObjectURL(url), 0)
+      const written = await saveGeneratedFile(blob, exportFilename(snapshot.metadata.name, camera?.name ?? 'Camera', settings.markIn, settings.markOut, settings.format), settings.format)
+      if (!written) {
+        setExportStatus('cancelled')
+        setExportError(null)
+        return
+      }
       setExportStatus('completed')
     }).catch((error: unknown) => {
       if (isExportCancelled(error)) {
@@ -904,9 +1127,40 @@ function V2EditorApp() {
   }, [isDirty])
 
   useEffect(() => {
+    if (!platformAdapter.registerCloseGuard) return
+    let active = true
+    let cleanup: (() => void) | null = null
+    void platformAdapter.registerCloseGuard(async () => {
+      if (!isDirtyRef.current) return 'close'
+      const choice = platformAdapter.promptUnsavedClose ? await platformAdapter.promptUnsavedClose() : 'cancel'
+      return closeDecisionForUnsavedChoice(choice, choice !== 'save' || await saveProject())
+    }).then((unlisten) => {
+      if (active) cleanup = unlisten
+      else unlisten()
+    }).catch((error: unknown) => {
+      setSceneFileError(error instanceof PlatformFileError ? error.message : 'The Project close guard could not be installed.')
+    })
+    return () => {
+      active = false
+      cleanup?.()
+    }
+  }, [])
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target instanceof HTMLElement ? event.target : null
       const isTextEditing = Boolean(target && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable))
+      const commandKey = event.metaKey || event.ctrlKey
+      if (!isTextEditing && commandKey && event.key.toLowerCase() === 'o' && workspaceModeRef.current === 'library') {
+        event.preventDefault()
+        loadProjectRef.current()
+        return
+      }
+      if (!isTextEditing && commandKey && event.key.toLowerCase() === 'n' && workspaceModeRef.current === 'library') {
+        event.preventDefault()
+        newProjectRef.current()
+        return
+      }
       if (timelinePlayPauseShortcut(event.key, isTextEditing) && !event.repeat) {
         event.preventDefault()
         togglePlaybackRef.current()
@@ -936,12 +1190,16 @@ function V2EditorApp() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
+  if (workspaceMode === 'library') {
+    return <V2ProjectLibrary entries={recentProjects} loading={recentProjectsLoading} error={recentProjectsError} onNewProject={newProject} onOpenProject={loadProject} onOpenRecent={openRecentProject} onLocate={locateRecentProject} onRemove={removeRecent} onRename={renameRecentFile} onDuplicate={duplicateRecentFile} onDelete={deleteRecentFile} />
+  }
+
   const timelineBounds = timelineHeightBounds(typeof window === 'undefined' ? 900 : window.innerHeight)
   const appShellStyle = { '--v2-timeline-height': `${timelineHeight}px` } as CSSProperties
 
   return (
     <main ref={appShellRef} className={`v2-app-shell${isResizingTimeline ? ' is-resizing-timeline' : ''}`} style={appShellStyle}>
-      <V2TopBar projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} view={view} onViewChange={handleViewChange} onNewProject={newProject} onSaveProject={saveProject} onLoadProject={loadProject} onProjectNameChange={renameProject} onExport={openExport} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'finalizing'} />
+      <V2TopBar projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} view={view} onViewChange={handleViewChange} onNewProject={newProject} onBackToLibrary={platformAdapter.kind === 'desktop' ? returnToLibrary : undefined} onSaveProject={saveProject} onSaveProjectAs={saveProjectAs} onLoadProject={loadProject} onProjectNameChange={renameProject} onExport={openExport} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'finalizing'} />
       <V2ScenePanel scenes={projectDocument.scenes} activeSceneId={projectDocument.activeSceneId} actors={sceneDocument.actors} props={sceneDocument.props} walls={sceneDocument.walls} openings={sceneDocument.openings} lights={sceneDocument.lights} cameras={sceneDocument.cameras} activeCameraId={sceneDocument.activeCameraId} selectedEntityId={selectedEntityId} onSelectScene={switchScene} onAddScene={addScene} onRenameScene={renameScene} onDuplicateScene={duplicateScene} onDeleteScene={deleteScene} onImportScene={importScene} onExportScene={exportScene} onAddActor={addActor} onAddProp={addProp} onAddWall={addWall} onAddOpening={addOpening} onAddSun={addSun} onAddCamera={addCamera} onSetActiveCamera={setActiveCamera} onSelectEntity={handleSelectionChange} />
       <V2Stage
         view={view}

@@ -1,0 +1,39 @@
+{
+  "$schema": "../../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "ND Blocking & Previs",
+  "version": "0.1.0",
+  "identifier": "net.duongtruongdp.blocking",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://127.0.0.1:5174",
+    "beforeDevCommand": "npm run dev -- --config v2/vite.config.ts --host 127.0.0.1",
+    "beforeBuildCommand": "npm run build:web"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "ND Blocking & Previs",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1100,
+        "minHeight": 700,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

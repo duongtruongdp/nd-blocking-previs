@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import type { ActorDocument, CameraDocument, OpeningDocument, PropDocument, SunDocument, WallDocument } from '../core/sceneDocument'
 import type { ProjectSceneEntry } from '../core/projectDocument'
 
@@ -18,7 +18,7 @@ type V2ScenePanelProps = {
   onRenameScene: (sceneId: string, name: string) => void
   onDuplicateScene: (sceneId: string) => void
   onDeleteScene: (sceneId: string) => void
-  onImportScene: (file: File) => void
+  onImportScene: () => void
   onExportScene: (sceneId?: string) => void
   onAddActor: () => void
   onAddProp: (propType: NonNullable<PropDocument['propType']>) => void
@@ -33,7 +33,6 @@ type V2ScenePanelProps = {
 export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, openings, lights, cameras, activeCameraId, selectedEntityId, onSelectScene, onAddScene, onRenameScene, onDuplicateScene, onDeleteScene, onImportScene, onExportScene, onAddActor, onAddProp, onAddWall, onAddOpening, onAddSun, onAddCamera, onSetActiveCamera, onSelectEntity }: V2ScenePanelProps) {
   const [addOpen, setAddOpen] = useState(false)
   const [sceneMenuId, setSceneMenuId] = useState<string | null>(null)
-  const importInputRef = useRef<HTMLInputElement>(null)
 
   const renameScene = (scene: ProjectSceneEntry) => {
     const name = window.prompt('Scene name', scene.name)
@@ -75,7 +74,7 @@ export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, open
             {sceneMenuId === scene.id ? <div className="v2-scene-row-menu"><button onClick={() => renameScene(scene)} type="button">Rename</button><button onClick={() => { onDuplicateScene(scene.id); setSceneMenuId(null) }} type="button">Duplicate</button><button onClick={() => { onExportScene(scene.id); setSceneMenuId(null) }} type="button">Export Scene</button><button className="is-danger" disabled={scenes.length <= 1} onClick={() => { onDeleteScene(scene.id); setSceneMenuId(null) }} type="button">Delete</button></div> : null}
           </div>)}
         </div>
-        <div className="v2-scene-actions"><button className="v2-small-action" onClick={onAddScene} type="button">+ Add Scene</button><button className="v2-small-action" onClick={() => importInputRef.current?.click()} type="button">Import Scene</button><button className="v2-small-action" onClick={() => onExportScene()} type="button">Export Scene</button><input ref={importInputRef} className="v2-hidden-file-input" type="file" accept=".ndscene,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) onImportScene(file); event.currentTarget.value = '' }} /></div>
+        <div className="v2-scene-actions"><button className="v2-small-action" onClick={onAddScene} type="button">+ Add Scene</button><button className="v2-small-action" onClick={onImportScene} type="button">Import Scene</button><button className="v2-small-action" onClick={() => onExportScene()} type="button">Export Scene</button></div>
       </section>
       <div className="v2-scene-sections">
         <section className="v2-scene-section"><div className="v2-section-title"><span>Actors</span><span className="v2-count">{actors.length}</span></div>{actors.length === 0 ? <p>No actors in this Scene</p> : <div className="v2-entity-list">{actors.map((actor) => <button className={`v2-entity-row${selectedEntityId === actor.id ? ' is-selected' : ''}`} key={actor.id} onClick={() => onSelectEntity(actor.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: actor.appearance.primaryColor }} /><span>{actor.name}</span></button>)}</div>}</section>

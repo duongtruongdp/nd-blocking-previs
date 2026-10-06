@@ -8,15 +8,16 @@ type V2TopBarProps = {
   fileError: string | null
   onViewChange: (view: 'blocking' | 'camera') => void
   onNewProject: () => void
+  onBackToLibrary?: () => void
   onSaveProject: () => void
-  onLoadProject: (file: File) => void
+  onSaveProjectAs: () => void
+  onLoadProject: () => void
   onProjectNameChange: (name: string) => void
   onExport: () => void
   exportDisabled?: boolean
 }
 
-export function V2TopBar({ view, projectName, sceneName, isDirty, fileError, onViewChange, onNewProject, onSaveProject, onLoadProject, onProjectNameChange, onExport, exportDisabled = false }: V2TopBarProps) {
-  const fileInputRef = useRef<HTMLInputElement>(null)
+export function V2TopBar({ view, projectName, sceneName, isDirty, fileError, onViewChange, onNewProject, onBackToLibrary, onSaveProject, onSaveProjectAs, onLoadProject, onProjectNameChange, onExport, exportDisabled = false }: V2TopBarProps) {
   const skipBlurRef = useRef(false)
   const [editingProjectName, setEditingProjectName] = useState(false)
   const [projectNameDraft, setProjectNameDraft] = useState(projectName)
@@ -53,10 +54,11 @@ export function V2TopBar({ view, projectName, sceneName, isDirty, fileError, onV
       {fileError ? <span className="v2-file-error" role="alert">{fileError}</span> : null}
       <div className="v2-topbar-actions">
         <div className="v2-file-actions" aria-label="Project file actions">
+          {onBackToLibrary ? <button className="v2-button" onClick={onBackToLibrary} title="Back to Project Library" type="button">Projects</button> : null}
           <button className="v2-button" onClick={onNewProject} title="New Project" type="button">New</button>
-          <button className="v2-button" onClick={() => fileInputRef.current?.click()} title="Load Project" type="button">Load</button>
+          <button className="v2-button" onClick={onLoadProject} title="Load Project" type="button">Load</button>
           <button className="v2-button" onClick={onSaveProject} title="Save Project (.ndblock)" type="button">Save</button>
-          <input ref={fileInputRef} className="v2-hidden-file-input" type="file" accept=".ndblock,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) onLoadProject(file); event.currentTarget.value = '' }} />
+          <button className="v2-button" onClick={onSaveProjectAs} title="Save Project As (.ndblock)" type="button">Save As</button>
         </div>
         <div className="v2-segmented" aria-label="View mode">
           <button className={view === 'blocking' ? 'is-active' : ''} onClick={() => onViewChange('blocking')}>Blocking View</button>

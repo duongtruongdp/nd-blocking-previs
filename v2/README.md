@@ -48,3 +48,22 @@ The V2 production output is `v2/dist/`. Build it with
 for a subpath deployment. The app has no required secrets, backend, or service
 worker. See [`docs/WEB_DEPLOYMENT.md`](../docs/WEB_DEPLOYMENT.md) for static
 hosting, HTTPS, browser capability, staging, and WordPress separation guidance.
+
+## Desktop shell
+
+V2.12 adds a native Project Library to the optional Tauri 2 desktop shell
+around this same frontend. The browser build still opens directly in the
+editor; desktop starts in the library and uses the platform adapter for recent
+metadata, native project file operations, export locations, and the native
+close guard:
+
+```bash
+npm run desktop:dev
+npm run desktop:build
+```
+
+The shell is configured in `v2/src-tauri/`; it does not change the V2 scene,
+camera, timeline, serialization, or StageEngine contracts. See
+[`docs/DESKTOP_TAURI.md`](../docs/DESKTOP_TAURI.md) for the platform boundary,
+Project Library behavior, capabilities, prerequisites, and the exact manual
+macOS checklist.

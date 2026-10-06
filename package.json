@@ -8,17 +8,24 @@
     "build": "tsc -b && vite build",
     "build:web": "vite build --config v2/vite.config.ts",
     "build:web:staging": "vite build --config v2/vite.config.ts --mode staging",
+    "desktop:dev": "tauri dev --config v2/src-tauri/tauri.conf.json",
+    "desktop:build": "tauri build --config v2/src-tauri/tauri.conf.json",
     "lint": "oxlint",
     "test": "vitest run",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.12.1",
+    "@tauri-apps/plugin-dialog": "^2.8.1",
+    "@tauri-apps/plugin-fs": "^2.6.0",
+    "@tauri-apps/plugin-store": "^2.5.0",
     "mediabunny": "^1.61.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "three": "^0.186.1"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.1",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",

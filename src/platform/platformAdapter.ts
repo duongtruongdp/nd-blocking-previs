@@ -1,5 +1,6 @@
 import { parseRecentProjects, type RecentProjectEntry } from './projectLibrary'
 import type { ShortcutPreferences } from '../core/shortcutRegistry'
+import { parseRecoveryEntries, recoverySnapshotFilename, type RecoveryEntry, type RecoverySettings, type RecoveryWriteResult } from './recovery'
 
 export type PlatformKind = 'web' | 'desktop'
 
@@ -75,6 +76,14 @@ export type PlatformAdapter = {
   copyProjectThumbnail: (sourceKey: string, targetKey: string) => Promise<void>
   deleteProjectThumbnail: (key: string) => Promise<void>
   cleanupProjectThumbnails: (activeKeys: readonly string[]) => Promise<void>
+  loadRecoveryEntries: () => Promise<RecoveryEntry[]>
+  saveRecoveryEntries: (entries: readonly RecoveryEntry[]) => Promise<void>
+  readRecoverySnapshot: (recoveryId: string) => Promise<string>
+  writeRecoverySnapshot: (recoveryId: string, text: string) => Promise<RecoveryWriteResult>
+  deleteRecoverySnapshot: (recoveryId: string) => Promise<void>
+  statRecoveryProject: (path: string) => Promise<string | null>
+  loadRecoverySettings: () => Promise<RecoverySettings>
+  saveRecoverySettings: (settings: RecoverySettings) => Promise<void>
   loadShortcutPreferences: () => Promise<ShortcutPreferences>
   saveShortcutPreferences: (preferences: ShortcutPreferences) => Promise<void>
   promptUnsavedClose?: () => Promise<UnsavedCloseChoice>
@@ -157,6 +166,14 @@ export const webPlatformAdapter: PlatformAdapter = {
   copyProjectThumbnail: async () => {},
   deleteProjectThumbnail: async () => {},
   cleanupProjectThumbnails: async () => {},
+  loadRecoveryEntries: async () => [],
+  saveRecoveryEntries: async () => {},
+  readRecoverySnapshot: async () => { throw new PlatformFileError('Recovery snapshots are available in the desktop app.') },
+  writeRecoverySnapshot: async () => { throw new PlatformFileError('Recovery snapshots are available in the desktop app.') },
+  deleteRecoverySnapshot: async () => {},
+  statRecoveryProject: async () => null,
+  loadRecoverySettings: async () => ({ enabled: true }),
+  saveRecoverySettings: async () => {},
   loadShortcutPreferences: async () => {
     try { return JSON.parse(window.localStorage.getItem('nd-blocking-shortcuts') ?? '{}') as ShortcutPreferences } catch { return {} }
   },
@@ -198,6 +215,14 @@ function createTauriPlatformAdapter(): PlatformAdapter {
     copyProjectThumbnail: nativeCopyProjectThumbnail,
     deleteProjectThumbnail: nativeDeleteProjectThumbnail,
     cleanupProjectThumbnails: nativeCleanupProjectThumbnails,
+    loadRecoveryEntries: nativeLoadRecoveryEntries,
+    saveRecoveryEntries: nativeSaveRecoveryEntries,
+    readRecoverySnapshot: nativeReadRecoverySnapshot,
+    writeRecoverySnapshot: nativeWriteRecoverySnapshot,
+    deleteRecoverySnapshot: nativeDeleteRecoverySnapshot,
+    statRecoveryProject: async (path) => (await nativeStatFile(path))?.modifiedAt ?? null,
+    loadRecoverySettings: nativeLoadRecoverySettings,
+    saveRecoverySettings: nativeSaveRecoverySettings,
     loadShortcutPreferences: nativeLoadShortcutPreferences,
     saveShortcutPreferences: nativeSaveShortcutPreferences,
     promptUnsavedClose: nativePromptUnsavedClose,
@@ -434,6 +459,101 @@ async function nativeCleanupProjectThumbnails(activeKeys: readonly string[]): Pr
     }
   } catch (error: unknown) {
     if (import.meta.env.DEV) console.error('[ND Blocking & Previs] Project thumbnail cleanup failed', error)
+  }
+}
+
+const RECOVERY_DIRECTORY = 'recovery'
+const RECOVERY_METADATA_KEY = 'recoveryEntries'
+const RECOVERY_STORE = 'recovery.json'
+
+function recoverySnapshotPath(recoveryId: string): string {
+  return `${RECOVERY_DIRECTORY}/${recoverySnapshotFilename(recoveryId)}`
+}
+
+async function nativeLoadRecoveryEntries(): Promise<RecoveryEntry[]> {
+  try {
+    const { BaseDirectory, readDir, remove } = await import('@tauri-apps/plugin-fs')
+    for (const entry of await readDir(RECOVERY_DIRECTORY, { baseDir: BaseDirectory.AppLocalData }).catch(() => [])) {
+      if (entry.isFile && entry.name.endsWith('.tmp')) await remove(`${RECOVERY_DIRECTORY}/${entry.name}`, { baseDir: BaseDirectory.AppLocalData })
+    }
+    const { load } = await import('@tauri-apps/plugin-store')
+    const store = await load(RECOVERY_STORE, { autoSave: false })
+    return parseRecoveryEntries(await store.get<unknown>(RECOVERY_METADATA_KEY))
+  } catch (error: unknown) {
+    if (import.meta.env.DEV) console.error('[recovery] metadata could not be loaded', error)
+    return []
+  }
+}
+
+async function nativeSaveRecoveryEntries(entries: readonly RecoveryEntry[]): Promise<void> {
+  try {
+    const { load } = await import('@tauri-apps/plugin-store')
+    const store = await load(RECOVERY_STORE, { autoSave: false })
+    await store.set(RECOVERY_METADATA_KEY, entries)
+    await store.save()
+  } catch (error: unknown) {
+    if (import.meta.env.DEV) console.error('[recovery] metadata could not be saved', error)
+    throw new PlatformFileError('Recovery metadata could not be saved.', { cause: error })
+  }
+}
+
+async function nativeReadRecoverySnapshot(recoveryId: string): Promise<string> {
+  const { BaseDirectory, readTextFile } = await import('@tauri-apps/plugin-fs')
+  return readTextFile(recoverySnapshotPath(recoveryId), { baseDir: BaseDirectory.AppLocalData })
+}
+
+async function nativeWriteRecoverySnapshot(recoveryId: string, text: string): Promise<RecoveryWriteResult> {
+  const [{ BaseDirectory, exists, mkdir, readDir, remove, rename, stat, writeTextFile }, { appLocalDataDir, join }] = await Promise.all([
+    import('@tauri-apps/plugin-fs'),
+    import('@tauri-apps/api/path'),
+  ])
+  const finalPath = recoverySnapshotPath(recoveryId)
+  const temporaryPath = `${finalPath}.tmp`
+  await mkdir(RECOVERY_DIRECTORY, { baseDir: BaseDirectory.AppLocalData, recursive: true })
+  for (const entry of await readDir(RECOVERY_DIRECTORY, { baseDir: BaseDirectory.AppLocalData })) {
+    if (entry.isFile && entry.name.endsWith('.tmp') && entry.name !== temporaryPath.slice(`${RECOVERY_DIRECTORY}/`.length)) {
+      await remove(`${RECOVERY_DIRECTORY}/${entry.name}`, { baseDir: BaseDirectory.AppLocalData })
+    }
+  }
+  await writeTextFile(temporaryPath, text, { baseDir: BaseDirectory.AppLocalData })
+  const temporaryInfo = await stat(temporaryPath, { baseDir: BaseDirectory.AppLocalData })
+  if (!temporaryInfo.isFile || temporaryInfo.size <= 0) throw new Error('Recovery snapshot temp file failed verification.')
+  await rename(temporaryPath, finalPath, { oldPathBaseDir: BaseDirectory.AppLocalData, newPathBaseDir: BaseDirectory.AppLocalData })
+  if (!await exists(finalPath, { baseDir: BaseDirectory.AppLocalData })) throw new Error('Recovery snapshot was not found after atomic rename.')
+  const finalInfo = await stat(finalPath, { baseDir: BaseDirectory.AppLocalData })
+  if (!finalInfo.isFile || finalInfo.size <= 0) throw new Error('Recovery snapshot failed post-write verification.')
+  const absolutePath = await join(await appLocalDataDir(), finalPath)
+  return { path: absolutePath, byteLength: finalInfo.size }
+}
+
+async function nativeDeleteRecoverySnapshot(recoveryId: string): Promise<void> {
+  try {
+    const { BaseDirectory, remove } = await import('@tauri-apps/plugin-fs')
+    await remove(recoverySnapshotPath(recoveryId), { baseDir: BaseDirectory.AppLocalData })
+  } catch (error: unknown) {
+    if (import.meta.env.DEV) console.warn('[recovery] snapshot cleanup skipped', { recoveryId, error })
+  }
+}
+
+async function nativeLoadRecoverySettings(): Promise<RecoverySettings> {
+  try {
+    const { load } = await import('@tauri-apps/plugin-store')
+    const store = await load('app-preferences.json', { autoSave: false })
+    return { enabled: (await store.get<boolean>('recoveryEnabled')) !== false }
+  } catch (error: unknown) {
+    if (import.meta.env.DEV) console.error('[recovery] settings could not be loaded', error)
+    return { enabled: true }
+  }
+}
+
+async function nativeSaveRecoverySettings(settings: RecoverySettings): Promise<void> {
+  try {
+    const { load } = await import('@tauri-apps/plugin-store')
+    const store = await load('app-preferences.json', { autoSave: false })
+    await store.set('recoveryEnabled', settings.enabled)
+    await store.save()
+  } catch (error: unknown) {
+    if (import.meta.env.DEV) console.error('[recovery] settings could not be saved', error)
   }
 }
 

@@ -112,15 +112,58 @@ The library supports:
 Recent paths are restored across desktop launches through the filesystem
 scope persistence plugin, while recent metadata is stored locally in
 `recent-projects.json`. Thumbnail cache bytes are separate from both the
-`.ndblock` file and `ProjectDocument`. There are no autosave, recovery
-snapshots, cloud synchronization, templates, or alternate project formats in
-this milestone. Returning from the editor to Projects and opening another
-Project use the Save / Don't Save / Cancel dirty-document guard.
+`.ndblock` file and `ProjectDocument`. Recovery snapshots are separate from
+both as well; they are temporary local safety copies, not alternate Project
+files. There is no cloud synchronization, templates, or alternate project
+format. Returning from the editor to Projects and opening another Project use
+the Save / Don't Save / Cancel dirty-document guard.
+
+## Desktop recovery snapshots
+
+Recovery is desktop-only and defaults to On. The browser adapter does not
+create recovery files or show recovery UI. A single `RecoveryManager` observes
+the existing creative Project fingerprint after committed edits, ignores
+selection, playback, playhead, and other session-only changes, and schedules a
+write after 25 seconds of inactivity with a 2-minute maximum dirty interval.
+Only the latest snapshot is retained for each Project.
+
+Recovery bytes are stored below the official Tauri `appLocalDataDir()` as:
+
+```text
+recovery/<deterministic-id>.ndblock.recovery
+```
+
+Metadata is stored in the Tauri Store file `recovery.json`. Saved Projects use
+a deterministic ID derived from their normalized native path. Unsaved Projects
+use a stable session recovery ID; the native path is never added to
+`ProjectDocument`. Metadata records the Project name, original path when
+available, snapshot path, recovery time, dirty-since time, and the saved file's
+last known modification time.
+
+Snapshot writes use the existing `serializeProject` `.ndblock` pipeline, write
+to a `.tmp` file, verify a non-zero file, atomically rename it to the recovery
+name, verify again, then update metadata. One write is allowed at a time; an
+edit during a write is scheduled after the current write completes. Startup
+removes stale `.tmp` files and validates each snapshot through
+`parseProjectFile`.
+
+At desktop launch, valid recoveries are sorted newest first. The Recovery
+screen distinguishes ready, missing, corrupt, older-than-saved, and externally
+changed snapshots. Recover loads the validated Project, restores its original
+native path when known, and keeps the Project dirty. Save and Save As delete
+the associated recovery after the authoritative `.ndblock` succeeds. Don't
+Save and an explicit recovery Discard delete only the recovery copy; Cancel
+leaves it available. Opening a saved version for an associated recovery asks
+for explicit confirmation before discarding the recovery.
+
+Recovery writes are best-effort and never block the editor. They do not create
+Recent Project entries or thumbnails. Recovery snapshots remain local and
+there is no recovery history, cloud sync, telemetry, or schema change.
 
 The desktop close guard presents Save / Don't Save / Cancel when the project is
 dirty. The browser keeps its existing `beforeunload` behavior. There is no
-autosave, recovery snapshot, updater, signing integration, or native FFmpeg
-integration in this milestone. Video export continues to use the existing
+updater, signing integration, or native FFmpeg integration in this milestone.
+Video export continues to use the existing
 browser/WebCodecs or MediaRecorder path; native FFmpeg is a later decision.
 
 ## Tauri permissions
@@ -189,5 +232,25 @@ Run `npm run desktop:dev` and verify:
     are ignored.
 28. A dirty Project opened through association or drop offers Save, Don't
     Save, and Cancel.
+29. Make a creative edit without pressing Save; after the recovery interval,
+    verify `recovery/<id>.ndblock.recovery` under the Tauri app-local data
+    directory and confirm a `[recovery] write complete` development log.
+30. Force-terminate the desktop app after recovery writes, relaunch, choose
+    Recover, and confirm the Project is dirty while the original `.ndblock`
+    remains unchanged until Save.
+31. Recover a saved Project, press Save, and confirm its recovery file and
+    metadata are removed.
+32. Create an unsaved Project, edit it, force-terminate, Recover it, and
+    confirm Save opens Save As because no native path exists.
+33. Create a recovery, relaunch, choose Discard, and confirm only the
+    recovery copy is removed.
+34. Quit a dirty Project with Don't Save, relaunch, and confirm that the
+    intentionally discarded work is not offered again.
+35. Use Back to Projects with Cancel and confirm the recovery remains; use
+    Don't Save and confirm it is removed.
+36. Disable Recovery snapshots in Settings, edit without saving, and confirm
+    no new recovery is written while existing recoveries remain available.
+37. With Wi-Fi disabled, repeat recovery write and Recover; no network is
+    required.
 
 This checklist is not a substitute for a Windows acceptance pass.

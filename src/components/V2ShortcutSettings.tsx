@@ -6,9 +6,11 @@ type Props = {
   onChange: (id: ShortcutCommandId, binding: ShortcutBinding) => void
   onReset: () => void
   onClose: () => void
+  recoveryEnabled?: boolean
+  onRecoveryEnabledChange?: (enabled: boolean) => void
 }
 
-export function V2ShortcutSettings({ bindings, onChange, onReset, onClose }: Props) {
+export function V2ShortcutSettings({ bindings, onChange, onReset, onClose, recoveryEnabled = true, onRecoveryEnabledChange }: Props) {
   const [capturing, setCapturing] = useState<ShortcutCommandId | null>(null)
   const [message, setMessage] = useState<string | null>(null)
 
@@ -36,6 +38,7 @@ export function V2ShortcutSettings({ bindings, onChange, onReset, onClose }: Pro
       <div className="v2-modal-heading"><div><span className="v2-eyebrow">Preferences</span><h2 id="v2-shortcut-title">Keyboard Shortcuts</h2></div><button className="v2-modal-close" onClick={onClose} type="button" aria-label="Close Keyboard Shortcuts">×</button></div>
       {message ? <p className="v2-shortcut-message" role="status">{message}</p> : null}
       <div className="v2-shortcut-list">{SHORTCUT_COMMANDS.map((command) => <div className="v2-shortcut-row" key={command.id}><div><strong>{command.label}</strong><small>{command.category}</small></div><button className={`v2-shortcut-capture${capturing === command.id ? ' is-active' : ''}`} onClick={() => { setMessage(null); setCapturing(command.id) }} type="button">{capturing === command.id ? 'Press a key…' : shortcutLabel(bindings[command.id])}</button></div>)}</div>
+      {onRecoveryEnabledChange ? <label className="v2-preference-toggle"><span><strong>Recovery snapshots</strong><small>Keep one local recovery copy of unsaved desktop work.</small></span><input checked={recoveryEnabled} onChange={(event) => onRecoveryEnabledChange(event.target.checked)} type="checkbox" /></label> : null}
       <div className="v2-modal-actions"><button className="v2-small-action is-muted" onClick={onReset} type="button">Reset All</button><button className="v2-small-action" onClick={onClose} type="button">Done</button></div>
     </section>
   </div>

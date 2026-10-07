@@ -18,15 +18,17 @@ type V2ProjectLibraryProps = {
   onDuplicate: (entry: RecentProjectEntry) => void
   onDelete: (entry: RecentProjectEntry) => void
   onOpenSettings: () => void
+  recoveryCount?: number
+  onOpenRecoveries?: () => void
 }
 
-export function V2ProjectLibrary({ entries, thumbnails, loading, error, dropState, revealLabel, onNewProject, onOpenProject, onOpenRecent, onLocate, onReveal, onRemove, onRename, onDuplicate, onDelete, onOpenSettings }: V2ProjectLibraryProps) {
+export function V2ProjectLibrary({ entries, thumbnails, loading, error, dropState, revealLabel, onNewProject, onOpenProject, onOpenRecent, onLocate, onReveal, onRemove, onRename, onDuplicate, onDelete, onOpenSettings, recoveryCount = 0, onOpenRecoveries }: V2ProjectLibraryProps) {
   return (
     <main className="v2-library-shell" aria-label="Project Library">
       {dropState === 'valid' ? <div className="v2-desktop-drop-feedback" role="status">Drop .ndblock to open this Project</div> : null}
       <header className="v2-library-header">
         <div className="v2-brand"><span className="v2-brand-mark">ND</span><span>Blocking &amp; Previs</span></div>
-        <span className="v2-library-header-label">Project Library</span><button className="v2-small-action" onClick={onOpenSettings} type="button">Settings</button>
+        <span className="v2-library-header-label">Project Library</span>{recoveryCount > 0 && onOpenRecoveries ? <button className="v2-small-action" onClick={onOpenRecoveries} type="button">Recoveries ({recoveryCount})</button> : null}<button className="v2-small-action" onClick={onOpenSettings} type="button">Settings</button>
       </header>
       <section className="v2-library-content" aria-labelledby="v2-library-title">
         <div className="v2-library-intro">

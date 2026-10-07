@@ -39,6 +39,8 @@ import { cameraStillFilename, type StillCaptureOptions } from './runtime/stillCa
 import { shortcutLabel, shortcutMatches, shortcutPreferencesWithDefaults, SHORTCUT_COMMANDS, type ShortcutBinding, type ShortcutCommandId } from './core/shortcutRegistry'
 import { V2ShortcutSettings } from './components/V2ShortcutSettings'
 import { captureAndStoreProjectThumbnail } from './platform/projectThumbnail'
+import { createUnsavedRecoveryId, recoveryIdForProjectPath, RecoveryManager, type RecoveryInspection } from './platform/recovery'
+import { V2RecoveryCenter } from './components/V2RecoveryCenter'
 
 function createDefaultV2Scene(id = 'scene-01', name = 'Scene 01', includeDefaultProps = true): SceneDocument {
   const scene = createEmptySceneDocument()
@@ -121,6 +123,12 @@ function V2EditorApp() {
   const [isResizingTimeline, setIsResizingTimeline] = useState(false)
   const [shortcutBindings, setShortcutBindings] = useState(() => shortcutPreferencesWithDefaults())
   const [shortcutSettingsOpen, setShortcutSettingsOpen] = useState(false)
+  const [recoveryEnabled, setRecoveryEnabled] = useState(true)
+  const [recoveryReady, setRecoveryReady] = useState(platformAdapter.kind !== 'desktop')
+  const [recoveryLoading, setRecoveryLoading] = useState(platformAdapter.kind === 'desktop')
+  const [recoveryEntries, setRecoveryEntries] = useState<RecoveryInspection[]>([])
+  const [recoveryModalOpen, setRecoveryModalOpen] = useState(false)
+  const [recoveryRequestedPath, setRecoveryRequestedPath] = useState<string | null>(null)
   const appShellRef = useRef<HTMLElement>(null)
   const projectDocumentRef = useRef<ProjectDocument>(projectDocument)
   const sceneDocumentRef = useRef<SceneDocument>(sceneDocument)
@@ -139,6 +147,20 @@ function V2EditorApp() {
   const playbackRef = useRef<PlaybackClock | null>(null)
   const playbackFrameRequestRef = useRef<number | null>(null)
   const exportAbortRef = useRef<AbortController | null>(null)
+  const recoveryManagerRef = useRef<RecoveryManager>(new RecoveryManager({
+    loadEntries: () => platformAdapter.loadRecoveryEntries(),
+    saveEntries: (entries) => platformAdapter.saveRecoveryEntries(entries),
+    readSnapshot: (recoveryId) => platformAdapter.readRecoverySnapshot(recoveryId),
+    writeSnapshot: (recoveryId, text) => platformAdapter.writeRecoverySnapshot(recoveryId, text),
+    deleteSnapshot: (recoveryId) => platformAdapter.deleteRecoverySnapshot(recoveryId),
+    statProject: (path) => platformAdapter.statRecoveryProject(path),
+  }, import.meta.env.DEV ? (message, details) => console.info(`[recovery] ${message}`, details ?? '') : undefined))
+  const recoveryEntriesRef = useRef<RecoveryInspection[]>([])
+  const recoveryRequestedPathRef = useRef<string | null>(null)
+  const unsavedRecoveryIdRef = useRef(createUnsavedRecoveryId())
+  const currentRecoveryIdRef = useRef<string | null>(null)
+  const dirtySinceRef = useRef<string | null>(null)
+  const recoveryFingerprintRef = useRef(creativeProjectFingerprint(projectDocument))
   const togglePlaybackRef = useRef<() => void>(() => {})
   const newProjectRef = useRef<() => void>(() => {})
   const loadProjectRef = useRef<() => void>(() => {})
@@ -189,6 +211,37 @@ function V2EditorApp() {
     return () => { active = false }
   }, [])
 
+  useEffect(() => {
+    if (platformAdapter.kind !== 'desktop') return
+    let active = true
+    void Promise.all([
+      platformAdapter.loadRecoverySettings(),
+      recoveryManagerRef.current.inspect(),
+      platformAdapter.initialProjectPath(),
+    ]).then(([settings, entries, startupPath]) => {
+      if (!active) return
+      recoveryManagerRef.current.setEnabled(settings.enabled)
+      recoveryEntriesRef.current = entries
+      setRecoveryEnabled(settings.enabled)
+      setRecoveryEntries(entries)
+      if (startupPath && entries.some((entry) => entry.projectPath && recoveryIdForProjectPath(entry.projectPath) === recoveryIdForProjectPath(startupPath))) {
+        recoveryRequestedPathRef.current = startupPath
+        setRecoveryRequestedPath(startupPath)
+        setRecoveryModalOpen(true)
+      } else if (!startupPath && entries.length > 0) {
+        setRecoveryModalOpen(true)
+      }
+      setRecoveryReady(true)
+    }).catch((error: unknown) => {
+      if (!active) return
+      if (import.meta.env.DEV) console.error('[recovery] startup scan failed', error)
+      setRecoveryReady(true)
+    }).finally(() => {
+      if (active) setRecoveryLoading(false)
+    })
+    return () => { active = false }
+  }, [])
+
   const updateShortcut = (id: ShortcutCommandId, binding: ShortcutBinding) => {
     const next = { ...shortcutBindingsRef.current, [id]: binding }
     shortcutBindingsRef.current = next
@@ -203,6 +256,14 @@ function V2EditorApp() {
     shortcutBindingsRef.current = next
     setShortcutBindings(next)
     void platformAdapter.saveShortcutPreferences({})
+  }
+
+  const setRecoveryPreference = (enabled: boolean) => {
+    if (platformAdapter.kind !== 'desktop') return
+    recoveryManagerRef.current.setEnabled(enabled)
+    if (enabled && isDirtyRef.current) recoveryFingerprintRef.current = ''
+    setRecoveryEnabled(enabled)
+    void platformAdapter.saveRecoverySettings({ enabled })
   }
 
   useEffect(() => {
@@ -321,6 +382,28 @@ function V2EditorApp() {
     if (creativeSceneChanged(before, after)) setIsDirty(true)
   }
 
+  const refreshRecoveryEntries = async () => {
+    if (platformAdapter.kind !== 'desktop') return
+    try {
+      const entries = await recoveryManagerRef.current.inspect()
+      recoveryEntriesRef.current = entries
+      setRecoveryEntries(entries)
+    } catch (error: unknown) {
+      if (import.meta.env.DEV) console.error('[recovery] refresh failed', error)
+    }
+  }
+
+  const currentRecoveryId = () => currentRecoveryIdRef.current ?? (currentProjectPathRef.current ? recoveryIdForProjectPath(currentProjectPathRef.current) : unsavedRecoveryIdRef.current)
+
+  const discardCurrentRecovery = async () => {
+    if (platformAdapter.kind !== 'desktop') return
+    await recoveryManagerRef.current.cleanup(currentRecoveryId())
+    currentRecoveryIdRef.current = null
+    dirtySinceRef.current = null
+    unsavedRecoveryIdRef.current = createUnsavedRecoveryId()
+    await refreshRecoveryEntries()
+  }
+
   const resetEditorForProject = (project: ProjectDocument, clean = true, currentPath = currentProjectPathRef.current) => {
     playbackRef.current = null
     setIsPlaying(false)
@@ -334,10 +417,13 @@ function V2EditorApp() {
     const active = project.scenes.find((entry) => entry.id === project.activeSceneId) ?? project.scenes[0]
     sceneDocumentRef.current = active.scene
     currentProjectPathRef.current = currentPath
+    currentRecoveryIdRef.current = currentPath ? recoveryIdForProjectPath(currentPath) : unsavedRecoveryIdRef.current
     replaceProjectDocument(project)
     setSelectedEntityId(null)
     setSuspendedTimelineEntityIds(new Set())
     if (clean) savedProjectFingerprintRef.current = creativeProjectFingerprint(project)
+    recoveryFingerprintRef.current = creativeProjectFingerprint(project)
+    dirtySinceRef.current = clean ? null : new Date().toISOString()
     setIsDirty(!clean)
   }
 
@@ -413,6 +499,7 @@ function V2EditorApp() {
 
   const saveProject = async (): Promise<boolean> => {
     const savedAt = new Date().toISOString()
+    const previousRecoveryId = currentRecoveryId()
     try {
       const prepared = prepareProjectForSave(projectDocumentRef.current, savedAt)
       const text = serializeProject(prepared, savedAt)
@@ -424,7 +511,11 @@ function V2EditorApp() {
       savedProjectFingerprintRef.current = creativeProjectFingerprint(prepared)
       setSceneFileError(null)
       setIsDirty(false)
+      dirtySinceRef.current = null
+      recoveryFingerprintRef.current = creativeProjectFingerprint(prepared)
       if (result.path) {
+        currentRecoveryIdRef.current = recoveryIdForProjectPath(result.path)
+        await recoveryManagerRef.current.cleanup(previousRecoveryId)
         await updateRecentForProject(result.path, prepared)
         captureProjectThumbnail(result.path, prepared)
       }
@@ -438,6 +529,7 @@ function V2EditorApp() {
   const saveProjectAs = async (): Promise<boolean> => {
     const savedAt = new Date().toISOString()
     const previousPath = currentProjectPathRef.current
+    const previousRecoveryId = currentRecoveryId()
     try {
       const prepared = prepareProjectForSave(projectDocumentRef.current, savedAt)
       const result = await platformAdapter.saveProjectFileAs(serializeProject(prepared, savedAt), projectFilename(prepared.name))
@@ -448,7 +540,11 @@ function V2EditorApp() {
       savedProjectFingerprintRef.current = creativeProjectFingerprint(prepared)
       setSceneFileError(null)
       setIsDirty(false)
+      dirtySinceRef.current = null
+      recoveryFingerprintRef.current = creativeProjectFingerprint(prepared)
       if (result.path) {
+        currentRecoveryIdRef.current = recoveryIdForProjectPath(result.path)
+        await recoveryManagerRef.current.cleanup(previousRecoveryId)
         await updateRecentForProject(result.path, prepared, savedAt, previousPath ?? undefined)
         captureProjectThumbnail(result.path, prepared)
       }
@@ -486,7 +582,10 @@ function V2EditorApp() {
     if (platformAdapter.promptUnsavedClose) {
       const choice = await platformAdapter.promptUnsavedClose()
       const decision = closeDecisionForUnsavedChoice(choice, choice !== 'save' || await saveProject())
-      if (choice === 'discard' && decision === 'close') setIsDirty(false)
+      if (choice === 'discard' && decision === 'close') {
+        await discardCurrentRecovery()
+        setIsDirty(false)
+      }
       return decision === 'close'
     }
     return window.confirm('Discard unsaved Project changes and load this Project?')
@@ -510,6 +609,44 @@ function V2EditorApp() {
     }
   }
 
+  const recoverProject = async (entry: RecoveryInspection) => {
+    try {
+      const recovered = await recoveryManagerRef.current.recover(entry.recoveryId)
+      if (!recovered) throw new Error('Recovery snapshot is no longer available.')
+      currentRecoveryIdRef.current = entry.recoveryId
+      if (!entry.projectPath) unsavedRecoveryIdRef.current = entry.recoveryId
+      resetEditorForProject(recovered.project, false, entry.projectPath)
+      recoveryRequestedPathRef.current = null
+      setRecoveryRequestedPath(null)
+      setRecoveryModalOpen(false)
+      setView('blocking')
+      setWorkspaceMode('editor')
+    } catch (error: unknown) {
+      if (import.meta.env.DEV) console.error('[recovery] recover failed', error)
+      setRecentProjectsError('This recovery snapshot could not be opened.')
+      await refreshRecoveryEntries()
+    }
+  }
+
+  const discardRecoveryEntry = async (entry: RecoveryInspection) => {
+    const wasRequested = Boolean(recoveryRequestedPathRef.current && entry.projectPath && recoveryIdForProjectPath(entry.projectPath) === recoveryIdForProjectPath(recoveryRequestedPathRef.current))
+    await recoveryManagerRef.current.cleanup(entry.recoveryId)
+    await refreshRecoveryEntries()
+    if (wasRequested && entry.projectPath) {
+      recoveryRequestedPathRef.current = null
+      setRecoveryRequestedPath(null)
+      setRecoveryModalOpen(false)
+      await openDesktopProjectPath(entry.projectPath)
+    } else if (recoveryEntriesRef.current.length === 0) {
+      setRecoveryModalOpen(false)
+    }
+  }
+
+  const openSavedVersion = async (entry: RecoveryInspection) => {
+    if (!entry.projectPath || !window.confirm('Open the saved Project and discard this recovery copy?')) return
+    await discardRecoveryEntry(entry)
+  }
+
   const loadProject = async () => {
     try {
       await openProjectFile(await platformAdapter.openProjectFile())
@@ -518,8 +655,16 @@ function V2EditorApp() {
     }
   }
 
-  const newProject = () => {
-    if (isDirty && !window.confirm('Discard unsaved Project changes and start a New Project?')) return
+  const newProject = async () => {
+    if (isDirty) {
+      if (platformAdapter.promptUnsavedClose) {
+        const choice = await platformAdapter.promptUnsavedClose()
+        if (choice === 'cancel') return
+        if (choice === 'save' && !await saveProject()) return
+        if (choice === 'discard') await discardCurrentRecovery()
+      } else if (!window.confirm('Discard unsaved Project changes and start a New Project?')) return
+    }
+    unsavedRecoveryIdRef.current = createUnsavedRecoveryId()
     resetEditorForProject(createDefaultV2Project(), true, null)
     setView('blocking')
     setWorkspaceMode('editor')
@@ -533,7 +678,7 @@ function V2EditorApp() {
   }, [newProject, loadProject])
 
   useEffect(() => {
-    if (platformAdapter.kind !== 'desktop') return
+    if (platformAdapter.kind !== 'desktop' || !recoveryReady) return
     let active = true
     const handleDrop = (event: DesktopDropEvent) => {
       if (event.type === 'leave') {
@@ -560,14 +705,14 @@ function V2EditorApp() {
       unlistenOpen = removeOpen
       unlistenDrop = removeDrop
       const startupPath = await platformAdapter.initialProjectPath()
-      if (startupPath) await openDesktopProjectPath(startupPath)
+      if (startupPath && recoveryRequestedPathRef.current !== startupPath) await openDesktopProjectPath(startupPath)
     }).catch(() => {})
     return () => {
       active = false
       unlistenOpen?.()
       unlistenDrop?.()
     }
-  }, [])
+  }, [recoveryReady])
 
   const openRecentProject = async (entry: RecentProjectEntry) => {
     try {
@@ -636,6 +781,11 @@ function V2EditorApp() {
         return
       }
       await platformAdapter.renameProjectFile(entry.path, nextPath)
+      try {
+        await recoveryManagerRef.current.reassociate(recoveryIdForProjectPath(entry.path), recoveryIdForProjectPath(nextPath), nextPath)
+      } catch (error: unknown) {
+        if (import.meta.env.DEV) console.warn('[recovery] rename reassociation failed', error)
+      }
       const nextEntry = { ...entry, id: recentProjectIdentity(nextPath), path: nextPath, missing: false, modifiedSinceLastOpen: false }
       await persistRecentProjects(updateRecentProjectPath(recentProjectsRef.current, entry.path, nextEntry))
       setRecentProjectsError(null)
@@ -671,6 +821,7 @@ function V2EditorApp() {
     if (!confirmed) return
     try {
       await platformAdapter.deleteProjectFile(entry.path)
+      await recoveryManagerRef.current.cleanup(recoveryIdForProjectPath(entry.path))
       await persistRecentProjects(removeRecentProject(recentProjectsRef.current, entry.path))
       await platformAdapter.deleteProjectThumbnail(entry.thumbnailKey)
       setRecentProjectThumbnails((current) => {
@@ -689,7 +840,10 @@ function V2EditorApp() {
       const choice = platformAdapter.promptUnsavedClose ? await platformAdapter.promptUnsavedClose() : 'cancel'
       const decision = closeDecisionForUnsavedChoice(choice, choice !== 'save' || await saveProject())
       if (decision === 'cancel') return
-      if (choice === 'discard') setIsDirty(false)
+      if (choice === 'discard') {
+        await discardCurrentRecovery()
+        setIsDirty(false)
+      }
     }
     setWorkspaceMode('library')
     setView('blocking')
@@ -1274,6 +1428,8 @@ function V2EditorApp() {
 
   useEffect(() => () => exportAbortRef.current?.abort(), [])
 
+  useEffect(() => () => recoveryManagerRef.current.dispose(), [])
+
   const copySelection = (): boolean => {
     const selected = [...sceneDocumentRef.current.actors, ...sceneDocumentRef.current.props, ...sceneDocumentRef.current.openings].find((entity) => entity.id === selectedEntityIdRef.current)
     if (!selected) return false
@@ -1308,6 +1464,24 @@ function V2EditorApp() {
   }
 
   useEffect(() => {
+    if (platformAdapter.kind !== 'desktop' || !recoveryReady || !recoveryEnabled) return
+    const fingerprint = creativeProjectFingerprint(projectDocument)
+    if (!isDirty) {
+      recoveryFingerprintRef.current = fingerprint
+      dirtySinceRef.current = null
+      return
+    }
+    if (fingerprint === recoveryFingerprintRef.current && dirtySinceRef.current) return
+    const dirtySince = dirtySinceRef.current ?? new Date().toISOString()
+    dirtySinceRef.current = dirtySince
+    const projectPath = currentProjectPathRef.current
+    const recoveryId = projectPath ? recoveryIdForProjectPath(projectPath) : unsavedRecoveryIdRef.current
+    currentRecoveryIdRef.current = recoveryId
+    recoveryManagerRef.current.schedule({ recoveryId, projectPath, project: projectDocument, dirtySince })
+    recoveryFingerprintRef.current = fingerprint
+  }, [projectDocument, isDirty, recoveryEnabled, recoveryReady])
+
+  useEffect(() => {
     if (!isDirty) return
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault()
@@ -1324,7 +1498,9 @@ function V2EditorApp() {
     void platformAdapter.registerCloseGuard(async () => {
       if (!isDirtyRef.current) return 'close'
       const choice = platformAdapter.promptUnsavedClose ? await platformAdapter.promptUnsavedClose() : 'cancel'
-      return closeDecisionForUnsavedChoice(choice, choice !== 'save' || await saveProject())
+      const decision = closeDecisionForUnsavedChoice(choice, choice !== 'save' || await saveProject())
+      if (choice === 'discard' && decision === 'close') await discardCurrentRecovery()
+      return decision
     }).then((unlisten) => {
       if (active) cleanup = unlisten
       else unlisten()
@@ -1401,7 +1577,7 @@ function V2EditorApp() {
   }, [])
 
   if (workspaceMode === 'library') {
-    return <><V2ProjectLibrary entries={recentProjects} thumbnails={recentProjectThumbnails} loading={recentProjectsLoading} error={recentProjectsError} dropState={desktopDropState} revealLabel={platformAdapter.revealProjectLabel} onNewProject={newProject} onOpenProject={loadProject} onOpenRecent={openRecentProject} onLocate={locateRecentProject} onReveal={revealRecentFile} onRemove={removeRecent} onRename={renameRecentFile} onDuplicate={duplicateRecentFile} onDelete={deleteRecentFile} onOpenSettings={() => setShortcutSettingsOpen(true)} />{shortcutSettingsOpen ? <V2ShortcutSettings bindings={shortcutBindings} onChange={updateShortcut} onReset={resetShortcuts} onClose={() => setShortcutSettingsOpen(false)} /> : null}</>
+    return <><V2ProjectLibrary entries={recentProjects} thumbnails={recentProjectThumbnails} loading={recentProjectsLoading} error={recentProjectsError} dropState={desktopDropState} revealLabel={platformAdapter.revealProjectLabel} onNewProject={newProject} onOpenProject={loadProject} onOpenRecent={openRecentProject} onLocate={locateRecentProject} onReveal={revealRecentFile} onRemove={removeRecent} onRename={renameRecentFile} onDuplicate={duplicateRecentFile} onDelete={deleteRecentFile} onOpenSettings={() => setShortcutSettingsOpen(true)} recoveryCount={recoveryLoading ? 0 : recoveryEntries.length} onOpenRecoveries={() => setRecoveryModalOpen(true)} />{shortcutSettingsOpen ? <V2ShortcutSettings bindings={shortcutBindings} onChange={updateShortcut} onReset={resetShortcuts} onClose={() => setShortcutSettingsOpen(false)} recoveryEnabled={recoveryEnabled} onRecoveryEnabledChange={platformAdapter.kind === 'desktop' ? setRecoveryPreference : undefined} /> : null}{recoveryModalOpen && recoveryEntries.length > 0 ? <V2RecoveryCenter entries={recoveryEntries} requestedPath={recoveryRequestedPath} onRecover={(entry) => { void recoverProject(entry) }} onDiscard={(entry) => { void discardRecoveryEntry(entry) }} onOpenSaved={(entry) => { void openSavedVersion(entry) }} onClose={() => setRecoveryModalOpen(false)} /> : null}</>
   }
 
   const timelineBounds = timelineHeightBounds(typeof window === 'undefined' ? 900 : window.innerHeight)
@@ -1477,7 +1653,8 @@ function V2EditorApp() {
       <V2Timeline timeline={sceneDocument.timeline} tracks={sceneDocument.timeline.tracks} entities={timelineEntities} selectedEntityId={selectedEntityId} isPlaying={isPlaying} onFrameChange={setCurrentFrame} onFrameRateChange={changeFrameRate} onTogglePlayback={togglePlayback} onStepFrame={stepFrame} onMarkIn={() => changeMark('in')} onMarkOut={() => changeMark('out')} onMoveKeyframe={moveKeyframe} selectedKeyframe={selectedTimelineKeyframe} onKeyframeSelect={setSelectedTimelineKeyframe} onEntitySelect={handleSelectionChange} onScrubStart={() => setIsScrubbing(true)} onScrubEnd={() => setIsScrubbing(false)} />
       {exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'finalizing' ? <div className="v2-export-lock" aria-hidden="true" /> : null}
       {exportOpen ? <V2ExportModal document={sceneDocument} projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} settings={exportSettings} status={exportStatus} progress={exportProgress} error={exportError} onSettingsChange={setExportSettings} onExport={startExport} onCancel={cancelExport} onClose={() => setExportOpen(false)} /> : null}
-      {shortcutSettingsOpen ? <V2ShortcutSettings bindings={shortcutBindings} onChange={updateShortcut} onReset={resetShortcuts} onClose={() => setShortcutSettingsOpen(false)} /> : null}
+      {shortcutSettingsOpen ? <V2ShortcutSettings bindings={shortcutBindings} onChange={updateShortcut} onReset={resetShortcuts} onClose={() => setShortcutSettingsOpen(false)} recoveryEnabled={recoveryEnabled} onRecoveryEnabledChange={platformAdapter.kind === 'desktop' ? setRecoveryPreference : undefined} /> : null}
+      {recoveryModalOpen && recoveryEntries.length > 0 ? <V2RecoveryCenter entries={recoveryEntries} requestedPath={recoveryRequestedPath} onRecover={(entry) => { void recoverProject(entry) }} onDiscard={(entry) => { void discardRecoveryEntry(entry) }} onOpenSaved={(entry) => { void openSavedVersion(entry) }} onClose={() => setRecoveryModalOpen(false)} /> : null}
     </main>
   )
 }

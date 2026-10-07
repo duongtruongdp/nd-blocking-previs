@@ -19,6 +19,9 @@ describe('platform adapter foundation', () => {
 
   it('keeps desktop-only library features inert in the browser adapter', async () => {
     expect(webPlatformAdapter.revealProjectLabel).toBe('Show in Finder')
+    expect(webPlatformAdapter.nativeExportRuntime).toBeUndefined()
+    await expect(webPlatformAdapter.loadRecentProjects()).resolves.toEqual([])
+    await expect(webPlatformAdapter.loadRecoveryEntries()).resolves.toEqual([])
     await expect(webPlatformAdapter.loadProjectThumbnail('project-test')).resolves.toBeNull()
     await expect(webPlatformAdapter.initialProjectPath()).resolves.toBeNull()
   })

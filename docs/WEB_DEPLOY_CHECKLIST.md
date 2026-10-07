@@ -36,6 +36,12 @@ document-root/assets/*
 
 Do not create `document-root/dist/`.
 
+The current production document root is:
+
+```text
+/home/duongtr1/blocking.duongtruongdp.net/
+```
+
 ## HTTPS and cache
 
 - DNS: `blocking` must resolve to the chosen static host using its documented A or CNAME target.
@@ -48,7 +54,7 @@ Do not create `document-root/dist/`.
 
 - Open `https://blocking.duongtruongdp.net/`; the editor must open immediately.
 - Check the browser Network and Console panels for 404, 500, CORS, mixed-content, and failed dynamic-import errors.
-- Confirm the document contains `meta[name="nd-build"][content="app-web1a"]`.
+- Confirm the document contains `meta[name="nd-build"][content="nd-blocking-previs-web"]`.
 - Check Scene, Stage WebGL, Actor, Prop, Wall, Door/Window, Sun, Camera, Camera Preview, Camera View, Frame Guides, Timeline, and project switching.
 - Test `.ndscene`, `.ndblock`, PNG, WebM/MP4 capability messaging, and dirty reload warning.
 - Test representative cameras: Sony FX5, Sony BURANO, and ARRI ALEXA 35.

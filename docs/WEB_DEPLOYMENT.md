@@ -1,6 +1,6 @@
-# ND Blocking & Previs V2 Web Deployment
+# ND Blocking & Previs Web Deployment
 
-V2 is a local-first static web application. Creative project data stays in the
+ND Blocking & Previs is a local-first static web application. Creative project data stays in the
 browser and leaves the device only through user-initiated `.ndscene`, `.ndblock`,
 still-image, or video downloads. There is no API, account, analytics, cloud
 storage, or service worker in this build.
@@ -69,6 +69,17 @@ The deployable output is `dist/`. Upload the *contents* of that directory
 to the subdomain document root; do not upload the containing `dist` directory
 as a nested folder.
 
+The production document root for this deployment is:
+
+```text
+/home/duongtr1/blocking.duongtruongdp.net/
+```
+
+Keep `index.html` at the root of that directory and copy `assets/*` beneath
+the same directory. The Web build is served directly from the repository root;
+the desktop app remains a separate Tauri runtime selected by the platform
+adapter and is not required by this deployment.
+
 ## Deployment URL shapes
 
 The preferred deployment is a dedicated HTTPS subdomain:
@@ -89,11 +100,11 @@ VITE_BASE_PATH=/blocking/ npm run build:web
 Upload that build to `https://duongtruongdp.net/blocking/`. The base path is
 read from `VITE_BASE_PATH`; it must have a leading and trailing slash. The app
 uses one document route and does not require React Router or an SPA fallback
-rewrite. If a host rewrites unknown paths, keep `/blocking/` scoped to the V2
+rewrite. If a host rewrites unknown paths, keep `/blocking/` scoped to the current
 static directory.
 
 The build has no required secrets or production environment variables. The
-only supported V2 build variable is optional `VITE_BASE_PATH`:
+only supported Web build variable is optional `VITE_BASE_PATH`:
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
@@ -232,7 +243,7 @@ Before staging acceptance:
    capture, and export to check for stale renderers, listeners, tracks, or
    Blob URLs.
 
-The V2 build currently keeps the Camera database bundled for offline
+The current Web build keeps the Camera database bundled for offline
 availability. Video export code and `mediabunny` are loaded only when export
 capability detection/export begins; the core editor remains in the initial
 chunk. Three.js and the core editor remain the largest initial contributors.
@@ -259,7 +270,7 @@ shared storage or cookies across the two origins.
 The build identity is available in the generated document as:
 
 ```html
-<meta name="nd-build" content="app-web1a" />
+<meta name="nd-build" content="nd-blocking-previs-web" />
 ```
 
 This is a quiet diagnostic marker for distinguishing a deployed artifact from

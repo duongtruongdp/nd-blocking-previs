@@ -431,9 +431,24 @@ h2 { margin: 3px 0 0; font-size: 16px; letter-spacing: -0.02em; }
 .v2-timeline-track.is-selected .v2-timeline-track-name { color: var(--accent); font-weight: 700; }
 .v2-timeline-track-name { overflow: hidden; padding: 5px 8px 4px 36px; color: var(--text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; user-select: none; }
 .v2-timeline-track-lane { position: relative; min-width: 0; background: rgba(245, 246, 252, .34); }
-.v2-timeline-keyframe { position: absolute; top: 7px; width: 9px; height: 9px; margin: 0 0 0 -4px; padding: 0; transform: rotate(45deg); border: 1px solid var(--accent); border-radius: 2px; background: var(--surface-raised); cursor: pointer; }
-.v2-timeline-keyframe.is-current { background: var(--color-primary-strong); box-shadow: 0 0 0 2px rgba(var(--color-primary-hover-rgb), .2); }
-.v2-timeline-keyframe.is-selected { outline: 2px solid rgba(var(--color-primary-strong-rgb), .52); outline-offset: 2px; }
+.v2-timeline-keyframe { position: absolute; top: 4px; width: 16px; height: 16px; margin: 0 0 0 -8px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--accent); cursor: pointer; display: grid; place-items: center; }
+.v2-keyframe-glyph { display: block; width: 12px; height: 12px; overflow: visible; color: currentColor; pointer-events: none; }
+.v2-keyframe-glyph-path { fill: var(--surface-raised); stroke: currentColor; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.v2-timeline-keyframe:hover { color: var(--color-primary-strong); }
+.v2-timeline-keyframe:hover .v2-keyframe-glyph-path { stroke-width: 1.25; }
+.v2-timeline-keyframe.is-current { box-shadow: 0 0 0 2px rgba(var(--color-primary-hover-rgb), .2); }
+.v2-timeline-keyframe.is-current .v2-keyframe-glyph-path { fill: var(--color-primary-strong); }
+.v2-timeline-keyframe.is-selected { color: var(--color-primary-strong); }
+.v2-timeline-keyframe.is-selected .v2-keyframe-glyph-path { fill: currentColor; }
+.v2-timeline-keyframe.is-selected:focus-visible { outline: 2px solid rgba(var(--color-primary-strong-rgb), .52); outline-offset: 2px; }
+.v2-timeline-selection-count { margin-left: 4px; padding: 4px 7px; border: 1px solid rgba(var(--color-primary-hover-rgb), .26); border-radius: 5px; background: rgba(var(--color-primary-hover-rgb), .08); color: var(--text-muted); font-size: 9px; font-variant-numeric: tabular-nums; }
+.v2-timeline-marquee { position: absolute; z-index: 5; border: 1px solid rgba(var(--color-primary-hover-rgb), .8); background: rgba(var(--color-primary-hover-rgb), .16); pointer-events: none; }
+.v2-timeline-marquee.is-additive { border-color: rgba(var(--color-primary-strong-rgb), .9); background: rgba(var(--color-primary-strong-rgb), .12); }
+.v2-timeline-keyframe.is-dragging { opacity: .9; box-shadow: 0 0 0 3px rgba(var(--color-primary-strong-rgb), .2); }
+.v2-timeline-context-menu { position: fixed; z-index: 40; min-width: 164px; padding: 6px; border: 1px solid rgba(var(--color-primary-hover-rgb), .42); border-radius: 7px; background: var(--surface-raised); box-shadow: 0 12px 28px rgba(5, 12, 28, .28); }
+.v2-timeline-context-title { display: block; padding: 5px 8px 6px; color: var(--text-muted); font-size: 9px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.v2-timeline-context-item { display: grid; grid-template-columns: 16px 1fr; width: 100%; padding: 6px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text-secondary); font-size: 11px; text-align: left; cursor: pointer; }
+.v2-timeline-context-item:hover { background: var(--color-primary-soft); color: var(--text-primary); }
 .v2-timeline-empty { position: absolute; top: 20px; right: 20px; left: 104px; color: var(--text-muted); text-align: center; user-select: none; }
 .v2-timeline, .v2-timeline-toolbar, .v2-timeline-track-area, .v2-ruler, .v2-timeline-track-viewport, .v2-timeline-group-header, .v2-timeline-track, .v2-timeline-mark, .v2-timeline-playhead { user-select: none; }
 .v2-timeline input, .v2-timeline textarea, .v2-timeline select { user-select: text; }

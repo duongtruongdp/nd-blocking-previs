@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { CameraDocument, FrameGuide } from '../core/sceneDocument'
 import { FRAME_GUIDE_PRESETS, createFrameGuide, frameGuideLabel, normalizeFrameGuideColor, type FrameGuidePreset } from '../core/frameGuides'
+import { frameGuideSelectionAfterDelete, resolveFrameGuideSelection } from '../core/frameGuideSelection'
 
 type FrameGuideInspectorProps = {
   camera: CameraDocument
@@ -17,9 +18,9 @@ export function FrameGuideInspector({ camera, selectedGuideId, onSelectGuide, on
   const selectedGuide = camera.frameGuides.find((guide) => guide.id === selectedGuideId) ?? null
 
   useEffect(() => {
-    if (!selectedGuide && camera.frameGuides.length > 0) onSelectGuide(camera.frameGuides[0].id)
-    if (camera.frameGuides.length === 0 && selectedGuideId !== null) onSelectGuide(null)
-  }, [camera.frameGuides, onSelectGuide, selectedGuide, selectedGuideId])
+    const nextSelection = resolveFrameGuideSelection(camera.frameGuides, selectedGuideId)
+    if (nextSelection !== selectedGuideId) onSelectGuide(nextSelection)
+  }, [camera.frameGuides, onSelectGuide, selectedGuideId])
 
   const updateGuides = (frameGuides: FrameGuide[]) => onCameraChange(camera.id, { frameGuides })
   const nextId = () => {
@@ -56,7 +57,7 @@ export function FrameGuideInspector({ camera, selectedGuideId, onSelectGuide, on
     if (!selectedGuide) return
     const nextGuides = camera.frameGuides.filter((guide) => guide.id !== selectedGuide.id)
     updateGuides(nextGuides)
-    onSelectGuide(nextGuides[0]?.id ?? null)
+    onSelectGuide(frameGuideSelectionAfterDelete(camera.frameGuides, selectedGuide.id))
   }
 
   return (

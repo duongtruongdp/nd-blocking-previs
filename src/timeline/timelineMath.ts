@@ -1,4 +1,4 @@
-import type { ActorVector3, RationalFrameRate, TimelineDocument, TimelineEntityType, TimelineInterpolation, TimelineProperty, TimelineValue } from '../core/sceneDocument'
+import type { ActorVector3, RationalFrameRate, TimelineDocument, TimelineEasing, TimelineEasingMode, TimelineEntityType, TimelineInterpolation, TimelineProperty, TimelineValue } from '../core/sceneDocument'
 
 export const TIMELINE_FRAME_RATES: readonly RationalFrameRate[] = [
   { numerator: 24000, denominator: 1001 },
@@ -77,6 +77,30 @@ export function interpolateAngleRadians(start: number, end: number, amount: numb
   return start + normalizeAngleRadians(end - start) * amount
 }
 
+export function timelineEasingMode(keyframe: Pick<{ interpolation: TimelineInterpolation; easeIn?: boolean; easeOut?: boolean }, 'interpolation' | 'easeIn' | 'easeOut'>): TimelineEasingMode {
+  if (keyframe.interpolation === 'hold') return 'linear'
+  if (keyframe.easeIn && keyframe.easeOut) return 'easeInOut'
+  if (keyframe.easeIn) return 'easeIn'
+  if (keyframe.easeOut) return 'easeOut'
+  return 'linear'
+}
+
+export function timelineEasingForMode(mode: TimelineEasingMode): TimelineEasing {
+  return {
+    easeIn: mode === 'easeIn' || mode === 'easeInOut',
+    easeOut: mode === 'easeOut' || mode === 'easeInOut',
+  }
+}
+
+/** Applies the outgoing easing on the starting key and incoming easing on the destination key. */
+export function timelineEasedProgress(amount: number, outgoingEase: boolean | undefined, incomingEase: boolean | undefined): number {
+  const t = Math.min(1, Math.max(0, amount))
+  if (outgoingEase && incomingEase) return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+  if (outgoingEase) return 1 - Math.pow(1 - t, 3)
+  if (incomingEase) return Math.pow(t, 3)
+  return t
+}
+
 function cloneValue(value: TimelineValue): TimelineValue {
   return Array.isArray(value) ? [...value] as ActorVector3 : value
 }
@@ -89,12 +113,19 @@ export function trackHasKeyframe(timeline: TimelineDocument, entityId: string, p
   return timeline.tracks.some((track) => track.entityId === entityId && track.property === property && track.keyframes.some((keyframe) => keyframe.frame === frame))
 }
 
-export function upsertTimelineKeyframe(timeline: TimelineDocument, entityId: string, entityType: TimelineEntityType, property: TimelineProperty, frame: number, value: TimelineValue, interpolation: TimelineInterpolation = 'linear'): TimelineDocument {
+export function upsertTimelineKeyframe(timeline: TimelineDocument, entityId: string, entityType: TimelineEntityType, property: TimelineProperty, frame: number, value: TimelineValue, interpolation: TimelineInterpolation = 'linear', easing?: TimelineEasing): TimelineDocument {
   const id = timelineTrackId(entityId, property)
   const existingTrack = timeline.tracks.find((track) => track.id === id)
   const keyframes = existingTrack ? [...existingTrack.keyframes] : []
   const existingIndex = keyframes.findIndex((keyframe) => keyframe.frame === frame)
-  const nextKeyframe = { id: existingIndex >= 0 ? keyframes[existingIndex].id : `${id}:${frame}`, frame, value: cloneValue(value), interpolation }
+  const existing = existingIndex >= 0 ? keyframes[existingIndex] : undefined
+  const nextKeyframe = {
+    id: existing?.id ?? `${id}:${frame}`,
+    frame,
+    value: cloneValue(value),
+    interpolation: existing && easing === undefined ? existing.interpolation : interpolation,
+    ...(easing !== undefined ? { easeIn: easing.easeIn, easeOut: easing.easeOut } : existing ? { easeIn: existing.easeIn, easeOut: existing.easeOut } : {}),
+  }
   if (existingIndex >= 0) keyframes[existingIndex] = nextKeyframe
   else keyframes.push(nextKeyframe)
   keyframes.sort((a, b) => a.frame - b.frame)
@@ -117,6 +148,21 @@ export function removeTimelineKeyframe(timeline: TimelineDocument, trackId: stri
   }
 }
 
+export function setTimelineKeyframeEasing(timeline: TimelineDocument, trackId: string, keyframeId: string, mode: TimelineEasingMode): TimelineDocument {
+  const easing = timelineEasingForMode(mode)
+  return {
+    ...timeline,
+    tracks: timeline.tracks.map((track) => track.id !== trackId ? track : {
+      ...track,
+      keyframes: track.keyframes.map((keyframe) => keyframe.id !== keyframeId ? keyframe : {
+        ...keyframe,
+        interpolation: 'linear',
+        ...easing,
+      }),
+    }),
+  }
+}
+
 /** Move one keyframe, replacing a same-track destination deterministically. */
 export function moveTimelineKeyframe(timeline: TimelineDocument, trackId: string, keyframeId: string, targetFrame: number): TimelineDocument {
   return {
@@ -132,5 +178,90 @@ export function moveTimelineKeyframe(timeline: TimelineDocument, trackId: string
         .sort((a, b) => a.frame - b.frame)
       return keyframes.length > 0 ? [{ ...track, keyframes }] : []
     }),
+  }
+}
+
+export type TimelineKeyframeSelection = { trackId: string; keyframeId: string }
+
+function selectedKeyframes(timeline: TimelineDocument, selections: readonly TimelineKeyframeSelection[]) {
+  const seen = new Set<string>()
+  return selections.flatMap((selection) => {
+    const identity = `${selection.trackId}:${selection.keyframeId}`
+    if (seen.has(identity)) return []
+    seen.add(identity)
+    const track = timeline.tracks.find((candidate) => candidate.id === selection.trackId)
+    const keyframe = track?.keyframes.find((candidate) => candidate.id === selection.keyframeId)
+    return track && keyframe ? [{ selection, track, keyframe }] : []
+  })
+}
+
+/** Clamps one horizontal group move without changing the selected keys' spacing. */
+export function clampTimelineKeyframeDelta(timeline: TimelineDocument, selections: readonly TimelineKeyframeSelection[], deltaFrames: number): number {
+  const selected = selectedKeyframes(timeline, selections)
+  if (selected.length === 0) return 0
+  const earliest = Math.min(...selected.map(({ keyframe }) => keyframe.frame))
+  const latest = Math.max(...selected.map(({ keyframe }) => keyframe.frame))
+  return Math.max(timeline.startFrame - earliest, Math.min(timeline.endFrame - latest, Math.round(deltaFrames)))
+}
+
+/** Moves a selection as one atomic time-only operation, replacing non-selected collisions. */
+export function moveTimelineKeyframes(timeline: TimelineDocument, selections: readonly TimelineKeyframeSelection[], deltaFrames: number): TimelineDocument {
+  const selected = selectedKeyframes(timeline, selections)
+  if (selected.length === 0) return timeline
+  const delta = clampTimelineKeyframeDelta(timeline, selections, deltaFrames)
+  const selectedIdsByTrack = new Map<string, Set<string>>()
+  const destinationFramesByTrack = new Map<string, Set<number>>()
+  selected.forEach(({ track, keyframe }) => {
+    const ids = selectedIdsByTrack.get(track.id) ?? new Set<string>()
+    ids.add(keyframe.id)
+    selectedIdsByTrack.set(track.id, ids)
+    const destinations = destinationFramesByTrack.get(track.id) ?? new Set<number>()
+    destinations.add(keyframe.frame + delta)
+    destinationFramesByTrack.set(track.id, destinations)
+  })
+
+  return {
+    ...timeline,
+    tracks: timeline.tracks.flatMap((track) => {
+      const ids = selectedIdsByTrack.get(track.id)
+      if (!ids) return [track]
+      const destinations = destinationFramesByTrack.get(track.id) ?? new Set<number>()
+      const moved = selected.filter((item) => item.track.id === track.id).map(({ keyframe }) => ({ ...keyframe, frame: keyframe.frame + delta }))
+      const keyframes = track.keyframes
+        .filter((keyframe) => !ids.has(keyframe.id) && !destinations.has(keyframe.frame))
+        .concat(moved)
+        .sort((a, b) => a.frame - b.frame)
+      return keyframes.length > 0 ? [{ ...track, keyframes }] : []
+    }),
+  }
+}
+
+export function removeTimelineKeyframes(timeline: TimelineDocument, selections: readonly TimelineKeyframeSelection[]): TimelineDocument {
+  const idsByTrack = new Map<string, Set<string>>()
+  selections.forEach((selection) => {
+    const ids = idsByTrack.get(selection.trackId) ?? new Set<string>()
+    ids.add(selection.keyframeId)
+    idsByTrack.set(selection.trackId, ids)
+  })
+  return {
+    ...timeline,
+    tracks: timeline.tracks.flatMap((track) => {
+      const ids = idsByTrack.get(track.id)
+      if (!ids) return [track]
+      const keyframes = track.keyframes.filter((keyframe) => !ids.has(keyframe.id))
+      return keyframes.length > 0 ? [{ ...track, keyframes }] : []
+    }),
+  }
+}
+
+export function setTimelineKeyframesEasing(timeline: TimelineDocument, selections: readonly TimelineKeyframeSelection[], mode: TimelineEasingMode): TimelineDocument {
+  const selected = new Set(selections.map((selection) => `${selection.trackId}:${selection.keyframeId}`))
+  const easing = timelineEasingForMode(mode)
+  return {
+    ...timeline,
+    tracks: timeline.tracks.map((track) => ({
+      ...track,
+      keyframes: track.keyframes.map((keyframe) => selected.has(`${track.id}:${keyframe.id}`) ? { ...keyframe, interpolation: 'linear', ...easing } : keyframe),
+    })),
   }
 }

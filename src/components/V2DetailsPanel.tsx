@@ -32,7 +32,6 @@ type V2DetailsPanelProps = {
 export function V2DetailsPanel({ actor, prop, wall, opening, sun, camera, activeCameraId, timeline, onActorChange, onPropChange, onCameraChange, onWallChange, onOpeningChange, onSunChange, onDuplicateEntity, onDeleteEntity, onSetActiveCamera, onAddKeyframe, selectedFrameGuideId, onFrameGuideSelection }: V2DetailsPanelProps) {
   return (
     <aside className="v2-panel v2-details-panel" aria-label="Details">
-      <span className="v2-eyebrow">Details</span>
       {camera ? <CameraInspector camera={camera} activeCameraId={activeCameraId} timeline={timeline} onCameraChange={onCameraChange} onSetActiveCamera={onSetActiveCamera} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={onFrameGuideSelection} /> : actor ? <ActorInspector actor={actor} timeline={timeline} onActorChange={onActorChange} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} /> : prop ? <PropInspector prop={prop} timeline={timeline} onPropChange={onPropChange} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} /> : wall ? <WallInspector wall={wall} timeline={timeline} onWallChange={onWallChange} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} /> : opening ? <OpeningInspector opening={opening} timeline={timeline} onOpeningChange={onOpeningChange} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} /> : sun ? <SunInspector sun={sun} timeline={timeline} onSunChange={onSunChange} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} /> : <EmptyInspector />}
     </aside>
   )
@@ -48,7 +47,7 @@ function CameraInspector({ camera, activeCameraId, timeline, onCameraChange, onS
       <h3>{camera.name}</h3>
       <span className="v2-eyebrow v2-inspector-subsection">Appearance</span>
       <ColorField key={camera.id} value={camera.proxyColor} onCommit={(value) => onCameraChange(camera.id, { proxyColor: value })} />
-      <button className={`v2-inspector-action${activeCameraId === camera.id ? ' is-active' : ''}`} onClick={() => onSetActiveCamera(camera.id)} type="button">{activeCameraId === camera.id ? 'Active Camera' : 'Set Active Camera'}</button>
+      <button className={`v2-inspector-action${activeCameraId === camera.id ? ' is-active' : ''}`} onClick={() => onSetActiveCamera(camera.id)} disabled={activeCameraId === camera.id} type="button">{activeCameraId === camera.id ? 'Active Camera' : 'Make Active Camera'}</button>
       <div className="v2-inspector-divider" />
       <span className="v2-eyebrow">Manufacturer</span>
       <select className="v2-inspector-select" value={definition?.manufacturer ?? CAMERA_MANUFACTURERS[0]} onChange={(event) => {

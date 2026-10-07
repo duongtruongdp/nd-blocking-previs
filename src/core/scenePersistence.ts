@@ -247,7 +247,7 @@ function validateTrack(value: unknown, path: string, ids: Set<string>, actorIds:
 }
 
 function validateKeyframe(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value) || !stringField(value.id) || !positiveOrZeroInteger(value.frame) || !['linear', 'hold'].includes(String(value.interpolation)) || !(finiteNumber(value.value) || typeof value.value === 'string' || vector3(value.value))) errors.push(`${path} is not a valid keyframe.`)
+  if (!isRecord(value) || !stringField(value.id) || !positiveOrZeroInteger(value.frame) || !['linear', 'hold'].includes(String(value.interpolation)) || (value.easeIn !== undefined && typeof value.easeIn !== 'boolean') || (value.easeOut !== undefined && typeof value.easeOut !== 'boolean') || !(finiteNumber(value.value) || typeof value.value === 'string' || vector3(value.value))) errors.push(`${path} is not a valid keyframe.`)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }

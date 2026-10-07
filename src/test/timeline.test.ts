@@ -6,7 +6,7 @@ import { createDefaultProps } from '../scene/testEntities'
 import { cameraProjectionForDocument } from '../runtime/cameraMath'
 import { createPlaybackClock, playbackFrameAt, playbackReachedMarkOut } from '../timeline/playbackClock'
 import { evaluateTimeline } from '../timeline/timelineEvaluator'
-import { TIMELINE_FRAME_RATES, frameToSeconds, frameToTimelineX, interpolateAngleRadians, interpolateScalar, interpolateVector, moveTimelineKeyframe, secondsToFrame, setTimelineMark, timelineXToFrame, upsertTimelineKeyframe } from '../timeline/timelineMath'
+import { TIMELINE_FRAME_RATES, clampTimelineKeyframeDelta, frameToSeconds, frameToTimelineX, interpolateAngleRadians, interpolateScalar, interpolateVector, moveTimelineKeyframe, moveTimelineKeyframes, removeTimelineKeyframes, secondsToFrame, setTimelineKeyframeEasing, setTimelineKeyframesEasing, setTimelineMark, timelineEasedProgress, timelineEasingMode, timelineXToFrame, upsertTimelineKeyframe } from '../timeline/timelineMath'
 
 describe('V2 timeline foundation', () => {
   it('keeps supported frame rates rational and converts frames without float time storage', () => {
@@ -67,6 +67,58 @@ describe('V2 timeline foundation', () => {
     expect(halfway.rotation[1]).toBeCloseTo(Math.PI / 4, 5)
   })
 
+  it('applies easing to the temporal progress while preserving vector interpolation', () => {
+    expect(timelineEasedProgress(0.5, undefined, undefined)).toBe(0.5)
+    expect(timelineEasedProgress(0.25, true, undefined)).toBeGreaterThan(0.25)
+    expect(timelineEasedProgress(0.25, undefined, true)).toBeLessThan(0.25)
+    expect(timelineEasedProgress(0.25, true, true)).toBeLessThan(0.25)
+
+    const actor = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 0, [0, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 100, [100, 40, -20])
+    timeline = setTimelineKeyframeEasing(timeline, actor.id + ':position', actor.id + ':position:0', 'easeOut')
+    const document = { ...createEmptySceneDocument(), actors: [actor], timeline }
+    const quarter = evaluateTimeline(document, 25)[actor.id].position
+    expect(quarter[0]).toBeGreaterThan(25)
+    expect(quarter[1] / quarter[0]).toBeCloseTo(0.4, 8)
+    expect(quarter[2] / quarter[0]).toBeCloseTo(-0.2, 8)
+  })
+
+  it('uses incoming Ease In metadata on the destination key and exposes its mode', () => {
+    const actor = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 0, [0, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 100, [100, 0, 0])
+    timeline = setTimelineKeyframeEasing(timeline, actor.id + ':position', actor.id + ':position:100', 'easeIn')
+    expect(timelineEasingMode(timeline.tracks[0].keyframes[1])).toBe('easeIn')
+    const document = { ...createEmptySceneDocument(), actors: [actor], timeline }
+    expect(evaluateTimeline(document, 25)[actor.id].position[0]).toBeLessThan(25)
+    expect(evaluateTimeline(document, 75)[actor.id].position[0]).toBeLessThan(75)
+    expect(evaluateTimeline(document, 75)[actor.id].position[0] - evaluateTimeline(document, 50)[actor.id].position[0]).toBeGreaterThan(evaluateTimeline(document, 25)[actor.id].position[0])
+  })
+
+  it('applies easing to Camera Rotation without changing quaternion-based interpolation', () => {
+    const camera = createCameraDocument('camera-01', 'Camera 01', [0, 1, 5], [0, 0, 0], CAMERA_DATABASE[0].id, CAMERA_DATABASE[0].captureModes[0].id)
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, camera.id, 'Camera', 'rotation', 0, [0, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, camera.id, 'Camera', 'rotation', 100, [0, Math.PI / 2, 0])
+    timeline = setTimelineKeyframeEasing(timeline, camera.id + ':rotation', camera.id + ':rotation:0', 'easeOut')
+    const document = { ...createEmptySceneDocument(), cameras: [camera], timeline }
+    expect(evaluateTimeline(document, 25)[camera.id].rotation[1]).toBeGreaterThan(Math.PI / 8)
+    expect(evaluateTimeline(document, 25)[camera.id].rotation[0]).toBeCloseTo(0, 8)
+    expect(evaluateTimeline(document, 25)[camera.id].rotation[2]).toBeCloseTo(0, 8)
+  })
+
+  it('preserves easing metadata when Auto-Key updates an existing frame', () => {
+    const actor = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 0, [0, 0, 0])
+    timeline = setTimelineKeyframeEasing(timeline, actor.id + ':position', actor.id + ':position:0', 'easeInOut')
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 0, [2, 0, 0])
+    expect(timelineEasingMode(timeline.tracks[0].keyframes[0])).toBe('easeInOut')
+  })
+
   it('keeps Delivery Frame separate from physical FOV during focal animation', () => {
     const definition = CAMERA_DATABASE[0]
     const camera = createCameraDocument('camera-01', 'Camera 01', [0, 1, 5], [0, 0, 0], definition.id, definition.captureModes[0].id)
@@ -101,6 +153,43 @@ describe('V2 timeline foundation', () => {
     const moved = moveTimelineKeyframe(timeline, 'actor-01:position', 'actor-01:position:48', 72)
     expect(moved.tracks[0].keyframes).toHaveLength(1)
     expect(moved.tracks[0].keyframes[0]).toMatchObject({ frame: 72, value: [1, 2, 3], id: 'actor-01:position:48' })
+  })
+
+  it('moves a selected group by one clamped delta and preserves spacing across tracks', () => {
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, 'actor-01', 'Actor', 'position', 5, [5, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, 'actor-01', 'Actor', 'position', 20, [20, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, 'actor-01', 'Actor', 'heading', 12, 0.5)
+    const selection = [
+      { trackId: 'actor-01:position', keyframeId: 'actor-01:position:5' },
+      { trackId: 'actor-01:position', keyframeId: 'actor-01:position:20' },
+      { trackId: 'actor-01:heading', keyframeId: 'actor-01:heading:12' },
+    ]
+    expect(clampTimelineKeyframeDelta(timeline, selection, -10)).toBe(-5)
+    const moved = moveTimelineKeyframes(timeline, selection, -10)
+    expect(moved.tracks.find((track) => track.id === 'actor-01:position')?.keyframes.map((keyframe) => keyframe.frame)).toEqual([0, 15])
+    expect(moved.tracks.find((track) => track.id === 'actor-01:heading')?.keyframes[0].frame).toBe(7)
+  })
+
+  it('replaces non-selected collisions atomically during group movement', () => {
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, 'actor-01', 'Actor', 'position', 10, [1, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, 'actor-01', 'Actor', 'position', 30, [9, 0, 0])
+    const moved = moveTimelineKeyframes(timeline, [{ trackId: 'actor-01:position', keyframeId: 'actor-01:position:10' }], 20)
+    expect(moved.tracks[0].keyframes).toEqual([{ id: 'actor-01:position:10', frame: 30, value: [1, 0, 0], interpolation: 'linear' }])
+  })
+
+  it('removes a multi-selection and applies one easing mode to the selected keys only', () => {
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, 'actor-01', 'Actor', 'position', 10, [1, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, 'actor-01', 'Actor', 'position', 20, [2, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, 'actor-01', 'Actor', 'heading', 20, 0)
+    const selection = [{ trackId: 'actor-01:position', keyframeId: 'actor-01:position:10' }, { trackId: 'actor-01:position', keyframeId: 'actor-01:position:20' }]
+    const eased = setTimelineKeyframesEasing(timeline, selection, 'easeInOut')
+    expect(eased.tracks[0].keyframes.every((keyframe) => keyframe.easeIn && keyframe.easeOut)).toBe(true)
+    const removed = removeTimelineKeyframes(eased, selection)
+    expect(removed.tracks).toHaveLength(1)
+    expect(removed.tracks[0].property).toBe('heading')
   })
 
   it('advances at the rational frame rate and stops at Mark Out', () => {

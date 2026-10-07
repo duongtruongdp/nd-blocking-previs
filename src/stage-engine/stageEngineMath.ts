@@ -78,3 +78,13 @@ export function stageToolForKey(key: string): StageTool | null {
 export function stageZoomDistance(distance: number, deltaY: number, sensitivity = 0.0012): number {
   return THREE.MathUtils.clamp(distance * Math.pow(1 + sensitivity, deltaY), 0.6, 200)
 }
+
+/**
+ * Semantic rotation basis for the filmmaking gizmo. Y is always world-up
+ * pan; X and Z follow the entity's current local right/forward axes.
+ */
+export function stageRotationAxis(rotation: [number, number, number], axis: 'x' | 'y' | 'z'): THREE.Vector3 {
+  if (axis === 'y') return new THREE.Vector3(0, 1, 0)
+  const orientation = new THREE.Quaternion().setFromEuler(new THREE.Euler(...rotation, 'XYZ'))
+  return new THREE.Vector3(axis === 'x' ? 1 : 0, 0, axis === 'z' ? 1 : 0).applyQuaternion(orientation).normalize()
+}

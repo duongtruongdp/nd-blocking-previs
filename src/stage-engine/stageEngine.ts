@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { PropDocument } from '../core/sceneDocument'
 import { classifyWheelInput } from '../runtime/inputNormalization'
-import { stageMovedBeyondThreshold, stageNdcFromEvent, stagePointerDeltaAlongAxis, stageProjectWorldAxisToScreen, stageToolForKey, stageWorldUnitsPerPixelAlongAxis, stageZoomDistance, type StageCanvasRect, type StagePointerMode, type StageTool } from './stageEngineMath'
+import { stageMovedBeyondThreshold, stageNdcFromEvent, stagePointerDeltaAlongAxis, stageProjectWorldAxisToScreen, stageRotationAxis, stageToolForKey, stageWorldUnitsPerPixelAlongAxis, stageZoomDistance, type StageCanvasRect, type StagePointerMode, type StageTool } from './stageEngineMath'
 import { scaleFromPointer, type ScaleAxis } from './stageEngineScaleMath'
 
 const MAX_PIXEL_RATIO = 2
@@ -581,7 +581,11 @@ export class StageEngine {
     const entity = this.selectedEntity
     if (!entity) return { ...base, mode: 'orbit' }
     const origin = this.gizmoRoot.position.clone()
-    const axis = handle.axis ? new THREE.Vector3(handle.axis === 'x' ? 1 : 0, handle.axis === 'y' ? 1 : 0, handle.axis === 'z' ? 1 : 0) : null
+    const axis = handle.axis
+      ? handle.mode === 'rotate'
+        ? stageRotationAxis([entity.root.rotation.x, entity.root.rotation.y, entity.root.rotation.z], handle.axis)
+        : new THREE.Vector3(handle.axis === 'x' ? 1 : 0, handle.axis === 'y' ? 1 : 0, handle.axis === 'z' ? 1 : 0)
+      : null
     const plane = handle.kind === 'plane' ? new THREE.Plane(new THREE.Vector3(0, 1, 0), -origin.y) : null
     const startPoint = plane ? this.pointerRay(event).ray.intersectPlane(plane, new THREE.Vector3()) : null
     const screenAxis = (handle.mode === 'move' || handle.mode === 'scale') && handle.kind === 'axis' && axis ? stageProjectWorldAxisToScreen(this.editorCamera, origin, axis, this.getCanvasRect()) : null
@@ -747,6 +751,12 @@ export class StageEngine {
       this.gizmoRotate.visible = visible && this.tool === 'rotate'
       this.gizmoScaleHandles.visible = visible && this.tool === 'scale' && entity?.scalable === true
       this.gizmoHandles.forEach(({ pick, handle }) => {
+        if (handle.mode === 'rotate' && handle.axis && entity) {
+          const axis = stageRotationAxis([entity.root.rotation.x, entity.root.rotation.y, entity.root.rotation.z], handle.axis)
+          const ringQuaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), axis)
+          pick.quaternion.copy(ringQuaternion)
+          handle.visible.forEach((mesh) => mesh.quaternion.copy(ringQuaternion))
+        }
         const actorYMove = entity?.type === 'Actor' && this.tool === 'move' && handle.axis === 'y'
         const actorZRotate = entity?.type === 'Actor' && this.tool === 'rotate' && handle.axis === 'z'
         const axisVisible = !((handle.mode === 'move' || handle.mode === 'scale') && handle.kind === 'axis' && handle.axis) || !!stageProjectWorldAxisToScreen(

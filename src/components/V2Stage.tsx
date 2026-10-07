@@ -52,6 +52,7 @@ type V2StageProps = {
   onWallDrawExit: () => void
   snapPreviewWallId: string | null
   evaluatedEntities: Readonly<Record<string, EvaluatedEntityState>>
+  sceneRevision: string
   isPlaying: boolean
   transformingEntityId: string | null
   suspendedTimelineEntityIds: ReadonlySet<string>
@@ -139,7 +140,7 @@ function deliveryAspect(camera: CameraDocument): number {
   return deliveryAspectValue(camera.deliveryAspectRatio, cameraDisplayAspect(camera))
 }
 
-export function V2Stage({ view, actors, props, walls, openings, lights, cameras, activeCameraId, selectedEntityId, tool, onSelectionChange, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onCaptureFrameReady, cameraPreview, onCameraPreviewChange, onOpenCameraView, wallDrawing, wallDrawState, onWallDrawCommit, onWallDrawState, onWallDrawExit, snapPreviewWallId, evaluatedEntities, isPlaying, transformingEntityId, suspendedTimelineEntityIds, timeline, isScrubbing, lastTransformDebug, selectedFrameGuideId, thumbnailCaptureRef, shortcutBindings }: V2StageProps) {
+export function V2Stage({ view, actors, props, walls, openings, lights, cameras, activeCameraId, selectedEntityId, tool, onSelectionChange, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onCaptureFrameReady, cameraPreview, onCameraPreviewChange, onOpenCameraView, wallDrawing, wallDrawState, onWallDrawCommit, onWallDrawState, onWallDrawExit, snapPreviewWallId, evaluatedEntities, sceneRevision, isPlaying, transformingEntityId, suspendedTimelineEntityIds, timeline, isScrubbing, lastTransformDebug, selectedFrameGuideId, thumbnailCaptureRef, shortcutBindings }: V2StageProps) {
   const stageRef = useRef<HTMLDivElement>(null)
   const engineRef = useRef<StageEngine | null>(null)
   const cameraViewRef = useRef<CameraViewRuntime | null>(null)
@@ -294,10 +295,10 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
     const evaluatedCameras = cameras.map((camera) => shouldApplyTimelineEvaluation(camera.id, transformingEntityId, suspendedTimelineEntityIds) && evaluatedEntities[camera.id] ? { ...camera, ...evaluatedEntities[camera.id], focalLengthMm: evaluatedEntities[camera.id].focalLengthMm ?? camera.focalLengthMm } : camera)
     const activeCamera = evaluatedCameras.find((camera) => camera.id === activeCameraId) ?? null
     if (engineRef.current) syncScenic(engineRef.current, [...evaluatedProps, ...evaluatedWalls, ...resolvedOpenings, ...evaluatedLights], scenicRuntimesRef.current, selectedEntityId)
-    cameraViewRef.current?.setDocuments(evaluatedActors, evaluatedProps, evaluatedWalls, resolvedOpenings, evaluatedLights, activeCamera)
+    cameraViewRef.current?.reconcileScene({ revision: sceneRevision, actors: evaluatedActors, props: evaluatedProps, walls: evaluatedWalls, openings: evaluatedOpenings, lights: evaluatedLights, camera: activeCamera })
     cameraViewRef.current?.setPreviewAspect(activeCamera ? deliveryAspect(activeCamera) : 16 / 9)
     cameraViewRef.current?.setDisplayMode(view === 'camera' && activeCamera ? 'full' : cameraPreview && activeCamera ? 'preview' : 'hidden')
-  }, [view, cameraPreview, actors, props, walls, openings, lights, cameras, activeCameraId, selectedEntityId, evaluatedEntities, suspendedTimelineEntityIds, transformingEntityId])
+  }, [view, cameraPreview, actors, props, walls, openings, lights, cameras, activeCameraId, selectedEntityId, evaluatedEntities, suspendedTimelineEntityIds, transformingEntityId, sceneRevision])
 
   const activeCameraBase = cameras.find((camera) => camera.id === activeCameraId) ?? null
   const activeCamera = activeCameraBase && shouldApplyTimelineEvaluation(activeCameraBase.id, transformingEntityId, suspendedTimelineEntityIds) && evaluatedEntities[activeCameraBase.id]

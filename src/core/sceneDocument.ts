@@ -68,6 +68,8 @@ export type FrameGuide = {
 export type TimelineEntityType = 'Actor' | 'Prop' | 'Wall' | 'Opening' | 'Sun' | 'Camera'
 export type TimelineProperty = 'position' | 'heading' | 'rotation' | 'focalLengthMm' | 'openAngle' | 'azimuth' | 'elevation' | 'intensity' | 'color'
 export type TimelineInterpolation = 'linear' | 'hold'
+export type TimelineEasingMode = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut'
+export type TimelineEasing = { easeIn?: boolean; easeOut?: boolean }
 export type TimelineValue = number | string | ActorVector3
 
 export type TimelineKeyframe = {
@@ -75,6 +77,9 @@ export type TimelineKeyframe = {
   frame: number
   value: TimelineValue
   interpolation: TimelineInterpolation
+  /** Optional temporal easing flags. Missing flags preserve legacy linear behavior. */
+  easeIn?: boolean
+  easeOut?: boolean
 }
 
 export type TimelineTrack = {

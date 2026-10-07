@@ -11,6 +11,7 @@ import { ProceduralCameraRuntime } from './cameraRuntime'
 import { createScenicVisual, scenicGeometrySignature, type ScenicDefinition, type ScenicVisual } from './scenicRuntime'
 import { resolveOpeningAgainstWalls } from '../architecture/wallMath'
 import { sunAnglesFromHelperPosition } from './sunMapping'
+import { cameraViewEntityCollections, staleRuntimeEntityIds } from './cameraViewReconciliation'
 
 const MAX_PIXEL_RATIO = 2
 
@@ -39,6 +40,7 @@ export class CameraViewRuntime {
   private deliveryAspect = 16 / 9
   private displayMode: 'hidden' | 'full' | 'preview' = 'hidden'
   private currentCamera: CameraDocument | null = null
+  private lastSceneRevision = ''
   private disposed = false
 
   constructor(container: HTMLElement) {
@@ -92,11 +94,26 @@ export class CameraViewRuntime {
     if (this.displayMode === 'preview') this.render()
   }
 
-  setDocuments(actors: readonly ActorDocument[], props: readonly PropDocument[], walls: readonly WallDocument[], openings: readonly OpeningDocument[], lights: readonly SunDocument[], camera: CameraDocument | null): void {
+  /**
+   * Reconcile the isolated production-camera scene from one authoritative
+   * snapshot. This is intentionally separate from StageEngine: Camera View,
+   * the compact preview, and still thumbnails all consume this same runtime.
+   */
+  reconcileScene(scene: {
+    revision: string
+    actors: readonly ActorDocument[]
+    props: readonly PropDocument[]
+    walls: readonly WallDocument[]
+    openings: readonly OpeningDocument[]
+    lights: readonly SunDocument[]
+    camera: CameraDocument | null
+  }): void {
     if (this.disposed) return
-    this.syncActors(actors)
-    this.syncScenic([...props, ...walls, ...openings.map((opening) => resolveOpeningAgainstWalls(opening, walls)), ...lights])
-    this.syncCamera(camera)
+    this.lastSceneRevision = scene.revision
+    const scenic = [...scene.props, ...scene.walls, ...scene.openings.map((opening) => resolveOpeningAgainstWalls(opening, scene.walls)), ...scene.lights]
+    this.syncActors(scene.actors)
+    this.syncScenic(scenic)
+    this.syncCamera(scene.camera)
     if (this.displayMode !== 'hidden') this.render()
   }
 
@@ -179,9 +196,10 @@ export class CameraViewRuntime {
   private readonly handleWindowResize = () => this.resize()
 
   private syncActors(actors: readonly ActorDocument[]): void {
-    const ids = new Set(actors.map((actor) => actor.id))
-    Array.from(this.actorRuntimes.entries()).forEach(([id, runtime]) => {
-      if (ids.has(id)) return
+    const { actorIds } = cameraViewEntityCollections(actors, [])
+    staleRuntimeEntityIds(this.actorRuntimes.keys(), actorIds).forEach((id) => {
+      const runtime = this.actorRuntimes.get(id)
+      if (!runtime) return
       runtime.dispose()
       this.actorRuntimes.delete(id)
     })
@@ -198,9 +216,10 @@ export class CameraViewRuntime {
   }
 
   private syncScenic(definitions: readonly ScenicDefinition[]): void {
-    const ids = new Set(definitions.map((definition) => definition.id))
-    Array.from(this.scenicRuntimes.entries()).forEach(([id, runtime]) => {
-      if (ids.has(id)) return
+    const { scenicIds } = cameraViewEntityCollections([], definitions)
+    staleRuntimeEntityIds(this.scenicRuntimes.keys(), scenicIds).forEach((id) => {
+      const runtime = this.scenicRuntimes.get(id)
+      if (!runtime) return
       runtime.root.removeFromParent()
       runtime.dispose()
       this.scenicRuntimes.delete(id)

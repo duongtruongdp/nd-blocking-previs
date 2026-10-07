@@ -1,12 +1,13 @@
-import type { ActorDocument, ActorVector3, CameraDocument, OpeningDocument, PropDocument, SceneDocument, SunDocument, TimelineProperty, TimelineValue, WallDocument } from '../core/sceneDocument'
+import type { ActorDocument, ActorVector3, CameraDocument, OpeningDocument, PropDocument, SceneDocument, SunDocument, TimelineEntityType, TimelineProperty, TimelineValue, WallDocument } from '../core/sceneDocument'
 import { applySceneEntityTransform } from '../core/sceneDocument'
-import { evaluateTimeline } from './timelineEvaluator'
+import { upsertTimelineKeyframe } from './timelineMath'
 
 export type TimelineTransformCommit = {
   entityId: string
   position: ActorVector3
   rotation: ActorVector3
   scale?: ActorVector3
+  editedProperty?: 'position' | 'rotation' | 'heading'
 }
 
 export type TimelineTransformCommitResult = {
@@ -44,12 +45,19 @@ export function commitTimelineTransform(document: SceneDocument, change: Timelin
   const camera = document.cameras.find((item) => item.id === change.entityId)
   if (!actor && !prop && !wall && !opening && !camera) return { document: applySceneEntityTransform(document, change), changedKeyframe: false, suspendEvaluation: false }
 
-  const rotationProperty = camera || prop || wall || opening ? 'rotation' : 'heading'
-  const hasPositionTrack = document.timeline.tracks.some((track) => track.entityId === change.entityId && track.property === 'position')
-  const hasRotationTrack = document.timeline.tracks.some((track) => track.entityId === change.entityId && track.property === rotationProperty)
-  const hasFocalTrack = Boolean(camera && document.timeline.tracks.some((track) => track.entityId === change.entityId && track.property === 'focalLengthMm'))
-  const evaluated = evaluateTimeline(document, document.timeline.currentFrame)[change.entityId]
-  const currentFocalLength = camera ? evaluated?.focalLengthMm ?? camera.focalLengthMm : undefined
+  const entityType: TimelineEntityType = camera ? 'Camera' : wall ? 'Wall' : opening ? 'Opening' : prop ? 'Prop' : 'Actor'
+  const animatedProperty = change.editedProperty
+  const hasAnimatedProperty = animatedProperty !== undefined && document.timeline.tracks.some((track) => track.entityId === change.entityId && track.property === animatedProperty && track.keyframes.length > 0)
+  const keyframeValue = animatedProperty === 'position'
+    ? [...change.position] as ActorVector3
+    : animatedProperty === 'rotation'
+      ? [...change.rotation] as ActorVector3
+      : animatedProperty === 'heading'
+        ? change.rotation[1]
+        : undefined
+  const timeline = hasAnimatedProperty && keyframeValue !== undefined
+    ? upsertTimelineKeyframe(document.timeline, change.entityId, entityType, animatedProperty, document.timeline.currentFrame, keyframeValue)
+    : document.timeline
   const nextDocument: SceneDocument = {
     ...document,
     actors: document.actors.map((item) => item.id === change.entityId ? {
@@ -77,9 +85,8 @@ export function commitTimelineTransform(document: SceneDocument, change: Timelin
       ...item,
       position: [...change.position] as ActorVector3,
       rotation: [...change.rotation] as ActorVector3,
-      ...(currentFocalLength === undefined ? {} : { focalLengthMm: currentFocalLength }),
     } : item),
-    timeline: document.timeline,
+    timeline,
   }
-  return { document: nextDocument, changedKeyframe: false, suspendEvaluation: hasPositionTrack || hasRotationTrack || hasFocalTrack }
+  return { document: nextDocument, changedKeyframe: hasAnimatedProperty, suspendEvaluation: false }
 }

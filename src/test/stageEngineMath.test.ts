@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { scaleFromFactor, scaleFromPointer, stageMovedBeyondThreshold, stageNdcFromEvent, stagePointerDeltaAlongAxis, stageProjectWorldAxisToScreen, stageToolForKey, stageWorldUnitsPerPixelAtDepth, stageWorldUnitsPerPixelAlongAxis, stageZoomDistance } from '../stage-engine'
+import { scaleFromFactor, scaleFromPointer, stageMovedBeyondThreshold, stageNdcFromEvent, stagePointerDeltaAlongAxis, stageProjectWorldAxisToScreen, stageRotationAxis, stageToolForKey, stageWorldUnitsPerPixelAtDepth, stageWorldUnitsPerPixelAlongAxis, stageZoomDistance } from '../stage-engine'
 
 describe('StageEngine math boundary', () => {
+  it('keeps Y on world-up while X/Z follow the semantic local basis', () => {
+    const rotation: [number, number, number] = [0, Math.PI / 2, 0]
+    expect(stageRotationAxis(rotation, 'y').toArray()).toEqual([0, 1, 0])
+    expect(stageRotationAxis(rotation, 'x').z).toBeCloseTo(-1)
+    expect(stageRotationAxis(rotation, 'z').x).toBeCloseTo(1)
+  })
+
   it('maps pointer coordinates using the live canvas rectangle', () => {
     const ndc = stageNdcFromEvent({ clientX: 150, clientY: 250 }, { left: 100, top: 200, width: 100, height: 100 })
     expect(ndc.x).toBeCloseTo(0)

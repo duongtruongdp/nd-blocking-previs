@@ -39,18 +39,27 @@ User-visible changes are recorded here. This project is currently in Beta.
 
 - Clarified that Windows packaging remains pending real Windows validation.
 
-## Future release format
-
 ## 0.1.2 — Beta
 
-### Added
+### Timeline
 
-- Describe only user-visible changes here.
+- Added a more direct NLE-style Auto-Key workflow for blocking changes.
+- Added multi-keyframe selection, group editing, copy/paste, and batch easing.
+- Added visible Linear, Ease In, Ease Out, and Ease In & Out keyframe shapes.
 
-### Improved
+### Camera
 
-- Keep improvements concise.
+- Camera Preview and Camera View now stay synchronized with scene changes.
+- Corrected the Pan, Tilt, and Dutch transform-axis workflow.
+- Improved Active Camera selection and switching.
 
-### Fixed
+### Frame Guides
 
-- Keep fixes and known limitations concise.
+- Improved selection and editing of multiple frame guides.
+- Newly added guides are selected immediately.
+- Deleting a guide now selects the next or previous available guide reliably.
+
+### UI / Stability
+
+- Cleaned up the Inspector presentation.
+- Improved consistency across Timeline, Camera, and runtime editing workflows.

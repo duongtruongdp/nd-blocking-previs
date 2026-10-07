@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { ActorVector3, CameraDocument, OpeningDocument, PropDocument, SceneDocument, SunDocument, TimelineProperty, TimelineTrack, TimelineValue, WallDocument } from '../core/sceneDocument'
-import { interpolateAngleRadians, interpolateScalar, interpolateVector } from './timelineMath'
+import { interpolateAngleRadians, interpolateScalar, interpolateVector, timelineEasedProgress } from './timelineMath'
 
 export type EvaluatedEntityState = {
   position: ActorVector3
@@ -22,7 +22,7 @@ function valueAtFrame(track: TimelineTrack | undefined, frame: number): Timeline
   const previous = ordered[nextIndex - 1]
   const next = ordered[nextIndex]
   if (previous.interpolation === 'hold') return previous.value
-  const amount = (frame - previous.frame) / (next.frame - previous.frame)
+  const amount = timelineEasedProgress((frame - previous.frame) / (next.frame - previous.frame), previous.easeOut, next.easeIn)
   if (Array.isArray(previous.value) && Array.isArray(next.value)) return interpolateVector(previous.value, next.value, amount)
   if (typeof previous.value === 'string' || typeof next.value === 'string') return previous.value
   return interpolateScalar(Number(previous.value), Number(next.value), amount)
@@ -41,7 +41,7 @@ function evaluateRotation(base: ActorVector3, track: TimelineTrack | undefined, 
   if (!previous || !before || previous.frame === before.frame || previous.interpolation === 'hold') return [...value]
   const start = new THREE.Quaternion().setFromEuler(new THREE.Euler(...(before.value as ActorVector3), 'XYZ'))
   const end = new THREE.Quaternion().setFromEuler(new THREE.Euler(...(previous.value as ActorVector3), 'XYZ'))
-  const amount = (frame - before.frame) / (previous.frame - before.frame)
+  const amount = timelineEasedProgress((frame - before.frame) / (previous.frame - before.frame), before.easeOut, previous.easeIn)
   const result = start.slerp(end, amount).toArray()
   const euler = new THREE.Euler().setFromQuaternion(new THREE.Quaternion().fromArray(result), 'XYZ')
   return [euler.x, euler.y, euler.z]
@@ -59,7 +59,7 @@ function evaluateEntity(base: { id: string; position: ActorVector3; rotation: Ac
     const before = [...headingKeyframes].reverse().find((keyframe) => keyframe.frame <= frame)
     const after = headingKeyframes.find((keyframe) => keyframe.frame >= frame)
     rotation[1] = before && after && before.frame !== after.frame && before.interpolation !== 'hold'
-      ? interpolateAngleRadians(Number(before.value), Number(after.value), (frame - before.frame) / (after.frame - before.frame))
+      ? interpolateAngleRadians(Number(before.value), Number(after.value), timelineEasedProgress((frame - before.frame) / (after.frame - before.frame), before.easeOut, after.easeIn))
       : Number(headingValue)
   }
   const focalTrack = trackFor(tracks, base.id, 'focalLengthMm')

@@ -1,5 +1,7 @@
 import { cameraDatabaseVersion, resolveCameraDefinition, resolveCaptureMode } from './cameraDatabase'
+import { isActorPose, isActorPosePreset, normalizeActorPosePreset } from './actorPosePresets'
 import { normalizeFrameGuideColor } from './frameGuides'
+import { createStandingActorPose } from './sceneDocument'
 import type { CameraDocument, CameraPhysicalSnapshot, SceneDocument } from './sceneDocument'
 
 export const NDSCENE_FORMAT = 'ndscene' as const
@@ -120,7 +122,12 @@ export function normalizeSceneDocument(value: unknown): SceneDocument {
   const actors = Array.isArray(value.actors) ? value.actors.map((actor) => {
     if (!isRecord(actor)) return actor
     const appearance = isRecord(actor.appearance) ? actor.appearance : {}
-    return { ...actor, appearance: { ...appearance, primaryColor: typeof appearance.primaryColor === 'string' ? appearance.primaryColor : '#7f72c9' } }
+    return {
+      ...actor,
+      appearance: { ...appearance, primaryColor: typeof appearance.primaryColor === 'string' ? appearance.primaryColor : '#7f72c9' },
+      pose: isActorPose(actor.pose) ? actor.pose : createStandingActorPose(),
+      posePreset: normalizeActorPosePreset(actor.posePreset),
+    }
   }) : []
   const props = Array.isArray(value.props) ? value.props.map((prop) => {
     const normalized = normalizeEntity(prop, '#9b91df')
@@ -170,7 +177,7 @@ function migrateGuide(value: unknown): unknown {
 }
 
 function validateActor(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value) || !stringField(value.id) || !stringField(value.name) || !vector3(value.position) || !vector3(value.rotation) || !vector3(value.scale) || !isRecord(value.appearance) || value.appearance.bodyVariant !== 'neutral' || !stringField(value.appearance.primaryColor) || !isRecord(value.pose)) {
+  if (!isRecord(value) || !stringField(value.id) || !stringField(value.name) || !vector3(value.position) || !vector3(value.rotation) || !vector3(value.scale) || !isRecord(value.appearance) || value.appearance.bodyVariant !== 'neutral' || !stringField(value.appearance.primaryColor) || !isActorPose(value.pose) || (value.posePreset !== undefined && !isActorPosePreset(value.posePreset))) {
     errors.push(`${path} is not a valid Actor.`)
     return
   }

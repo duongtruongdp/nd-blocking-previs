@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { getActorPoseDefinition } from '../../core/actorPosePresets'
 import type { ActorDocument, ActorJointName, ActorPose } from '../../core/sceneDocument'
 import { CANONICAL_ACTOR_PROPORTIONS, type ActorProportions } from './proportions'
 
@@ -16,6 +17,7 @@ export class ProceduralActorRuntime {
   private readonly documentId: string
   private readonly proportions: ActorProportions
   private readonly joints = {} as ActorJointMap
+  private readonly bodyRoot: THREE.Group
   private readonly geometries = new Set<THREE.BufferGeometry>()
   private readonly materials = new Set<THREE.Material>()
   private readonly bodyMaterial: THREE.MeshStandardMaterial
@@ -26,6 +28,9 @@ export class ProceduralActorRuntime {
     this.proportions = options.proportions ?? CANONICAL_ACTOR_PROPORTIONS
     this.root = new THREE.Group()
     this.root.name = 'ActorRoot'
+    this.bodyRoot = new THREE.Group()
+    this.bodyRoot.name = 'ActorPoseRoot'
+    this.root.add(this.bodyRoot)
     this.bodyMaterial = new THREE.MeshStandardMaterial({ color: document.appearance.primaryColor, roughness: 0.72, metalness: 0.02 })
     this.materials.add(this.bodyMaterial)
     this.buildHierarchy()
@@ -37,7 +42,10 @@ export class ProceduralActorRuntime {
     this.root.rotation.set(document.rotation[0], document.rotation[1], document.rotation[2])
     this.root.scale.set(...document.scale)
     this.bodyMaterial.color.set(document.appearance.primaryColor)
-    this.applyPose(document.pose)
+    const definition = document.posePreset ? getActorPoseDefinition(document.posePreset) : null
+    this.bodyRoot.position.set(0, definition?.rootOffsetY ?? 0, 0)
+    this.bodyRoot.rotation.set(...(definition?.bodyRotation ?? [0, 0, 0]))
+    this.applyPose(definition?.pose ?? document.pose)
   }
 
   applyPose(pose: ActorPose): void {
@@ -63,7 +71,7 @@ export class ProceduralActorRuntime {
   private buildHierarchy(): void {
     const p = this.proportions
     const hipHeight = p.footHeight + p.shinLength + p.thighLength
-    const pelvisJoint = this.createJoint('PelvisJoint', this.root, new THREE.Vector3(0, hipHeight, 0), 'pelvis')
+    const pelvisJoint = this.createJoint('PelvisJoint', this.bodyRoot, new THREE.Vector3(0, hipHeight, 0), 'pelvis')
     const pelvis = this.createMesh('PelvisVisual', new THREE.SphereGeometry(1, 12, 8), pelvisJoint, new THREE.Vector3(0, 0, 0), 'pelvis')
     pelvis.scale.set(p.pelvisWidth / 2, p.pelvisHeight / 2, p.pelvisDepth / 2)
 

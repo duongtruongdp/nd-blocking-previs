@@ -29,6 +29,12 @@ the Project dirty. Saving the Project clears the Project dirty state; exporting
 an individual `.ndscene` does not.
 Scope: Phase 1 foundation, workspace shell, Actor/Prop blocking, locked Actor/Pose system, verified camera data, and serializable Camera objects.
 
+The current root application also exposes the procedural Actor pose preset
+library described in [ACTOR_POSE_PRESETS.md](ACTOR_POSE_PRESETS.md). Pose is a
+static blocking choice, stored as an additive `posePreset` field with Standing
+as the backwards-compatible default; no custom joint editing, IK, or pose
+animation is part of this feature.
+
 Milestone 0 decisions are implemented in the domain source and specified by these focused contracts:
 
 - [PROJECT_FORMAT.md](PROJECT_FORMAT.md) — `.ndblock`, validation, portability, and migrations

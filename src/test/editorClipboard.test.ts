@@ -23,7 +23,7 @@ describe('V2 editor clipboard', () => {
     expect(result.entity.id).toBe('actor-02')
     expect(result.entity.name).toBe('Actor 02')
     expect(result.entity.position).toEqual([1.5, 0, -1.5])
-    expect(result.entity).toMatchObject({ pose: actor.pose, appearance: actor.appearance })
+    expect(result.entity).toMatchObject({ pose: actor.pose, posePreset: actor.posePreset, appearance: actor.appearance })
   })
 
   it('pastes a Prop with its shape and appearance and a deterministic offset', () => {

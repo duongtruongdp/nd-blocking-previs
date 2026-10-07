@@ -45,6 +45,14 @@ describe('V2.9 ProjectDocument and .ndblock persistence', () => {
     expect(original.actors[0].position[0]).toBe(1)
   })
 
+  it('round-trips an Actor pose preset through the portable Project format', () => {
+    const scene = populatedScene()
+    scene.actors[0].posePreset = 'reaching'
+    const loaded = parseProjectFile(serializeProject(createProjectDocument('project-01', 'Project', scene), '2026-10-07T00:00:00.000Z'))
+
+    expect(loaded.scenes[0].scene.actors[0].posePreset).toBe('reaching')
+  })
+
   it('does not treat active Scene switching as creative dirty data', () => {
     const project = createProjectDocument('project-01', 'Project', populatedScene())
     const second = { ...createEmptySceneDocument(), metadata: { ...createEmptySceneDocument().metadata, id: 'scene-02', name: 'Scene 02' } }

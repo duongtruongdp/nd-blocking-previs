@@ -1,3 +1,5 @@
+import { createActorPoseForPreset } from './actorPosePresets'
+
 export type RationalFrameRate = {
   numerator: number
   denominator: number
@@ -19,6 +21,7 @@ export type ActorJointName =
   | 'rightKnee'
 
 export type ActorPose = Record<ActorJointName, ActorVector3>
+export type ActorPosePreset = 'standing' | 'relaxed' | 'walking' | 'sitting' | 'kneeling' | 'crouching' | 'lying' | 'reaching' | 'arms-crossed' | 'hands-on-hips'
 
 export type ActorAppearance = {
   bodyVariant: 'neutral'
@@ -172,6 +175,8 @@ export type ActorDocument = {
   scale: ActorVector3
   appearance: ActorAppearance
   pose: ActorPose
+  /** Optional for backwards compatibility with older scenes; absent means Standing. */
+  posePreset?: ActorPosePreset
 }
 
 export type SceneDocument = {
@@ -215,20 +220,7 @@ export function applySceneEntityTransform(document: SceneDocument, change: Scene
 }
 
 export function createStandingActorPose(): ActorPose {
-  const zero: ActorVector3 = [0, 0, 0]
-  return {
-    pelvis: [...zero],
-    torso: [...zero],
-    head: [...zero],
-    leftShoulder: [0, 0, -0.12],
-    leftElbow: [0, 0, 0.08],
-    rightShoulder: [0, 0, 0.12],
-    rightElbow: [0, 0, -0.08],
-    leftHip: [...zero],
-    leftKnee: [...zero],
-    rightHip: [...zero],
-    rightKnee: [...zero],
-  }
+  return createActorPoseForPreset('standing')
 }
 
 export function createActorDocument(id: string, name: string, position: ActorVector3): ActorDocument {
@@ -240,6 +232,7 @@ export function createActorDocument(id: string, name: string, position: ActorVec
     scale: [1, 1, 1],
     appearance: { bodyVariant: 'neutral', primaryColor: '#7f72c9' },
     pose: createStandingActorPose(),
+    posePreset: 'standing',
   }
 }
 

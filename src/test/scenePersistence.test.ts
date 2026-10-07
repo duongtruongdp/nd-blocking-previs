@@ -77,4 +77,34 @@ describe('V2.8 .ndscene persistence', () => {
     expect(sceneFilename('Night Exterior / Alley')).toBe('Night_Exterior_Alley.ndscene')
     expect(sceneFilename('')).toBe('Untitled_Scene.ndscene')
   })
+
+  it('persists the selected Actor pose preset', () => {
+    const scene = createEmptySceneDocument()
+    const actor = { ...createActorDocument('actor-01', 'Actor 01', [0, 0, 0]), posePreset: 'sitting' as const }
+    const loaded = parseSceneFile(serializeScene({ ...scene, actors: [actor] }, '2026-10-07T00:00:00.000Z'))
+
+    expect(loaded.actors[0].posePreset).toBe('sitting')
+  })
+
+  it('defaults legacy Actors without pose data to Standing', () => {
+    const scene = createEmptySceneDocument()
+    const actor = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
+    const legacyActor = { ...actor }
+    delete (legacyActor as Partial<typeof legacyActor>).pose
+    delete legacyActor.posePreset
+
+    const loaded = parseSceneFile(JSON.stringify({ format: 'ndscene', version: 1, scene: { ...scene, actors: [legacyActor] } }))
+
+    expect(loaded.actors[0].posePreset).toBe('standing')
+    expect(loaded.actors[0].pose.pelvis).toEqual([0, 0, 0])
+  })
+
+  it('normalizes an invalid imported pose preset to Standing', () => {
+    const scene = createEmptySceneDocument()
+    const actor = { ...createActorDocument('actor-01', 'Actor 01', [0, 0, 0]), posePreset: 'not-a-pose' as never }
+
+    const loaded = parseSceneFile(JSON.stringify({ format: 'ndscene', version: 1, scene: { ...scene, actors: [actor] } }))
+
+    expect(loaded.actors[0].posePreset).toBe('standing')
+  })
 })

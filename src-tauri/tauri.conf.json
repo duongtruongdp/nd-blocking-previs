@@ -28,6 +28,7 @@
   },
   "bundle": {
     "active": true,
+    "externalBin": ["binaries/ffmpeg"],
     "fileAssociations": [
       {
         "ext": ["ndblock"],

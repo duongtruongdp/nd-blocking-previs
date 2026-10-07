@@ -107,6 +107,13 @@ export class VideoExportRenderer {
     this.outputContext.drawImage(this.sourceCanvas, crop.x, crop.y, crop.width, crop.height, 0, 0, this.canvas.width, this.canvas.height)
   }
 
+  async captureFramePng(frame: number): Promise<Blob> {
+    this.renderFrame(frame)
+    const blob = await new Promise<Blob | null>((resolve) => this.canvas.toBlob(resolve, 'image/png'))
+    if (!blob || blob.size === 0) throw new Error('The export renderer produced an empty PNG frame.')
+    return blob
+  }
+
   dispose(): void {
     if (this.disposed) return
     this.disposed = true

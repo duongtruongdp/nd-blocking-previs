@@ -1080,3 +1080,22 @@ resource disposal, Blob URL revocation, dirty reload warnings, and standard
 file-input/download fallbacks remain in place. This milestone adds no backend,
 accounts, telemetry, PWA, or Tauri integration. Staging acceptance remains a
 manual gate documented in `docs/WEB_DEPLOYMENT.md`.
+
+## NATIVE-EXPORT-V1 Desktop FFmpeg export
+
+Desktop MP4 export uses the existing `VideoExportRenderer` production-camera
+path and a platform-owned Tauri runtime. The renderer writes one PNG per
+inclusive Mark In / Mark Out frame to an AppCache workspace, then the bundled
+`binaries/ffmpeg` sidecar encodes an H.264 MP4 from an argument array. The
+partial output is verified and renamed to the native Save-dialog destination;
+the workspace is removed on success, cancellation, and failure. Browser export
+continues to use the existing WebM/MP4 capability path and never starts the
+desktop subprocess.
+
+The first packaged sidecar is Apple Silicon macOS, LGPL-configured FFmpeg with
+VideoToolbox H.264. The adapter shape is target-independent and Tauri's
+target-named `externalBin` configuration is ready for Windows sidecars, which
+still require a separately reviewed H.264 encoder/license build. Quality is
+limited to High, Standard, and Small File. Export is session-only, does not
+dirty the Project or create recovery snapshots, and blocks Project navigation
+while active. Manual desktop export acceptance remains a release gate.

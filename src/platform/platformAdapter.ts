@@ -35,6 +35,15 @@ export type ProjectThumbnailWrite = {
 export type CloseDecision = 'close' | 'cancel'
 export type UnsavedCloseChoice = 'save' | 'discard' | 'cancel'
 
+export type NativeExportRuntime = {
+  prepareWorkspace: (jobId: string) => Promise<{ workspace: string; workspaceAbsolute: string; inputPattern: string; partialRelativePath: string; partialAbsolutePath: string }>
+  writeFrame: (workspace: string, fileName: string, data: Uint8Array) => Promise<void>
+  verifyPartial: (path: string) => Promise<number>
+  finalizePartial: (path: string, destinationPath: string) => Promise<void>
+  runFfmpeg: (args: readonly string[], signal: AbortSignal | undefined, onStdoutLine: (line: string) => void) => Promise<void>
+  cleanupWorkspace: (workspace: string) => Promise<void>
+}
+
 export function closeDecisionForUnsavedChoice(choice: UnsavedCloseChoice, saveSucceeded = true): CloseDecision {
   if (choice === 'discard') return 'close'
   if (choice === 'save' && saveSucceeded) return 'close'
@@ -86,6 +95,7 @@ export type PlatformAdapter = {
   saveRecoverySettings: (settings: RecoverySettings) => Promise<void>
   loadShortcutPreferences: () => Promise<ShortcutPreferences>
   saveShortcutPreferences: (preferences: ShortcutPreferences) => Promise<void>
+  nativeExportRuntime?: NativeExportRuntime
   promptUnsavedClose?: () => Promise<UnsavedCloseChoice>
   registerCloseGuard?: (handler: () => Promise<CloseDecision>) => Promise<() => void>
 }
@@ -225,8 +235,81 @@ function createTauriPlatformAdapter(): PlatformAdapter {
     saveRecoverySettings: nativeSaveRecoverySettings,
     loadShortcutPreferences: nativeLoadShortcutPreferences,
     saveShortcutPreferences: nativeSaveShortcutPreferences,
+    nativeExportRuntime: nativeExportRuntime(),
     promptUnsavedClose: nativePromptUnsavedClose,
     registerCloseGuard: nativeRegisterCloseGuard,
+  }
+}
+
+function nativeExportRuntime(): NativeExportRuntime {
+  return {
+    prepareWorkspace: async (jobId) => {
+      const [{ BaseDirectory, mkdir }, { appCacheDir, join }] = await Promise.all([
+        import('@tauri-apps/plugin-fs'),
+        import('@tauri-apps/api/path'),
+      ])
+      const workspace = `native-exports/${jobId}`
+      const cacheRoot = await appCacheDir()
+      const workspaceAbsolute = await join(cacheRoot, workspace)
+      await mkdir(workspace, { baseDir: BaseDirectory.AppCache, recursive: true })
+      return {
+        workspace,
+        workspaceAbsolute,
+        inputPattern: await join(workspaceAbsolute, 'frame_%06d.png'),
+        partialRelativePath: `${workspace}/output.partial.mp4`,
+        partialAbsolutePath: await join(cacheRoot, `${workspace}/output.partial.mp4`),
+      }
+    },
+    writeFrame: async (workspace, fileName, data) => {
+      const { BaseDirectory, writeFile } = await import('@tauri-apps/plugin-fs')
+      await writeFile(`${workspace}/${fileName}`, data, { baseDir: BaseDirectory.AppCache })
+    },
+    verifyPartial: async (path) => {
+      const { BaseDirectory, stat } = await import('@tauri-apps/plugin-fs')
+      const info = await stat(path, { baseDir: BaseDirectory.AppCache })
+      if (!info.isFile || info.size < 16) throw new Error('FFmpeg produced an empty or invalid output file.')
+      return info.size
+    },
+    finalizePartial: async (path, destinationPath) => {
+      const { BaseDirectory, rename } = await import('@tauri-apps/plugin-fs')
+      await rename(path, destinationPath, { oldPathBaseDir: BaseDirectory.AppCache })
+    },
+    runFfmpeg: async (args, signal, onStdoutLine) => {
+      const { Command } = await import('@tauri-apps/plugin-shell')
+      const command = Command.sidecar('binaries/ffmpeg', [...args])
+      let stderr = ''
+      let child: Awaited<ReturnType<typeof command.spawn>> | null = null
+      let resolveClose: ((code: number | null) => void) | null = null
+      let rejectClose: ((error: Error) => void) | null = null
+      const closed = new Promise<number | null>((resolve, reject) => { resolveClose = resolve; rejectClose = reject })
+      command.stdout.on('data', (line) => onStdoutLine(line))
+      command.stderr.on('data', (line) => { stderr += line })
+      command.on('close', ({ code }) => resolveClose?.(code))
+      command.on('error', (error) => rejectClose?.(new Error(error)))
+      const abortHandler = () => { void child?.kill().catch(() => {}) }
+      signal?.addEventListener('abort', abortHandler, { once: true })
+      try {
+        if (signal?.aborted) {
+          const error = new Error('Export cancelled.')
+          error.name = 'ExportCancelledError'
+          throw error
+        }
+        child = await command.spawn()
+        const code = await closed
+        if (signal?.aborted) {
+          const error = new Error('Export cancelled.')
+          error.name = 'ExportCancelledError'
+          throw error
+        }
+        if (code !== 0) throw new Error(stderr.trim() || `FFmpeg exited with code ${code ?? 'unknown'}.`)
+      } finally {
+        signal?.removeEventListener('abort', abortHandler)
+      }
+    },
+    cleanupWorkspace: async (workspace) => {
+      const { BaseDirectory, remove } = await import('@tauri-apps/plugin-fs')
+      await remove(workspace, { baseDir: BaseDirectory.AppCache, recursive: true }).catch(() => {})
+    },
   }
 }
 

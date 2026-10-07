@@ -118,7 +118,7 @@ function V2EditorApp() {
   const [exportStatus, setExportStatus] = useState<VideoExportStatus>('idle')
   const [exportProgress, setExportProgress] = useState<VideoExportProgress | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
-  const [exportSettings, setExportSettings] = useState<VideoExportSettings>(() => ({ cameraId: null, markIn: 0, markOut: 120, frameRate: { numerator: 24, denominator: 1 }, deliveryAspectRatio: '16:9', width: 1920, format: 'mp4' }))
+  const [exportSettings, setExportSettings] = useState<VideoExportSettings>(() => ({ cameraId: null, markIn: 0, markOut: 120, frameRate: { numerator: 24, denominator: 1 }, deliveryAspectRatio: '16:9', width: 1920, format: 'mp4', quality: 'standard' }))
   const [timelineHeight, setTimelineHeight] = useState(TIMELINE_HEIGHT_DEFAULT)
   const [isResizingTimeline, setIsResizingTimeline] = useState(false)
   const [shortcutBindings, setShortcutBindings] = useState(() => shortcutPreferencesWithDefaults())
@@ -836,6 +836,10 @@ function V2EditorApp() {
   }
 
   const returnToLibrary = async () => {
+    if (exportAbortRef.current) {
+      setExportError('Cancel the video export before returning to Projects.')
+      return
+    }
     if (isDirtyRef.current) {
       const choice = platformAdapter.promptUnsavedClose ? await platformAdapter.promptUnsavedClose() : 'cancel'
       const decision = closeDecisionForUnsavedChoice(choice, choice !== 'save' || await saveProject())
@@ -1370,7 +1374,7 @@ function V2EditorApp() {
       playbackRef.current = null
       setIsPlaying(false)
     }
-    setExportSettings({ cameraId: activeCamera?.id ?? null, markIn: current.timeline.markIn, markOut: current.timeline.markOut, frameRate: current.timeline.frameRate, deliveryAspectRatio: activeCamera?.deliveryAspectRatio ?? '16:9', width: 1920, format: 'mp4' })
+    setExportSettings({ cameraId: activeCamera?.id ?? null, markIn: current.timeline.markIn, markOut: current.timeline.markOut, frameRate: current.timeline.frameRate, deliveryAspectRatio: activeCamera?.deliveryAspectRatio ?? '16:9', width: 1920, format: 'mp4', quality: 'standard' })
     setExportProgress(null)
     setExportError(null)
     setExportStatus('idle')
@@ -1403,10 +1407,18 @@ function V2EditorApp() {
     }
     const controller = new AbortController()
     exportAbortRef.current = controller
-    void import('./export/videoExporter').then(({ exportVideo }) => exportVideo({ document: snapshot, settings, signal: controller.signal, onProgress: (progress) => { setExportStatus('exporting'); setExportProgress(progress) } })).then(async (blob) => {
+    const camera = snapshot.cameras.find((item) => item.id === settings.cameraId)
+    const fileName = exportFilename(snapshot.metadata.name, camera?.name ?? 'Camera', settings.markIn, settings.markOut, 'mp4')
+    const exportPromise = platformAdapter.kind === 'desktop'
+      ? import('./export/nativeVideoExporter').then(async ({ exportNativeVideo }) => {
+        const path = await platformAdapter.chooseExportLocation(fileName, 'mp4')
+        if (!path) return false
+        await exportNativeVideo({ document: snapshot, settings, signal: controller.signal, onProgress: (progress) => { setExportStatus(progress.phase === 'encoding' ? 'encoding' : 'exporting'); setExportProgress(progress) } }, path)
+        return true
+      })
+      : import('./export/videoExporter').then(({ exportVideo }) => exportVideo({ document: snapshot, settings, signal: controller.signal, onProgress: (progress) => { setExportStatus('exporting'); setExportProgress(progress) } })).then(async (blob) => saveGeneratedFile(blob, fileName, settings.format))
+    void exportPromise.then((written) => {
       setExportStatus('finalizing')
-      const camera = snapshot.cameras.find((item) => item.id === settings.cameraId)
-      const written = await saveGeneratedFile(blob, exportFilename(snapshot.metadata.name, camera?.name ?? 'Camera', settings.markIn, settings.markOut, settings.format), settings.format)
       if (!written) {
         setExportStatus('cancelled')
         setExportError(null)
@@ -1496,6 +1508,10 @@ function V2EditorApp() {
     let active = true
     let cleanup: (() => void) | null = null
     void platformAdapter.registerCloseGuard(async () => {
+      if (exportAbortRef.current) {
+        setExportError('Cancel the video export before quitting the desktop app.')
+        return 'cancel'
+      }
       if (!isDirtyRef.current) return 'close'
       const choice = platformAdapter.promptUnsavedClose ? await platformAdapter.promptUnsavedClose() : 'cancel'
       const decision = closeDecisionForUnsavedChoice(choice, choice !== 'save' || await saveProject())
@@ -1586,7 +1602,7 @@ function V2EditorApp() {
   return (
     <main ref={appShellRef} className={`v2-app-shell${isResizingTimeline ? ' is-resizing-timeline' : ''}`} style={appShellStyle}>
       {desktopDropState === 'valid' ? <div className="v2-desktop-drop-feedback" role="status">Drop .ndblock to open this Project</div> : null}
-      <V2TopBar projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} view={view} onViewChange={handleViewChange} onNewProject={newProject} onBackToLibrary={platformAdapter.kind === 'desktop' ? returnToLibrary : undefined} onSaveProject={saveProject} onSaveProjectAs={saveProjectAs} onLoadProject={loadProject} onProjectNameChange={renameProject} onExport={openExport} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'finalizing'} />
+      <V2TopBar projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} view={view} onViewChange={handleViewChange} onNewProject={newProject} onBackToLibrary={platformAdapter.kind === 'desktop' ? returnToLibrary : undefined} onSaveProject={saveProject} onSaveProjectAs={saveProjectAs} onLoadProject={loadProject} onProjectNameChange={renameProject} onExport={openExport} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'encoding' || exportStatus === 'finalizing'} />
       <V2ScenePanel scenes={projectDocument.scenes} activeSceneId={projectDocument.activeSceneId} actors={sceneDocument.actors} props={sceneDocument.props} walls={sceneDocument.walls} openings={sceneDocument.openings} lights={sceneDocument.lights} cameras={sceneDocument.cameras} activeCameraId={sceneDocument.activeCameraId} selectedEntityId={selectedEntityId} onSelectScene={switchScene} onAddScene={addScene} onRenameScene={renameScene} onDuplicateScene={duplicateScene} onDeleteScene={deleteScene} onImportScene={importScene} onExportScene={exportScene} onAddActor={addActor} onAddProp={addProp} onAddWall={addWall} onAddOpening={addOpening} onAddSun={addSun} onAddCamera={addCamera} onSetActiveCamera={setActiveCamera} onSelectEntity={handleSelectionChange} />
       <V2Stage
         view={view}
@@ -1651,8 +1667,8 @@ function V2EditorApp() {
         }}
       ><span aria-hidden="true" /></div>
       <V2Timeline timeline={sceneDocument.timeline} tracks={sceneDocument.timeline.tracks} entities={timelineEntities} selectedEntityId={selectedEntityId} isPlaying={isPlaying} onFrameChange={setCurrentFrame} onFrameRateChange={changeFrameRate} onTogglePlayback={togglePlayback} onStepFrame={stepFrame} onMarkIn={() => changeMark('in')} onMarkOut={() => changeMark('out')} onMoveKeyframe={moveKeyframe} selectedKeyframe={selectedTimelineKeyframe} onKeyframeSelect={setSelectedTimelineKeyframe} onEntitySelect={handleSelectionChange} onScrubStart={() => setIsScrubbing(true)} onScrubEnd={() => setIsScrubbing(false)} />
-      {exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'finalizing' ? <div className="v2-export-lock" aria-hidden="true" /> : null}
-      {exportOpen ? <V2ExportModal document={sceneDocument} projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} settings={exportSettings} status={exportStatus} progress={exportProgress} error={exportError} onSettingsChange={setExportSettings} onExport={startExport} onCancel={cancelExport} onClose={() => setExportOpen(false)} /> : null}
+      {exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'encoding' || exportStatus === 'finalizing' ? <div className="v2-export-lock" aria-hidden="true" /> : null}
+      {exportOpen ? <V2ExportModal document={sceneDocument} projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} settings={exportSettings} status={exportStatus} progress={exportProgress} error={exportError} onSettingsChange={setExportSettings} onExport={startExport} onCancel={cancelExport} onClose={() => setExportOpen(false)} desktop={platformAdapter.kind === 'desktop'} /> : null}
       {shortcutSettingsOpen ? <V2ShortcutSettings bindings={shortcutBindings} onChange={updateShortcut} onReset={resetShortcuts} onClose={() => setShortcutSettingsOpen(false)} recoveryEnabled={recoveryEnabled} onRecoveryEnabledChange={platformAdapter.kind === 'desktop' ? setRecoveryPreference : undefined} /> : null}
       {recoveryModalOpen && recoveryEntries.length > 0 ? <V2RecoveryCenter entries={recoveryEntries} requestedPath={recoveryRequestedPath} onRecover={(entry) => { void recoverProject(entry) }} onDiscard={(entry) => { void discardRecoveryEntry(entry) }} onOpenSaved={(entry) => { void openSavedVersion(entry) }} onClose={() => setRecoveryModalOpen(false)} /> : null}
     </main>

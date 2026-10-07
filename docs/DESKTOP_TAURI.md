@@ -160,20 +160,57 @@ Recovery writes are best-effort and never block the editor. They do not create
 Recent Project entries or thumbnails. Recovery snapshots remain local and
 there is no recovery history, cloud sync, telemetry, or schema change.
 
+## Native MP4 export
+
+The desktop Export Video path is separate from the browser exporter. The browser
+continues to use its existing MediaRecorder/WebCodecs-compatible path; it does
+not load FFmpeg or the Tauri shell plugin. Desktop MP4 export uses the existing
+`VideoExportRenderer`, so camera projection, delivery cropping, timeline
+evaluation, actor/prop/scenic visibility, lighting, and rational frame rates
+remain authoritative in one render path.
+
+The desktop flow is:
+
+1. Ask for the final `.mp4` destination through the native Save dialog.
+2. Render the inclusive Mark In / Mark Out range to PNG files below the Tauri
+   AppCache directory.
+3. Run the bundled `binaries/ffmpeg` sidecar with an argument array, never a
+   shell command string.
+4. Encode to `output.partial.mp4`, verify a non-empty file, and atomically rename
+   it to the selected destination.
+5. Remove the temporary frame workspace on success, cancellation, and failure.
+
+The editor blocks navigation to Projects and quit while the child process is
+active; cancellation kills the sidecar and leaves no final output. Export state
+is session-only and does not mark a Project dirty or write a recovery snapshot.
+Only one export can be active because the app keeps one export controller.
+
+Quality is intentionally small: High, Standard, and Small File. The current
+Apple Silicon sidecar is an FFmpeg 7.1.1 LGPL 2.1-or-later build with PNG,
+image2, MP4, and `h264_videotoolbox` enabled and GPL/nonfree components
+disabled. It does not contain libx264. The sidecar is target-named for Tauri
+(`ffmpeg-aarch64-apple-darwin`); Windows packaging is architecturally ready but
+requires its separately built target-named sidecar and an approved H.264
+encoder/license choice before a Windows release. The application must not use a
+system-PATH FFmpeg in production.
+
+The sidecar source/license configuration is recorded in
+`src-tauri/binaries/FFMPEG-LICENSE.md`. Native output uses physical capture
+framing and the selected Delivery Frame; anamorphic desqueeze remains part of
+the existing production-camera render path.
+
 The desktop close guard presents Save / Don't Save / Cancel when the project is
 dirty. The browser keeps its existing `beforeunload` behavior. There is no
-updater, signing integration, or native FFmpeg integration in this milestone.
-Video export continues to use the existing
-browser/WebCodecs or MediaRecorder path; native FFmpeg is a later decision.
+updater or signing integration in this milestone.
 
 ## Tauri permissions
 
 The default capability is intentionally narrow. It enables the default window
 and dialog plugin permissions plus the exact filesystem operations required for
 project read/stat/rename/copy/delete and export writes. A user-selected dialog
-path is the boundary for project, scene, still, and video files; the shell does
-not grant broad folder access, shell access, network access, or arbitrary
-commands. Tauri capabilities are declared in
+path is the boundary for project, scene, still, and video files. Shell access
+is limited to the target-named FFmpeg sidecar and its export argument scope; it
+does not grant arbitrary commands or network access. Tauri capabilities are declared in
 `src-tauri/capabilities/default.json`; see the [Tauri
 capabilities guide](https://v2.tauri.app/security/capabilities/) and the
 [dialog](https://v2.tauri.app/plugin/dialog/) and
@@ -218,8 +255,8 @@ Run `npm run desktop:dev` and verify:
 18. Save As writes a new `.ndblock` path and updates Recent without duplicates.
 19. Import Scene and Export Scene use `.ndscene` files.
 20. Capture Frame opens a native output location and writes the image.
-21. Video export opens a native output location and writes the existing
-    supported browser export format.
+21. Video export opens a native output location, renders the selected range, and
+    writes an MP4 through the bundled FFmpeg sidecar.
 22. Back to Projects and closing with unsaved changes show Save / Don't Save /
     Cancel and each choice behaves correctly.
 23. A saved Project shows a thumbnail or branded ND fallback in the library.

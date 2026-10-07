@@ -21,6 +21,17 @@
     "fs:allow-copy-file",
     "fs:allow-remove",
     "fs:scope-applocaldata-recursive",
+    "fs:scope-appcache-recursive",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "binaries/ffmpeg",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    },
     "store:default"
   ]
 }

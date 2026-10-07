@@ -11,4 +11,8 @@ This version is primarily used to validate the in-app update workflow from
 - macOS Apple Silicon Beta.
 - Windows validation is still pending.
 
+### Maintenance update
+
+- Rebuilt the macOS package with the corrected external download permission for the in-app Download Update action.
+
 Web: https://blocking.duongtruongdp.net/

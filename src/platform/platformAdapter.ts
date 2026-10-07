@@ -35,6 +35,10 @@ export type ProjectThumbnailWrite = {
 export type CloseDecision = 'close' | 'cancel'
 export type UnsavedCloseChoice = 'save' | 'discard' | 'cancel'
 
+export type UpdatePreferences = {
+  readonly autoCheck: boolean
+}
+
 export type NativeExportRuntime = {
   prepareWorkspace: (jobId: string) => Promise<{ workspace: string; workspaceAbsolute: string; inputPattern: string; partialRelativePath: string; partialAbsolutePath: string }>
   writeFrame: (workspace: string, fileName: string, data: Uint8Array) => Promise<void>
@@ -95,6 +99,9 @@ export type PlatformAdapter = {
   saveRecoverySettings: (settings: RecoverySettings) => Promise<void>
   loadShortcutPreferences: () => Promise<ShortcutPreferences>
   saveShortcutPreferences: (preferences: ShortcutPreferences) => Promise<void>
+  openExternalUrl: (url: string) => Promise<void>
+  loadUpdatePreferences: () => Promise<UpdatePreferences>
+  saveUpdatePreferences: (preferences: UpdatePreferences) => Promise<void>
   nativeExportRuntime?: NativeExportRuntime
   promptUnsavedClose?: () => Promise<UnsavedCloseChoice>
   registerCloseGuard?: (handler: () => Promise<CloseDecision>) => Promise<() => void>
@@ -188,6 +195,9 @@ export const webPlatformAdapter: PlatformAdapter = {
     try { return JSON.parse(window.localStorage.getItem('nd-blocking-shortcuts') ?? '{}') as ShortcutPreferences } catch { return {} }
   },
   saveShortcutPreferences: async (preferences) => { window.localStorage.setItem('nd-blocking-shortcuts', JSON.stringify(preferences)) },
+  openExternalUrl: async (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
+  loadUpdatePreferences: async () => ({ autoCheck: true }),
+  saveUpdatePreferences: async () => {},
 }
 
 function isTauriRuntime(): boolean {
@@ -235,6 +245,9 @@ function createTauriPlatformAdapter(): PlatformAdapter {
     saveRecoverySettings: nativeSaveRecoverySettings,
     loadShortcutPreferences: nativeLoadShortcutPreferences,
     saveShortcutPreferences: nativeSaveShortcutPreferences,
+    openExternalUrl: nativeOpenExternalUrl,
+    loadUpdatePreferences: nativeLoadUpdatePreferences,
+    saveUpdatePreferences: nativeSaveUpdatePreferences,
     nativeExportRuntime: nativeExportRuntime(),
     promptUnsavedClose: nativePromptUnsavedClose,
     registerCloseGuard: nativeRegisterCloseGuard,
@@ -446,6 +459,11 @@ async function nativeRevealProjectFile(path: string): Promise<void> {
   } catch (error: unknown) {
     throw nativeFileError('The Project could not be revealed in Finder or Explorer.', error)
   }
+}
+
+async function nativeOpenExternalUrl(url: string): Promise<void> {
+  const { openUrl } = await import('@tauri-apps/plugin-opener')
+  await openUrl(url)
 }
 
 async function nativeInitialProjectPath(): Promise<string | null> {
@@ -681,6 +699,28 @@ async function nativeSaveShortcutPreferences(preferences: ShortcutPreferences): 
     await store.save()
   } catch (error: unknown) {
     if (import.meta.env.DEV) console.error('[ND Blocking & Previs] Shortcut preferences could not be saved', error)
+  }
+}
+
+async function nativeLoadUpdatePreferences(): Promise<UpdatePreferences> {
+  try {
+    const { load } = await import('@tauri-apps/plugin-store')
+    const store = await load('app-preferences.json', { autoSave: false })
+    return { autoCheck: (await store.get<boolean>('checkForUpdatesAutomatically')) !== false }
+  } catch (error: unknown) {
+    if (import.meta.env.DEV) console.error('[ND Blocking & Previs] Update preferences could not be loaded', error)
+    return { autoCheck: true }
+  }
+}
+
+async function nativeSaveUpdatePreferences(preferences: UpdatePreferences): Promise<void> {
+  try {
+    const { load } = await import('@tauri-apps/plugin-store')
+    const store = await load('app-preferences.json', { autoSave: false })
+    await store.set('checkForUpdatesAutomatically', preferences.autoCheck)
+    await store.save()
+  } catch (error: unknown) {
+    if (import.meta.env.DEV) console.error('[ND Blocking & Previs] Update preferences could not be saved', error)
   }
 }
 

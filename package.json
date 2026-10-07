@@ -1,7 +1,7 @@
 {
   "name": "nd-blocking-previs",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,10 @@
     "build:web:staging": "vite build --mode staging",
     "desktop:dev": "tauri dev --config src-tauri/tauri.conf.json",
     "desktop:build": "tauri build --config src-tauri/tauri.conf.json",
+    "release:package": "node scripts/package-release.mjs",
+    "release:verify": "node scripts/version-tools.mjs verify-release",
+    "version:check": "node scripts/version-tools.mjs check",
+    "version:set": "node scripts/version-tools.mjs set",
     "lint": "oxlint",
     "test": "vitest run",
     "preview": "vite preview"

@@ -24,6 +24,10 @@ with `npm run build:web` and does not depend on Tauri.
 The application identifier is `net.duongtruongdp.blocking`. The default window
 is resizable and starts at 1280 × 800 with no custom titlebar.
 
+For the current macOS Beta installation flow, see
+[`MACOS_BETA_INSTALL.md`](MACOS_BETA_INSTALL.md). The desktop Preferences
+dialog also includes the same compact **Beta Installation Help** on macOS.
+
 The desktop bundle registers `.ndblock` as `ND Blocking Project` with the
 native operating system. A first launch opens an associated file directly in
 the editor. Later launches use the single-instance route to focus the existing

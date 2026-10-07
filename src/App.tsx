@@ -37,10 +37,13 @@ import type { WallDrawingState } from './architecture/wallDrawing'
 import { WALL_SNAP_THRESHOLD, nearestWallForOpening, resolveOpeningAgainstWalls, wallFromEndpoints } from './architecture/wallMath'
 import { cameraStillFilename, type StillCaptureOptions } from './runtime/stillCapture'
 import { shortcutLabel, shortcutMatches, shortcutPreferencesWithDefaults, SHORTCUT_COMMANDS, type ShortcutBinding, type ShortcutCommandId } from './core/shortcutRegistry'
-import { V2ShortcutSettings } from './components/V2ShortcutSettings'
+import { V2ShortcutSettings, type AboutUpdateState } from './components/V2ShortcutSettings'
 import { captureAndStoreProjectThumbnail } from './platform/projectThumbnail'
 import { createUnsavedRecoveryId, recoveryIdForProjectPath, RecoveryManager, type RecoveryInspection } from './platform/recovery'
 import { V2RecoveryCenter } from './components/V2RecoveryCenter'
+import { APP_CONTACT_EMAIL, APP_VERSION, APP_WEBSITE_URL } from './core/appMetadata'
+import { checkLatestRelease, directDownloadUrl, platformForUserAgent, releaseHasAsset, type UpdateCheckResult } from './platform/updateChecker'
+import type { UpdatePreferences } from './platform/platformAdapter'
 
 function createDefaultV2Scene(id = 'scene-01', name = 'Scene 01', includeDefaultProps = true): SceneDocument {
   const scene = createEmptySceneDocument()
@@ -88,6 +91,10 @@ function nextEntityIndex(scene: SceneDocument, prefix: string): number {
   return Math.max(0, ...ids.map((id) => Number(new RegExp(`^${prefix}-(\\d+)$`, 'i').exec(id)?.[1] ?? 0))) + 1
 }
 
+function isMacOSDesktop(): boolean {
+  return platformAdapter.kind === 'desktop' && typeof navigator !== 'undefined' && /Macintosh|Mac OS X/i.test(navigator.userAgent)
+}
+
 function V2EditorApp() {
   const [view, setView] = useState<'blocking' | 'camera'>('blocking')
   const [workspaceMode, setWorkspaceMode] = useState<'library' | 'editor'>(() => platformAdapter.kind === 'desktop' ? 'library' : 'editor')
@@ -123,6 +130,9 @@ function V2EditorApp() {
   const [isResizingTimeline, setIsResizingTimeline] = useState(false)
   const [shortcutBindings, setShortcutBindings] = useState(() => shortcutPreferencesWithDefaults())
   const [shortcutSettingsOpen, setShortcutSettingsOpen] = useState(false)
+  const [updatePreferences, setUpdatePreferences] = useState<UpdatePreferences>({ autoCheck: true })
+  const [updateState, setUpdateState] = useState<AboutUpdateState>({ status: 'idle', currentVersion: APP_VERSION })
+  const [updateNotice, setUpdateNotice] = useState<UpdateCheckResult | null>(null)
   const [recoveryEnabled, setRecoveryEnabled] = useState(true)
   const [recoveryReady, setRecoveryReady] = useState(platformAdapter.kind !== 'desktop')
   const [recoveryLoading, setRecoveryLoading] = useState(platformAdapter.kind === 'desktop')
@@ -210,6 +220,52 @@ function V2EditorApp() {
     })
     return () => { active = false }
   }, [])
+
+  const checkForUpdates = useCallback(async (showError = true): Promise<UpdateCheckResult | null> => {
+    setUpdateState({ status: 'checking', currentVersion: APP_VERSION })
+    try {
+      const result = await checkLatestRelease(APP_VERSION)
+      const detectedPlatform = typeof navigator !== 'undefined' ? platformForUserAgent(navigator.userAgent) : null
+      const downloadPlatform = detectedPlatform && releaseHasAsset(result.release, detectedPlatform) ? detectedPlatform : null
+      setUpdateState({ status: result.updateAvailable ? 'available' : 'up-to-date', currentVersion: result.currentVersion, latestVersion: result.latestVersion, notes: result.release.notes, downloadPlatform })
+      return result
+    } catch {
+      if (showError) setUpdateState({ status: 'error', currentVersion: APP_VERSION })
+      else setUpdateState({ status: 'idle', currentVersion: APP_VERSION })
+      return null
+    }
+  }, [])
+
+  useEffect(() => {
+    if (platformAdapter.kind !== 'desktop') return
+    let active = true
+    void platformAdapter.loadUpdatePreferences().then((preferences) => {
+      if (!active) return
+      setUpdatePreferences(preferences)
+      if (!preferences.autoCheck) return
+      void checkForUpdates(false).then((result) => {
+        if (active && result?.updateAvailable) setUpdateNotice(result)
+      })
+    })
+    return () => { active = false }
+  }, [checkForUpdates])
+
+  const saveUpdatePreference = (autoCheck: boolean) => {
+    const next = { autoCheck }
+    setUpdatePreferences(next)
+    void platformAdapter.saveUpdatePreferences(next)
+  }
+
+  const downloadUpdate = (result: UpdateCheckResult | null = null) => {
+    const platform = updateState.downloadPlatform ?? (typeof navigator !== 'undefined' ? platformForUserAgent(navigator.userAgent) : null)
+    if (!platform || !(result?.updateAvailable ?? updateState.status === 'available')) return
+    void platformAdapter.openExternalUrl(directDownloadUrl(platform))
+  }
+
+  const dismissUpdate = () => {
+    setUpdateNotice(null)
+    setUpdateState((current) => ({ ...current, status: 'idle', latestVersion: undefined, notes: undefined }))
+  }
 
   useEffect(() => {
     if (platformAdapter.kind !== 'desktop') return
@@ -1593,7 +1649,7 @@ function V2EditorApp() {
   }, [])
 
   if (workspaceMode === 'library') {
-    return <><V2ProjectLibrary entries={recentProjects} thumbnails={recentProjectThumbnails} loading={recentProjectsLoading} error={recentProjectsError} dropState={desktopDropState} revealLabel={platformAdapter.revealProjectLabel} onNewProject={newProject} onOpenProject={loadProject} onOpenRecent={openRecentProject} onLocate={locateRecentProject} onReveal={revealRecentFile} onRemove={removeRecent} onRename={renameRecentFile} onDuplicate={duplicateRecentFile} onDelete={deleteRecentFile} onOpenSettings={() => setShortcutSettingsOpen(true)} recoveryCount={recoveryLoading ? 0 : recoveryEntries.length} onOpenRecoveries={() => setRecoveryModalOpen(true)} />{shortcutSettingsOpen ? <V2ShortcutSettings bindings={shortcutBindings} onChange={updateShortcut} onReset={resetShortcuts} onClose={() => setShortcutSettingsOpen(false)} recoveryEnabled={recoveryEnabled} onRecoveryEnabledChange={platformAdapter.kind === 'desktop' ? setRecoveryPreference : undefined} /> : null}{recoveryModalOpen && recoveryEntries.length > 0 ? <V2RecoveryCenter entries={recoveryEntries} requestedPath={recoveryRequestedPath} onRecover={(entry) => { void recoverProject(entry) }} onDiscard={(entry) => { void discardRecoveryEntry(entry) }} onOpenSaved={(entry) => { void openSavedVersion(entry) }} onClose={() => setRecoveryModalOpen(false)} /> : null}</>
+    return <><V2ProjectLibrary entries={recentProjects} thumbnails={recentProjectThumbnails} loading={recentProjectsLoading} error={recentProjectsError} dropState={desktopDropState} revealLabel={platformAdapter.revealProjectLabel} onNewProject={newProject} onOpenProject={loadProject} onOpenRecent={openRecentProject} onLocate={locateRecentProject} onReveal={revealRecentFile} onRemove={removeRecent} onRename={renameRecentFile} onDuplicate={duplicateRecentFile} onDelete={deleteRecentFile} onOpenSettings={() => setShortcutSettingsOpen(true)} recoveryCount={recoveryLoading ? 0 : recoveryEntries.length} onOpenRecoveries={() => setRecoveryModalOpen(true)} />{updateNotice ? <V2UpdateNotice release={updateNotice} onDownload={() => downloadUpdate(updateNotice)} onLater={dismissUpdate} /> : null}{shortcutSettingsOpen ? <V2ShortcutSettings bindings={shortcutBindings} onChange={updateShortcut} onReset={resetShortcuts} onClose={() => setShortcutSettingsOpen(false)} recoveryEnabled={recoveryEnabled} onRecoveryEnabledChange={platformAdapter.kind === 'desktop' ? setRecoveryPreference : undefined} showMacosBetaHelp={isMacOSDesktop()} appVersion={APP_VERSION} websiteUrl={APP_WEBSITE_URL} contactEmail={APP_CONTACT_EMAIL} onOpenExternalUrl={(url) => { void platformAdapter.openExternalUrl(url) }} updateState={updateState} onCheckForUpdates={() => { void checkForUpdates() }} onDownloadUpdate={() => downloadUpdate()} onLaterUpdate={dismissUpdate} autoUpdateChecks={updatePreferences.autoCheck} onAutoUpdateChecksChange={platformAdapter.kind === 'desktop' ? saveUpdatePreference : undefined} /> : null}{recoveryModalOpen && recoveryEntries.length > 0 ? <V2RecoveryCenter entries={recoveryEntries} requestedPath={recoveryRequestedPath} onRecover={(entry) => { void recoverProject(entry) }} onDiscard={(entry) => { void discardRecoveryEntry(entry) }} onOpenSaved={(entry) => { void openSavedVersion(entry) }} onClose={() => setRecoveryModalOpen(false)} /> : null}</>
   }
 
   const timelineBounds = timelineHeightBounds(typeof window === 'undefined' ? 900 : window.innerHeight)
@@ -1602,7 +1658,8 @@ function V2EditorApp() {
   return (
     <main ref={appShellRef} className={`v2-app-shell${isResizingTimeline ? ' is-resizing-timeline' : ''}`} style={appShellStyle}>
       {desktopDropState === 'valid' ? <div className="v2-desktop-drop-feedback" role="status">Drop .ndblock to open this Project</div> : null}
-      <V2TopBar projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} view={view} onViewChange={handleViewChange} onNewProject={newProject} onBackToLibrary={platformAdapter.kind === 'desktop' ? returnToLibrary : undefined} onSaveProject={saveProject} onSaveProjectAs={saveProjectAs} onLoadProject={loadProject} onProjectNameChange={renameProject} onExport={openExport} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'encoding' || exportStatus === 'finalizing'} />
+      {updateNotice ? <V2UpdateNotice release={updateNotice} onDownload={() => downloadUpdate(updateNotice)} onLater={dismissUpdate} /> : null}
+      <V2TopBar projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} view={view} onViewChange={handleViewChange} onNewProject={newProject} onBackToLibrary={platformAdapter.kind === 'desktop' ? returnToLibrary : undefined} onSaveProject={saveProject} onSaveProjectAs={saveProjectAs} onLoadProject={loadProject} onProjectNameChange={renameProject} onExport={openExport} onOpenAbout={() => setShortcutSettingsOpen(true)} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'encoding' || exportStatus === 'finalizing'} />
       <V2ScenePanel scenes={projectDocument.scenes} activeSceneId={projectDocument.activeSceneId} actors={sceneDocument.actors} props={sceneDocument.props} walls={sceneDocument.walls} openings={sceneDocument.openings} lights={sceneDocument.lights} cameras={sceneDocument.cameras} activeCameraId={sceneDocument.activeCameraId} selectedEntityId={selectedEntityId} onSelectScene={switchScene} onAddScene={addScene} onRenameScene={renameScene} onDuplicateScene={duplicateScene} onDeleteScene={deleteScene} onImportScene={importScene} onExportScene={exportScene} onAddActor={addActor} onAddProp={addProp} onAddWall={addWall} onAddOpening={addOpening} onAddSun={addSun} onAddCamera={addCamera} onSetActiveCamera={setActiveCamera} onSelectEntity={handleSelectionChange} />
       <V2Stage
         view={view}
@@ -1669,7 +1726,7 @@ function V2EditorApp() {
       <V2Timeline timeline={sceneDocument.timeline} tracks={sceneDocument.timeline.tracks} entities={timelineEntities} selectedEntityId={selectedEntityId} isPlaying={isPlaying} onFrameChange={setCurrentFrame} onFrameRateChange={changeFrameRate} onTogglePlayback={togglePlayback} onStepFrame={stepFrame} onMarkIn={() => changeMark('in')} onMarkOut={() => changeMark('out')} onMoveKeyframe={moveKeyframe} selectedKeyframe={selectedTimelineKeyframe} onKeyframeSelect={setSelectedTimelineKeyframe} onEntitySelect={handleSelectionChange} onScrubStart={() => setIsScrubbing(true)} onScrubEnd={() => setIsScrubbing(false)} />
       {exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'encoding' || exportStatus === 'finalizing' ? <div className="v2-export-lock" aria-hidden="true" /> : null}
       {exportOpen ? <V2ExportModal document={sceneDocument} projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} settings={exportSettings} status={exportStatus} progress={exportProgress} error={exportError} onSettingsChange={setExportSettings} onExport={startExport} onCancel={cancelExport} onClose={() => setExportOpen(false)} desktop={platformAdapter.kind === 'desktop'} /> : null}
-      {shortcutSettingsOpen ? <V2ShortcutSettings bindings={shortcutBindings} onChange={updateShortcut} onReset={resetShortcuts} onClose={() => setShortcutSettingsOpen(false)} recoveryEnabled={recoveryEnabled} onRecoveryEnabledChange={platformAdapter.kind === 'desktop' ? setRecoveryPreference : undefined} /> : null}
+      {shortcutSettingsOpen ? <V2ShortcutSettings bindings={shortcutBindings} onChange={updateShortcut} onReset={resetShortcuts} onClose={() => setShortcutSettingsOpen(false)} recoveryEnabled={recoveryEnabled} onRecoveryEnabledChange={platformAdapter.kind === 'desktop' ? setRecoveryPreference : undefined} showMacosBetaHelp={isMacOSDesktop()} appVersion={APP_VERSION} websiteUrl={APP_WEBSITE_URL} contactEmail={APP_CONTACT_EMAIL} onOpenExternalUrl={(url) => { void platformAdapter.openExternalUrl(url) }} updateState={updateState} onCheckForUpdates={() => { void checkForUpdates() }} onDownloadUpdate={() => downloadUpdate()} onLaterUpdate={dismissUpdate} autoUpdateChecks={updatePreferences.autoCheck} onAutoUpdateChecksChange={platformAdapter.kind === 'desktop' ? saveUpdatePreference : undefined} /> : null}
       {recoveryModalOpen && recoveryEntries.length > 0 ? <V2RecoveryCenter entries={recoveryEntries} requestedPath={recoveryRequestedPath} onRecover={(entry) => { void recoverProject(entry) }} onDiscard={(entry) => { void discardRecoveryEntry(entry) }} onOpenSaved={(entry) => { void openSavedVersion(entry) }} onClose={() => setRecoveryModalOpen(false)} /> : null}
     </main>
   )
@@ -1685,6 +1742,10 @@ function V2DesktopViewportNotice() {
   }, [])
 
   return isCompact ? <div className="v2-viewport-notice" role="status">ND Blocking &amp; Previs is designed for desktop-sized screens.</div> : null
+}
+
+function V2UpdateNotice({ release, onDownload, onLater }: { release: UpdateCheckResult; onDownload: () => void; onLater: () => void }) {
+  return <aside className="v2-update-notice" role="status"><div><strong>A new version of ND Blocking &amp; Previs is available.</strong><small>Version {release.latestVersion} is ready to download.</small></div><div className="v2-update-notice-actions"><button className="v2-small-action" onClick={onDownload} type="button">Download Update</button><button className="v2-small-action is-muted" onClick={onLater} type="button">Later</button></div></aside>
 }
 
 export function V2App() {

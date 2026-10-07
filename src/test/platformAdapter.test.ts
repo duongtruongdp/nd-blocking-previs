@@ -22,6 +22,7 @@ describe('platform adapter foundation', () => {
     expect(webPlatformAdapter.nativeExportRuntime).toBeUndefined()
     await expect(webPlatformAdapter.loadRecentProjects()).resolves.toEqual([])
     await expect(webPlatformAdapter.loadRecoveryEntries()).resolves.toEqual([])
+    await expect(webPlatformAdapter.loadUpdatePreferences()).resolves.toEqual({ autoCheck: true })
     await expect(webPlatformAdapter.loadProjectThumbnail('project-test')).resolves.toBeNull()
     await expect(webPlatformAdapter.initialProjectPath()).resolves.toBeNull()
   })

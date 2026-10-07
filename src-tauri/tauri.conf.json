@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ND Blocking & Previs",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "net.duongtruongdp.blocking",
   "build": {
     "frontendDist": "../dist",
@@ -28,10 +28,14 @@
   },
   "bundle": {
     "active": true,
-    "externalBin": ["binaries/ffmpeg"],
+    "externalBin": [
+      "binaries/ffmpeg"
+    ],
     "fileAssociations": [
       {
-        "ext": ["ndblock"],
+        "ext": [
+          "ndblock"
+        ],
         "name": "ND Blocking Project",
         "description": "ND Blocking Project",
         "mimeType": "application/x-ndblock",
@@ -39,7 +43,9 @@
         "rank": "Owner",
         "exportedType": {
           "identifier": "net.duongtruongdp.blocking.project",
-          "conformsTo": ["public.data"]
+          "conformsTo": [
+            "public.data"
+          ]
         }
       }
     ],

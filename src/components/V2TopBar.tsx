@@ -14,10 +14,11 @@ type V2TopBarProps = {
   onLoadProject: () => void
   onProjectNameChange: (name: string) => void
   onExport: () => void
+  onOpenAbout?: () => void
   exportDisabled?: boolean
 }
 
-export function V2TopBar({ view, projectName, sceneName, isDirty, fileError, onViewChange, onNewProject, onBackToLibrary, onSaveProject, onSaveProjectAs, onLoadProject, onProjectNameChange, onExport, exportDisabled = false }: V2TopBarProps) {
+export function V2TopBar({ view, projectName, sceneName, isDirty, fileError, onViewChange, onNewProject, onBackToLibrary, onSaveProject, onSaveProjectAs, onLoadProject, onProjectNameChange, onExport, onOpenAbout, exportDisabled = false }: V2TopBarProps) {
   const skipBlurRef = useRef(false)
   const [editingProjectName, setEditingProjectName] = useState(false)
   const [projectNameDraft, setProjectNameDraft] = useState(projectName)
@@ -64,6 +65,7 @@ export function V2TopBar({ view, projectName, sceneName, isDirty, fileError, onV
           <button className={view === 'blocking' ? 'is-active' : ''} onClick={() => onViewChange('blocking')}>Blocking View</button>
           <button className={view === 'camera' ? 'is-active' : ''} onClick={() => onViewChange('camera')}>Camera View</button>
         </div>
+        {onOpenAbout ? <button className="v2-button" onClick={onOpenAbout} type="button">About</button> : null}
         <button className="v2-button v2-button-primary" disabled={exportDisabled} onClick={onExport} type="button">Export</button>
       </div>
     </header>

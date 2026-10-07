@@ -1,0 +1,102 @@
+name: Release validation
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vX.Y.Z tag to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release metadata and source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve release tag
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$INPUT_TAG"
+          else
+            tag="$REF_TAG"
+          fi
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $tag" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check synchronized versions
+        run: npm run version:check
+
+      - name: Check tag matches application version
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          version="$(node -e "console.log(JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version)")"
+          expected="v${version}"
+          if [[ "$RELEASE_TAG" != "$expected" ]]; then
+            echo "Tag $RELEASE_TAG does not match package version $version" >&2
+            exit 1
+          fi
+
+      - name: Check changelog entry
+        shell: bash
+        run: |
+          version="$(node -e "console.log(JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version)")"
+          if ! grep -q "## ${version} " CHANGELOG.md; then
+            echo "::warning::CHANGELOG.md does not contain a heading for ${version}."
+          fi
+
+      - name: Run tests
+        run: npm test
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Check TypeScript
+        run: npx tsc -p tsconfig.json --noEmit
+
+      - name: Build Web App
+        run: npm run build
+
+      - name: Check Tauri source
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Explain package handoff
+        run: |
+          echo "Source validation passed for ${{ steps.release.outputs.tag }}."
+          echo "The macOS ZIP is built locally on Apple Silicon because the repository sidecar is arm64-only."
+          echo "Create the normal published GitHub Release and upload ND-Blocking-Previs-macOS.zip manually after npm run release:verify."

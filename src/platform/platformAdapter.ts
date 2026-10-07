@@ -195,7 +195,10 @@ export const webPlatformAdapter: PlatformAdapter = {
     try { return JSON.parse(window.localStorage.getItem('nd-blocking-shortcuts') ?? '{}') as ShortcutPreferences } catch { return {} }
   },
   saveShortcutPreferences: async (preferences) => { window.localStorage.setItem('nd-blocking-shortcuts', JSON.stringify(preferences)) },
-  openExternalUrl: async (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
+  openExternalUrl: async (url) => {
+    const opened = window.open(url, '_blank', 'noopener,noreferrer')
+    if (!opened) throw new Error('The browser blocked the external URL.')
+  },
   loadUpdatePreferences: async () => ({ autoCheck: true }),
   saveUpdatePreferences: async () => {},
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compareVersions, directDownloadUrl, normalizeVersion, parsePublishedRelease, platformForUserAgent, checkLatestRelease, releaseHasAsset } from '../platform/updateChecker'
+import { compareVersions, directDownloadUrl, normalizeVersion, openUpdateDownload, parsePublishedRelease, platformForUserAgent, checkLatestRelease, releaseHasAsset } from '../platform/updateChecker'
 
 describe('Beta update checker', () => {
   it('normalizes and compares semantic versions', () => {
@@ -8,6 +8,8 @@ describe('Beta update checker', () => {
     expect(compareVersions('0.10.0', '0.9.0')).toBe(1)
     expect(compareVersions('0.1.0', '0.1.0')).toBe(0)
     expect(compareVersions('0.1.0', '0.2.0')).toBe(-1)
+    expect(compareVersions('0.1.2', '0.1.3')).toBe(-1)
+    expect(compareVersions('0.1.3', '0.1.3')).toBe(0)
   })
 
   it('accepts published release metadata and ignores drafts or pre-releases', () => {
@@ -32,5 +34,15 @@ describe('Beta update checker', () => {
     const release = parsePublishedRelease({ tag_name: 'v0.2.0', assets: [{ name: 'ND-Blocking-Previs-macOS.zip' }] })!
     expect(releaseHasAsset(release, 'macos')).toBe(true)
     expect(releaseHasAsset(release, 'windows')).toBe(false)
+  })
+
+  it('opens the exact fixed update asset once', async () => {
+    const opened: string[] = []
+    await openUpdateDownload(async (url) => { opened.push(url) }, 'macos')
+    expect(opened).toEqual(['https://github.com/duongtruongdp/nd-blocking-previs/releases/latest/download/ND-Blocking-Previs-macOS.zip'])
+  })
+
+  it('propagates opener failures for the UI to report', async () => {
+    await expect(openUpdateDownload(async () => { throw new Error('blocked') }, 'macos')).rejects.toThrow('blocked')
   })
 })

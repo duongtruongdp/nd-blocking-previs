@@ -1,6 +1,6 @@
 [package]
 name = "nd_blocking_previs"
-version = "0.1.2"
+version = "0.1.3"
 description = "ND Blocking & Previs desktop shell"
 authors = ["ND"]
 edition = "2021"

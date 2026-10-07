@@ -54,6 +54,10 @@ export function directDownloadUrl(platform: UpdatePlatform): string {
   return UPDATE_DOWNLOAD_URLS[platform]
 }
 
+export async function openUpdateDownload(openExternalUrl: (url: string) => Promise<void>, platform: UpdatePlatform): Promise<void> {
+  await openExternalUrl(directDownloadUrl(platform))
+}
+
 export function releaseHasAsset(release: PublishedRelease, platform: UpdatePlatform): boolean {
   return release.assetNames.includes(UPDATE_ASSET_NAMES[platform])
 }

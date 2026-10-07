@@ -2,6 +2,14 @@
 
 User-visible changes are recorded here. This project is currently in Beta.
 
+## 0.1.3 — Beta
+
+### Updates
+
+- Fixed Download Update on macOS desktop so the browser opens the latest
+  release package correctly.
+- Added clearer feedback if the download link cannot be opened.
+
 ## 0.1.0 — Beta
 
 ### Added

@@ -442,7 +442,7 @@ frame overlays, and the compact Blocking View Camera Preview is unchanged.
 ## V2.UI2 Deep Blue visual system
 
 V2 UI polish uses a centralized deep-blue semantic palette in
-`v2/src/styles/tokens.css`. Primary actions, selected rows, View and tool
+`src/styles/tokens.css`. Primary actions, selected rows, View and tool
 states, focus rings, Camera badges, timeline playhead/keyframes/range, and
 technical FOV helpers use the same blue family. Surfaces and Soft UI shadows
 remain light, cool-neutral, and layout dimensions are unchanged. Delivery and
@@ -481,7 +481,7 @@ and persistence behavior are unchanged.
 ## V2.WEB1 Production web hardening
 
 V2 is a standalone static build with an environment-driven Vite base path. The
-default output is `v2/dist/` for a root/subdomain deployment; `VITE_BASE_PATH`
+default output is `dist/` for a root/subdomain deployment; `VITE_BASE_PATH`
 supports a path such as `/blocking/`. The browser capability helper centralizes
 WebGL, WebCodecs, MediaRecorder/WebM, canvas capture, file, and Blob-download
 checks. WebGL failure and context loss produce a user-facing recovery state,

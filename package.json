@@ -6,10 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "build:web": "vite build --config v2/vite.config.ts",
-    "build:web:staging": "vite build --config v2/vite.config.ts --mode staging",
-    "desktop:dev": "tauri dev --config v2/src-tauri/tauri.conf.json",
-    "desktop:build": "tauri build --config v2/src-tauri/tauri.conf.json",
+    "build:web": "vite build",
+    "build:web:staging": "vite build --mode staging",
+    "desktop:dev": "tauri dev --config src-tauri/tauri.conf.json",
+    "desktop:build": "tauri build --config src-tauri/tauri.conf.json",
     "lint": "oxlint",
     "test": "vitest run",
     "preview": "vite preview"

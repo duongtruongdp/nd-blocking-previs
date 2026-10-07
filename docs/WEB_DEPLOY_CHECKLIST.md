@@ -15,19 +15,19 @@ This is the short operator checklist for the standalone app at
 npm install
 npm test
 npm run lint
-npx tsc -p v2/tsconfig.json --noEmit
+npx tsc -p tsconfig.json --noEmit
 npm run build
 npm run build:web
 git diff --check
 ```
 
-The production artifact is `v2/dist/`. It must have `index.html` at its top
+The production artifact is `dist/`. It must have `index.html` at its top
 level, an `assets/` directory, root-relative asset paths, and no `.map` files.
 The staging command is `npm run build:web:staging`; keep its source maps private.
 
 ## Upload
 
-Upload the contents of `v2/dist/` directly into the subdomain document root:
+Upload the contents of `dist/` directly into the subdomain document root:
 
 ```text
 document-root/index.html
@@ -48,7 +48,7 @@ Do not create `document-root/dist/`.
 
 - Open `https://blocking.duongtruongdp.net/`; the editor must open immediately.
 - Check the browser Network and Console panels for 404, 500, CORS, mixed-content, and failed dynamic-import errors.
-- Confirm the document contains `meta[name="nd-build"][content="v2-web1a"]`.
+- Confirm the document contains `meta[name="nd-build"][content="app-web1a"]`.
 - Check Scene, Stage WebGL, Actor, Prop, Wall, Door/Window, Sun, Camera, Camera Preview, Camera View, Frame Guides, Timeline, and project switching.
 - Test `.ndscene`, `.ndblock`, PNG, WebM/MP4 capability messaging, and dirty reload warning.
 - Test representative cameras: Sony FX5, Sony BURANO, and ARRI ALEXA 35.

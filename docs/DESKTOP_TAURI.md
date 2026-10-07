@@ -1,15 +1,14 @@
-# ND Blocking & Previs V2 desktop shell
+# ND Blocking & Previs desktop shell
 
-V2.13 adds a polished native Project Library and `.ndblock` file-opening path
-to the Tauri 2 shell around the existing
-V2 React, domain, and Stage runtime. The browser build still opens directly in
+The native Project Library and `.ndblock` file-opening path belong to the Tauri
+2 shell around the existing React, domain, and Stage runtime. The browser build still opens directly in
 the editor; the desktop build opens the library first and mounts the editor
 only after a Project is created or opened. The `.ndblock` project document and
 all existing scene, camera, timeline, and Stage contracts remain unchanged.
 
 ## Structure and commands
 
-The shell lives in `v2/src-tauri/`. It uses the existing Vite application and
+The shell lives in `src-tauri/`. It uses the existing Vite application and
 does not create a second frontend:
 
 ```bash
@@ -19,7 +18,7 @@ npm run desktop:build
 
 `desktop:dev` starts the existing Vite server through Tauri's
 `beforeDevCommand`. `desktop:build` runs the existing `build:web` command and
-packages `v2/dist/` as the local frontend. The browser build remains available
+packages `dist/` as the local frontend. The browser build remains available
 with `npm run build:web` and does not depend on Tauri.
 
 The application identifier is `net.duongtruongdp.blocking`. The default window
@@ -29,12 +28,33 @@ The desktop bundle registers `.ndblock` as `ND Blocking Project` with the
 native operating system. A first launch opens an associated file directly in
 the editor. Later launches use the single-instance route to focus the existing
 window and deliver the requested path to the same Project-open controller.
-The association is declared in `v2/src-tauri/tauri.conf.json` and uses the
+The association is declared in `src-tauri/tauri.conf.json` and uses the
 existing neutral ND application icon.
+
+## Project thumbnails
+
+After a successful desktop Project Save or Save As, the active Camera is
+captured through the existing `CameraViewRuntime` production-camera scene.
+The capture reuses its isolated preview renderer, so it does not depend on the
+Camera View tab being visible and does not create a second StageEngine. Guides
+are disabled for the library image; the selected Camera delivery framing still
+determines the output crop.
+
+PNG bytes are written to the Tauri `appLocalDataDir()` under
+`project-thumbnails/<stable-project-key>.png`. The directory is created
+recursively on first write. The write is verified with `exists` and `stat`
+before the Recent Project UI is updated. The library reads the verified bytes
+and converts them to an in-memory `data:image/png` URL, avoiding unsupported
+raw filesystem paths in `<img>` elements. Thumbnail failures are secondary to
+Project Save: the saved `.ndblock` remains successful and the existing image,
+or the ND fallback, is preserved.
+
+Development builds log the resolved app-local root, capture stage, byte count,
+write path, and post-write verification result with the `[thumbnail]` prefix.
 
 ## Platform boundary
 
-`v2/src/platform/platformAdapter.ts` is the only platform seam. The web
+`src/platform/platformAdapter.ts` is the only platform seam. The web
 adapter keeps browser file pickers and downloads. The Tauri adapter uses native
 open/save dialogs and the Tauri filesystem plugin. React and the domain layer
 call the same adapter methods on both platforms.
@@ -111,7 +131,7 @@ project read/stat/rename/copy/delete and export writes. A user-selected dialog
 path is the boundary for project, scene, still, and video files; the shell does
 not grant broad folder access, shell access, network access, or arbitrary
 commands. Tauri capabilities are declared in
-`v2/src-tauri/capabilities/default.json`; see the [Tauri
+`src-tauri/capabilities/default.json`; see the [Tauri
 capabilities guide](https://v2.tauri.app/security/capabilities/) and the
 [dialog](https://v2.tauri.app/plugin/dialog/) and
 [filesystem](https://v2.tauri.app/plugin/file-system/), [Store](https://v2.tauri.app/plugin/store/),
@@ -127,7 +147,7 @@ or runtime pass from macOS. Windows validation requires a Windows machine with
 the WebView2 runtime and the Rust/MSVC toolchain.
 
 The shell includes a small neutral ND desktop icon generated from
-`v2/src-tauri/icon-source.svg`; it is separate from the unrelated web Vite
+`src-tauri/icon-source.svg`; it is separate from the unrelated web Vite
 favicon. Signing, notarization, and Windows SmartScreen release handling are
 future release work.
 

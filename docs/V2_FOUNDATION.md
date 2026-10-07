@@ -1,6 +1,8 @@
-# ND Blocking & Previs V2 Foundation
+# ND Blocking & Previs Foundation
 
-V2 is a clean Scene Editor application boundary. The existing root `src/` application is V1 legacy/R&D and remains in place for reference; V2 does not refactor or import its runtime.
+The repository root contains the active Scene Editor application. The former
+legacy V1 application has been removed from the active tree; the current
+runtime is the only supported web and desktop application.
 
 ## Product hierarchy
 
@@ -31,7 +33,7 @@ V2 shared editor code depends on a small `PlatformAdapter` seam. The current ada
 
 ## Runtime foundation
 
-The current Stage proof uses the isolated DEMO-derived `StageEngine` in `v2/src/stage-engine/`. It owns the production V2 canvas, Three.js scene, Ground, Grid, Cube, Sphere, Cylinder, direct raycasting, pointer lifecycle, orbit/pan/zoom, and Move/Rotate gizmos. React is limited to mounting the engine, sending `setTool('select' | 'move' | 'rotate')`, and receiving final selection IDs. The older `V2StageRuntime` remains in the tree for comparison and is not mounted by the V2 Stage.
+The current Stage uses the DEMO-derived `StageEngine` in `src/stage-engine/`. It owns the production canvas, Three.js scene, Ground, Grid, Cube, Sphere, Cylinder, direct raycasting, pointer lifecycle, orbit/pan/zoom, and Move/Rotate gizmos. React is limited to mounting the engine, sending `setTool('select' | 'move' | 'rotate')`, and receiving final selection IDs. The older `V2StageRuntime` remains as an internal historical name in the source and is not mounted by the Stage.
 
 The proof scene deliberately excludes Actors, Cameras, SceneDocument transform synchronization, history, and timeline state. Those are future additions through the same entity boundary after browser acceptance.
 
@@ -39,7 +41,7 @@ Mouse input is left-drag orbit, right-drag pan, and wheel zoom. The existing bro
 
 Blocking View navigation is represented by `target`, `distance`, `azimuth`, and `polar`. The camera transform is derived from that state. A three-pixel pointer threshold distinguishes selection from orbit; `F` frames the selected entity using its bounds and camera field of view, while `Home` restores deterministic Stage defaults. The application owns one authoritative `selectedEntityId`; the runtime mirrors it only for visual highlighting and diagnostics.
 
-V2.2 adds a serializable `ActorDocument` and `ActorPose` plus a dedicated `ProceduralActorRuntime`. The runtime builds an `ActorRoot` with explicit pelvis, torso, shoulder, elbow, hip, knee, ankle, neck, and head groups. Its canonical body proportions are centralized in `v2/src/runtime/actor/proportions.ts`; `+Y` is up, ActorRoot `Y = 0` grounds the feet, and Actor forward is `-Z`. The visible body meshes carry the Actor entity ID directly for the accepted V2.1 picker. No GLB, imported skeleton, SkinnedMesh, IK, or animation system is involved.
+V2.2 adds a serializable `ActorDocument` and `ActorPose` plus a dedicated `ProceduralActorRuntime`. The runtime builds an `ActorRoot` with explicit pelvis, torso, shoulder, elbow, hip, knee, ankle, neck, and head groups. Its canonical body proportions are centralized in `src/runtime/actor/proportions.ts`; `+Y` is up, ActorRoot `Y = 0` grounds the feet, and Actor forward is `-Z`. The visible body meshes carry the Actor entity ID directly for the accepted V2.1 picker. No GLB, imported skeleton, SkinnedMesh, IK, or animation system is involved.
 
 V2.3 adds a custom `V2TransformGizmo` without `TransformControls`. The existing Stage canvas remains the only pointer surface. Gizmo picking has priority over selection and navigation; move handles use ray/interaction-plane intersections projected onto world axes or the ground XZ plane, while Rotate uses signed ring angles around world X and Y. Actor moves are constrained to X/Z with Y fixed at zero; Actor X rotation is whole-character pitch and Y rotation remains heading. Transform documents synchronize at `transformEnd`; `transformStart`, `transformChange`, and `transformEnd` events form the future undo/timeline seam without adding either system now.
 
@@ -53,7 +55,7 @@ Future camera work keeps Physical Sensor, Capture Mode, Delivery Frame, lens, fo
 
 ## UI design system
 
-V2 uses semantic light Soft UI tokens in `v2/src/styles/tokens.css`: cool lavender background, raised white surfaces, inset controls, indigo accent, restrained shadows, rounded panels, generous spacing, and filmmaker terminology. The UI avoids the dense dark V1 workstation treatment and keeps technical runtime terms out of the product surface.
+V2 uses semantic light Soft UI tokens in `src/styles/tokens.css`: cool lavender background, raised white surfaces, inset controls, indigo accent, restrained shadows, rounded panels, generous spacing, and filmmaker terminology. The UI avoids the dense dark V1 workstation treatment and keeps technical runtime terms out of the product surface.
 
 ## Milestone gates
 

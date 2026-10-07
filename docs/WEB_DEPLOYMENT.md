@@ -33,18 +33,17 @@ Run these commands from the repository root:
 ```sh
 npm install
 npm run build
-npx vite preview --config v2/vite.config.ts
+npx vite preview
 ```
 
-The root `npm run build` continues to validate the legacy root application.
-The exact V2 production build for the standalone subdomain is:
+The production build for the standalone subdomain is:
 
 ```sh
 npm run build:web
 ```
 
 It uses the default `VITE_BASE_PATH=/` and writes the deployable output to
-`v2/dist/`. The equivalent explicit command is:
+`dist/`. The equivalent explicit command is:
 
 ```sh
 VITE_BASE_PATH=/ npm run build:web
@@ -63,10 +62,10 @@ public production host.
 Preview the production artifact, rather than the development server:
 
 ```sh
-npx vite preview --config v2/vite.config.ts --host 127.0.0.1
+npx vite preview --host 127.0.0.1
 ```
 
-The deployable output is `v2/dist/`. Upload the *contents* of that directory
+The deployable output is `dist/`. Upload the *contents* of that directory
 to the subdomain document root; do not upload the containing `dist` directory
 as a nested folder.
 
@@ -79,12 +78,12 @@ https://blocking.duongtruongdp.net/
 ```
 
 Use the default base `/` and point the subdomain DocumentRoot at the uploaded
-contents of `v2/dist/`.
+contents of `dist/`.
 
 For a subpath deployment:
 
 ```sh
-VITE_BASE_PATH=/blocking/ npx vite build --config v2/vite.config.ts
+VITE_BASE_PATH=/blocking/ npm run build:web
 ```
 
 Upload that build to `https://duongtruongdp.net/blocking/`. The base path is
@@ -177,7 +176,7 @@ URLs. No database migration or application-state rollback is required.
   `application/json`, PNG as `image/png`, MP4 as `video/mp4`, and WebM as
   `video/webm` when those files are served directly.
 - Keep `index.html` short-lived or no-cache during releases.
-- Cache hashed files under `v2/dist/assets/` with a long immutable lifetime.
+- Cache hashed files under `dist/assets/` with a long immutable lifetime.
 - No service worker/PWA cache is added; this avoids stale-build recovery issues.
 - Static hosting does not need permissive CORS for same-origin assets.
 
@@ -214,15 +213,15 @@ development-only `?interactionDebug=1` diagnostic remains off in production.
 
 Before staging acceptance:
 
-1. Build the root app and V2 app with `npm run build`, then
+1. Build the app with `npm run build`, then
    `npm run build:web`.
-2. Inspect `v2/dist/index.html` and `v2/dist/assets/` for valid root-relative
+2. Inspect `dist/index.html` and `dist/assets/` for valid root-relative
    references. The production artifact must contain no `.map` files and no
    `/blocking/assets/` references.
 3. Build once with `VITE_BASE_PATH=/blocking/` and verify the generated asset
    URLs begin with `/blocking/`; this is a compatibility check only, not the
    production subdomain build.
-4. Serve `v2/dist/` through a static server or `vite preview`, not only Vite
+4. Serve `dist/` through a static server or `vite preview`, not only Vite
    dev middleware. Check `/`, every CSS/JS asset in `index.html`, and the
    lazy `videoExporter` chunk for HTTP 200.
 5. Run the manual staging checklist in
@@ -260,7 +259,7 @@ shared storage or cookies across the two origins.
 The build identity is available in the generated document as:
 
 ```html
-<meta name="nd-build" content="v2-web1a" />
+<meta name="nd-build" content="app-web1a" />
 ```
 
 This is a quiet diagnostic marker for distinguishing a deployed artifact from

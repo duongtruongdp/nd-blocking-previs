@@ -1,6 +1,6 @@
 # ND Blocking & Previs — Architecture and Implementation Plan
 
-Status: V2.10 current: ProjectDocument, multi-Scene editing, portable `.ndblock` persistence, procedural Scenic Props, Wall/Openings, Sun lighting, and extended Timeline tracks are implemented inside isolated `v2/`; manual browser acceptance remains required.
+Status: Current: ProjectDocument, multi-Scene editing, portable `.ndblock` persistence, procedural Scenic Props, Wall/Openings, Sun lighting, and extended Timeline tracks are implemented in the active root application; manual browser acceptance remains required.
 
 V2.UI1 keeps workspace dimensions outside SceneDocument and `.ndscene`
 serialization. Timeline height defaults to 240px, clamps to a 140px minimum,
@@ -62,7 +62,9 @@ Camera View, timeline animation, and export remain later milestones.
 
 ## 1. Repository audit
 
-The repository is an unmodified React + TypeScript + Vite starter.
+The repository now contains the promoted React + TypeScript + Vite application
+at its root. The former legacy V1 application is no longer part of the active
+source tree.
 
 - React `19.2.8`, React DOM `19.2.8`
 - Three.js `0.186.1` with matching type definitions
@@ -70,10 +72,10 @@ The repository is an unmodified React + TypeScript + Vite starter.
 - TypeScript `6.0.2`
 - Oxlint `1.81.0`
 - No state-management, UI, routing, persistence, export, or testing library is installed.
-- `src/App.tsx` is still the Vite counter/demo screen.
-- `src/App.css` and `src/index.css` contain starter visual styles and color-scheme behavior.
-- No domain model, Three.js runtime, selection model, timeline, project format, or WordPress integration exists.
-- `public/` contains only starter favicon/icon assets.
+- `src/App.tsx` is the active Blocking & Previs shell.
+- The root `src/` contains the Stage engine, scene domain, camera data, timeline,
+  project persistence, export, and desktop platform seam.
+- WordPress integration remains external to the application.
 
 Baseline verification:
 
@@ -704,7 +706,7 @@ Internal implementation names may use technical terms where they make the code c
 ### V2.4 Camera System Foundation
 
 V2.4 adds the first production Camera workflow to the V2 editor. Camera
-definitions and provenance live in `v2/src/core/cameraDatabase.ts`; scenes
+definitions and provenance live in `src/core/cameraDatabase.ts`; scenes
 store stable camera and capture-mode IDs plus lens, squeeze, delivery-frame,
 and transform values. Runtime projection uses the selected mode's active
 capture area, while recording resolution and physical sensor dimensions stay
@@ -718,7 +720,7 @@ anamorphic lenses), and draws a compact delivery Frame Guide. Selection,
 Move, Rotate, framing, and history use the existing V2 entity pathways.
 
 The initial verified seed set and source notes are documented in
-`v2/docs/CAMERA_DATA.md`. Timeline, Camera View image effects, project file
+`docs/CAMERA_DATA.md`. Timeline, Camera View image effects, project file
 serialization, and video export remain later milestones.
 
 V2 Camera Integration B reconnects this workflow through the frozen V2
@@ -737,7 +739,7 @@ audit in `docs/CAMERA_DATABASE_SOURCES.md`. The Sony FX5 includes its seven
 documented FF/FFc/S35 imager modes, with X-OCN compatibility attached to the
 Open Gate mode rather than represented as duplicate geometry.
 
-`v2/src/runtime/cameraMath.ts` is the authoritative projection boundary. It
+`src/runtime/cameraMath.ts` is the authoritative projection boundary. It
 keeps physical capture aspect and FOV separate from the desqueezed display
 aspect, applies anamorphic squeeze to horizontal optical coverage only, and is
 shared by the Blocking View FOV guide, Camera View, Inspector, and export
@@ -1064,8 +1066,8 @@ the context and actions. Rename semantics and persistence are unchanged.
 
 ## V2.WEB1 Production web hardening
 
-V2 production deployment is isolated under `v2/` and emits a self-contained
-`v2/dist/` static directory. Vite reads optional `VITE_BASE_PATH`, with `/` for
+Production deployment emits a self-contained `dist/` static directory. Vite
+reads optional `VITE_BASE_PATH`, with `/` for
 a subdomain and `/blocking/` for a path deployment; there is no router or
 service-worker cache. A central browser-capability seam covers WebGL, video,
 canvas, file, and Blob APIs. WebGL/context-loss states, a React error boundary,

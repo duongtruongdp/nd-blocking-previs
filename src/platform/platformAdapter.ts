@@ -465,8 +465,13 @@ async function nativeRevealProjectFile(path: string): Promise<void> {
 }
 
 async function nativeOpenExternalUrl(url: string): Promise<void> {
-  const { openUrl } = await import('@tauri-apps/plugin-opener')
-  await openUrl(url)
+  try {
+    const { openUrl } = await import('@tauri-apps/plugin-opener')
+    await openUrl(url)
+  } catch (error: unknown) {
+    if (import.meta.env.DEV) console.error('[ND Blocking & Previs] Tauri openUrl rejected', { url, error })
+    throw error
+  }
 }
 
 async function nativeInitialProjectPath(): Promise<string | null> {

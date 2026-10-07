@@ -8,7 +8,26 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "dialog:allow-message",
-    "opener:allow-default-urls",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://github.com/duongtruongdp/nd-blocking-previs/releases/latest/download/ND-Blocking-Previs-macOS.zip"
+        },
+        {
+          "url": "https://github.com/duongtruongdp/nd-blocking-previs/releases/latest/download/ND-Blocking-Previs-Windows.zip"
+        },
+        {
+          "url": "https://duongtruongdp.net"
+        },
+        {
+          "url": "https://duongtruongdp.net/*"
+        },
+        {
+          "url": "mailto:*"
+        }
+      ]
+    },
     "opener:allow-reveal-item-in-dir",
     "fs:allow-read-text-file",
     "fs:allow-read-file",

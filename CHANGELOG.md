@@ -2,6 +2,14 @@
 
 User-visible changes are recorded here. This project is currently in Beta.
 
+## 0.1.3 — Beta
+
+### Maintenance
+
+- Minor Beta maintenance release used to validate the in-app update download
+  flow.
+- No creative workflow changes.
+
 ## 0.1.0 — Beta
 
 ### Added

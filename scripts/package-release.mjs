@@ -33,23 +33,66 @@ mkdirSync(stagingDirectory, { recursive: true })
 mkdirSync(releaseDirectory, { recursive: true })
 rmSync(outputPath, { force: true })
 
-cpSync(dmg.path, join(stagingDirectory, basename(dmg.path)))
-writeFileSync(join(stagingDirectory, 'README - INSTALLATION.txt'), `ND Blocking & Previs — Beta
-macOS Installation
+const dmgName = basename(dmg.path)
+cpSync(dmg.path, join(stagingDirectory, dmgName))
+writeFileSync(join(stagingDirectory, 'README - INSTALLATION.txt'), `------------------------------------------------------------
+ND BLOCKING & PREVIS — BETA
+macOS Installation Guide
+------------------------------------------------------------
 
-1. Open ${basename(dmg.path)}
-2. Drag ND Blocking & Previs to Applications
-3. Open the app
+Version: ${packageJson.version}
+Platform: macOS Apple Silicon / arm64
 
-If macOS prevents the app from opening:
-Open System Settings → Privacy & Security → Security,
-then click Open Anyway and confirm Open.
+WHAT'S INCLUDED
 
-You normally only need to do this once.
+- ${dmgName}
+- README - INSTALLATION.txt
 
-Developed by Dương Trương (Andy)
+INSTALL
+
+1. Open the DMG.
+2. Drag ND Blocking & Previs into Applications.
+3. Eject the DMG.
+4. Open ND Blocking & Previs from Applications.
+
+IF MACOS BLOCKS THE APP
+
+Option 1 — Recommended
+
+1. Try opening the app once.
+2. Open System Settings → Privacy & Security.
+3. Scroll to Security.
+4. Click Open Anyway and confirm Open.
+
+Option 2 — Terminal fallback
+
+If Open Anyway is not available:
+
+1. Make sure the app is in Applications.
+2. Open Terminal.
+3. Run:
+
+xattr -dr com.apple.quarantine "/Applications/ND Blocking & Previs.app"
+
+4. Press Return.
+5. Open the app again.
+
+This command removes the quarantine attribute only from:
+/Applications/ND Blocking & Previs.app
+
+It does not disable Gatekeeper or global macOS security settings.
+
+WEB VERSION
+
+https://blocking.duongtruongdp.net/
+
+DEVELOPER
+
+Dương Trương (Andy)
 https://duongtruongdp.net
 ndtruong.contact@gmail.com
+
+------------------------------------------------------------
 `)
 
 execFileSync('zip', ['-q', '-r', outputPath, '.'], { cwd: stagingDirectory, stdio: 'inherit' })

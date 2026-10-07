@@ -22,9 +22,26 @@ User-visible changes are recorded here. This project is currently in Beta.
 - The macOS Beta is unsigned and distributed outside the Mac App Store.
 - Windows packaging remains pending real Windows validation.
 
+## 0.1.1 — Beta
+
+### Added
+
+- Published the Apple Silicon macOS Beta package and stable direct download
+  path.
+- Added public installation, support, privacy, and release guidance.
+
+### Improved
+
+- Improved About/update and release metadata consistency.
+- Added package-content verification for the macOS Beta ZIP.
+
+### Fixed
+
+- Clarified that Windows packaging remains pending real Windows validation.
+
 ## Future release format
 
-## 0.1.1 — Beta
+## 0.1.2 — Beta
 
 ### Added
 
@@ -32,8 +49,8 @@ User-visible changes are recorded here. This project is currently in Beta.
 
 ### Improved
 
--
+- Keep improvements concise.
 
 ### Fixed
 
-- Keep fixes, additions, and known limitations concise.
+- Keep fixes and known limitations concise.

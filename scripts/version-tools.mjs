@@ -84,6 +84,10 @@ const verifyRelease = () => {
   if (dmgEntries.length !== 1 || !entries.includes(expectedReadme) || entries.length !== 2) {
     throw new Error(`Unexpected macOS package contents: ${entries.join(', ')}`)
   }
+  const readme = execFileSync('unzip', ['-p', releaseZipPath, expectedReadme], { encoding: 'utf8' })
+  for (const requiredText of [`Version: ${version}`, 'Dương Trương (Andy)', 'Platform: macOS Apple Silicon / arm64']) {
+    if (!readme.includes(requiredText)) throw new Error(`Release README is missing: ${requiredText}`)
+  }
   console.log(`Release package verified for ${version}: ${releaseZipPath}`)
 }
 

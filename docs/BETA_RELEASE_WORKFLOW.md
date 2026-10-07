@@ -30,6 +30,10 @@ npm run version:check
 Use normal semantic versions and tag releases as `vX.Y.Z`. Do not bump the
 version automatically as part of a build.
 
+Git tags are reserved for published product versions. Internal milestones and
+development checkpoints use commits, not tags. Do not create feature or
+milestone tags going forward.
+
 ## About and update checks
 
 The About/update surface reads the application version from `package.json`.
@@ -101,8 +105,12 @@ the app's `/releases/latest` lookup and fixed asset URLs work.
    release.
 7. Do not upload a Windows asset until a real Windows package is validated.
 
-The first planned update test is **0.1.0 → 0.1.1**. The 0.1.1 release should
-be created only after the 0.1.0 package is available and has been tested.
+The current published Beta baseline is **0.1.1**. The next planned update test
+is **0.1.1 → 0.1.2**. Do not bump to 0.1.2 automatically; use the version
+helper when preparing that release.
+
+Removing an obsolete Git tag does not remove a GitHub Release object. Release
+objects must be audited and removed separately only with explicit approval.
 
 ## GitHub Actions architecture
 
@@ -128,9 +136,9 @@ claim in this pipeline.
 
 After publishing both releases:
 
-1. Install or run version 0.1.0.
-2. Confirm the About panel shows 0.1.0.
-3. Publish a normal 0.1.1 release with the macOS ZIP asset.
+1. Install or run the published version 0.1.1.
+2. Confirm the About panel shows 0.1.1.
+3. Prepare and publish a normal 0.1.2 release with the macOS ZIP asset.
 4. Open About and choose **Check for updates**.
 5. Confirm the newer version is shown and **Download Update** opens the fixed
    `/releases/latest/download/ND-Blocking-Previs-macOS.zip` URL.
@@ -139,3 +147,16 @@ After publishing both releases:
 
 This is a procedure only; no browser or desktop manual acceptance is claimed
 by repository automation.
+
+## Verify the public download
+
+After a normal published release has the required macOS asset, verify the
+stable direct URL without relying on a versioned filename:
+
+```sh
+curl -I -L https://github.com/duongtruongdp/nd-blocking-previs/releases/latest/download/ND-Blocking-Previs-macOS.zip
+```
+
+The response should resolve successfully to the published ZIP. A release must
+not be considered complete if the latest-release URL returns 404 or the ZIP
+has not passed `npm run release:verify`.

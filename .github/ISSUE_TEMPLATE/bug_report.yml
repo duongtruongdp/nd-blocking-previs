@@ -11,7 +11,7 @@ body:
     id: version
     attributes:
       label: App version
-      placeholder: 0.1.0 / Web App
+      placeholder: 0.1.1 / Web App
     validations:
       required: true
   - type: input

@@ -1,109 +1,157 @@
 # ND Blocking & Previs
 
-ND Blocking & Previs is a browser-based and desktop blocking tool for
-directors, cinematographers, and filmmakers. Plan actor movement, place the
-camera, test lenses and framing, build a shot, and review a quick previs.
+**Simple blocking and previs for filmmakers.**
 
-**Beta software · developed by Dương Trương (Andy)**
+Plan actors, props, camera positions, framing, and basic movement before
+stepping onto set.
 
-Website: [duongtruongdp.net](https://duongtruongdp.net) · Contact:
+> **Beta** — currently available on the Web and as a macOS Apple Silicon
+> desktop app.
+
+[Open the Web App](https://blocking.duongtruongdp.net/) · [Download macOS
+Beta](https://github.com/duongtruongdp/nd-blocking-previs/releases/latest/download/ND-Blocking-Previs-macOS.zip)
+
+Developed by **Dương Trương (Andy)**<br>
+[duongtruongdp.net](https://duongtruongdp.net) ·
 [ndtruong.contact@gmail.com](mailto:ndtruong.contact@gmail.com)
 
 ## Try the Web App
 
-Open the current production Web App at
-[blocking.duongtruongdp.net](https://blocking.duongtruongdp.net/). No install is
-required. The Web App is independent from WordPress internally and can be
-served as a static application.
+[Open blocking.duongtruongdp.net](https://blocking.duongtruongdp.net/)
+
+No installation is required. The Web App is a functional product build and
+remains independent from WordPress internally.
 
 ## Beta downloads
 
-The macOS Beta is distributed as a direct download from the latest published
-GitHub Release:
+### macOS Beta
 
 [Download ND Blocking & Previs for macOS](https://github.com/duongtruongdp/nd-blocking-previs/releases/latest/download/ND-Blocking-Previs-macOS.zip)
 
-Windows support is **coming after Windows packaging and validation**. No
-Windows download is published yet.
+The current validated desktop build is **Apple Silicon / arm64** and is
+distributed outside the Mac App Store. See
+[macOS installation](docs/MACOS_BETA_INSTALL.md).
 
-See [macOS Beta installation](docs/MACOS_BETA_INSTALL.md) for the first-open
-steps, including the macOS **Open Anyway** path when Gatekeeper requires it.
+### Windows Beta
 
-## What it does
+**Coming after Windows validation.** The Windows package is not published yet.
+See the [Windows installation guide](docs/WINDOWS_BETA_INSTALL.md) for the
+planned workflow.
 
-- **Blocking:** place procedural Actors and scenic Props in a measured Stage,
-  select them directly, and move or rotate them for blocking.
-- **Cameras:** add generic cinema Cameras, choose production camera data,
-  change focal length and capture mode, inspect physical capture FOV, preview
-  anamorphic squeeze, and use delivery frame guides and Camera View.
-- **Scenic planning:** block with Props, walls, doors, windows, and Sun
-  positioning.
-- **Timeline:** mark a shot range, place movement and camera keyframes, and
-  review the shot at the project frame rate.
-- **Quick previs export:** capture PNG stills and export the marked camera range
-  as MP4 when the desktop encoder is available, with WebM browser fallback.
-- **Project workflow:** save and load portable `.ndscene` and `.ndblock`
-  projects, use recent projects on the desktop shell, and continue the same
-  scene between Web and desktop where the platform supports it.
-- **Web and desktop:** use the Web App with no installation, or use the
-  optional macOS Tauri desktop shell for local project files and native
-  export workflows.
+## Block the scene
 
-This is a filmmaking planning tool, not a general-purpose 3D editor. Its
-language and controls are organized around shots, actors, cameras, lenses,
-frames, and movement.
+- Actors and pose presets
+- Props and scenic blocking
+- Walls, doors, and windows
+- Sun positioning
 
-## Desktop Beta and installation
+## Plan the camera
 
-The macOS desktop Beta is distributed outside the Mac App Store. Download the
-ZIP above, extract it, open the DMG, and drag the app to Applications. If macOS
-blocks the first launch, use **System Settings → Privacy & Security → Open
-Anyway**. See [macOS Beta installation](docs/MACOS_BETA_INSTALL.md) for the
-full short checklist.
+- Camera database and capture modes
+- Sensor area and focal length
+- Anamorphic squeeze preview
+- Delivery framing and frame guides
+- Camera Preview and Camera View
 
-## Portable projects
+## Build simple movement
 
-Project files are intended to be portable between supported builds. Keep the
-`.ndblock` file with any referenced project data when moving between machines.
-The Web App does not upload project files to a server as part of normal local
-editing. Windows portability will be validated with the future Windows build.
+- Timeline-based actor and camera movement
+- Actor blocking and prop movement
+- Mark In and Mark Out
+- Position and rotation keyframes
 
-## Beta feedback and support
+## Export
 
-Please report reproducible bugs through
-[GitHub Issues](https://github.com/duongtruongdp/nd-blocking-previs/issues) or
-follow the checklist in [SUPPORT.md](SUPPORT.md). Include the app version,
-platform, browser or desktop build, the steps to reproduce, and a screenshot
-or short recording when useful. Do not attach private project files unless
-you have removed sensitive material and intend to share them.
+- PNG still frames
+- Browser video export
+- Desktop H.264 MP4 export
 
-For direct contact: [ndtruong.contact@gmail.com](mailto:ndtruong.contact@gmail.com).
+## Web and desktop
 
-## Privacy
+| Capability | Web | Desktop |
+| --- | --- | --- |
+| Blocking and previs | Yes | Yes |
+| `.ndblock` projects | Yes | Yes |
+| Camera tools | Yes | Yes |
+| Timeline | Yes | Yes |
+| PNG capture | Yes | Yes |
+| Video export | Browser | Native H.264 |
+| Project Library | — | Yes |
+| Crash recovery | — | Yes |
 
-See [PRIVACY.md](PRIVACY.md) for the current local-first data and update-check
-behavior.
+## Screenshots
+
+Current application screenshots are not yet tracked in this repository. The
+planned documentation set is recorded in [`docs/images/README.md`](docs/images/README.md):
+
+- Blocking View
+- Camera View
+- Timeline
+- Actor Pose
+- Desktop Project Library
+- Frame Guides / Camera Preview
+
+Only manually reviewed captures should be added. Do not use generated or
+simulated screenshots, and redact private production material first.
+
+## Project files
+
+`.ndblock` is the portable ND Blocking & Previs project format. Projects are
+intended to move between the Web App, macOS Desktop, and future Windows
+Desktop. Windows portability will be validated with the future Windows build.
+
+## Installation
+
+For macOS: download the ZIP, extract it, open the DMG, and drag ND Blocking &
+Previs to Applications. If macOS blocks the first launch, use **System Settings
+→ Privacy & Security → Open Anyway**. The complete guide is in
+[`docs/MACOS_BETA_INSTALL.md`](docs/MACOS_BETA_INSTALL.md).
+
+For Windows: installation documentation is prepared, but the Beta package is
+not released until a real Windows build has been validated.
+For the Web App: [no installation is required](https://blocking.duongtruongdp.net/).
+
+## Beta updates
+
+Open **About → Check for Updates** to look for a newer Beta. If one is
+available, **Download Update** opens the direct platform package. Close the
+current app, install or replace the application manually, and reopen it. The
+app does not install updates automatically, and `.ndblock` projects remain
+separate files.
+
+## Support and feedback
+
+Use [GitHub Issues](https://github.com/duongtruongdp/nd-blocking-previs/issues)
+or follow [SUPPORT.md](SUPPORT.md). Include the app version, platform, steps to
+reproduce, and a screenshot or short recording when useful. Do not attach
+private production files by default.
+
+Direct contact: [ndtruong.contact@gmail.com](mailto:ndtruong.contact@gmail.com).
+
+See [PRIVACY.md](PRIVACY.md) and [SECURITY.md](SECURITY.md) for the current
+project guidance.
+
+## Release documentation
+
+- [Installation index](docs/INSTALL.md)
+- [macOS Beta installation](docs/MACOS_BETA_INSTALL.md)
+- [Windows Beta installation](docs/WINDOWS_BETA_INSTALL.md)
+- [Beta release workflow](docs/BETA_RELEASE_WORKFLOW.md)
+- [Changelog](CHANGELOG.md)
 
 ## License
 
-No `LICENSE` file is currently present in this repository, so licensing has
-not yet been specified. Do not assume that the project is available for
-redistribution until a license is added by the developer.
+No `LICENSE` file is currently present. License information will be added
+before the final public release; do not assume redistribution rights.
 
 ## Development
 
-Requirements: Node.js, npm, and Rust for desktop checks. The frontend uses
-React, TypeScript, Vite, and Three.js; the optional desktop shell uses Tauri 2.
+The repository contains the React, TypeScript, Vite, Three.js, and optional
+Tauri desktop sources. Common checks are:
 
 ```bash
 npm ci
 npm run dev
-```
-
-Open [http://localhost:5174/](http://localhost:5174/). Common validation
-commands are:
-
-```bash
 npm test
 npm run lint
 npx tsc -p tsconfig.json --noEmit
@@ -112,14 +160,7 @@ npm run version:check
 git diff --check
 ```
 
-For the desktop shell:
-
-```bash
-npm run desktop:dev
-npm run desktop:build
-```
-
-Release packaging and version procedures are documented in
-[`docs/BETA_RELEASE_WORKFLOW.md`](docs/BETA_RELEASE_WORKFLOW.md). The
-repository intentionally keeps the Web App and desktop shell independent from
-WordPress integration.
+Desktop development and release procedures are documented in
+[`docs/BETA_RELEASE_WORKFLOW.md`](docs/BETA_RELEASE_WORKFLOW.md). Internal
+milestones use commits; Git tags are reserved for published product versions
+in the form `vX.Y.Z`.

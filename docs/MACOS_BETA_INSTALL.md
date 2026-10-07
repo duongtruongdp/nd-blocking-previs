@@ -1,38 +1,74 @@
-# ND Blocking & Previs — Beta
+# Installing ND Blocking & Previs on macOS
 
-## Installing the macOS Beta
+The current desktop Beta is distributed outside the Mac App Store. The
+validated build is for **Apple Silicon / arm64**. It is currently unsigned and
+not notarized, so macOS may ask you to approve the first launch.
 
-This beta version is not yet distributed through the Mac App Store. macOS may
-ask you to confirm that you want to open it. This is expected for the current
-beta.
+## 1. Download
 
-1. Download the ND Blocking & Previs DMG from the official download source.
-2. Open the DMG.
+[Download the macOS Beta ZIP](https://github.com/duongtruongdp/nd-blocking-previs/releases/latest/download/ND-Blocking-Previs-macOS.zip)
+
+## 2. Install
+
+1. Extract the downloaded ZIP.
+2. Open the DMG inside it.
 3. Drag **ND Blocking & Previs** to **Applications**.
-4. Open the app normally.
-5. If macOS prevents the app from opening, open **System Settings → Privacy &
-   Security**.
-6. Scroll to **Security**, then click **Open Anyway**.
-7. Confirm **Open**.
+4. Eject the DMG.
 
-You normally only need to do this once. The app should launch normally
-afterward.
+## 3. First launch
 
-## Troubleshooting
+Open **ND Blocking & Previs** from Applications. If macOS blocks it, use the
+recommended approval route below.
 
-- If macOS says the developer cannot be verified, use **Privacy & Security →
-  Open Anyway**.
-- If **Open Anyway** does not appear, try opening the app once first, then
-  return to **Privacy & Security**.
-- If the app still will not open, re-download the current beta from the
-  official ND Blocking & Previs download source.
+## If macOS blocks the app
 
-## Download page copy
+### Option A — Open Anyway
 
-**macOS Beta**
+1. Try opening the app once.
+2. Open **System Settings**.
+3. Choose **Privacy & Security**.
+4. Scroll to the **Security** section.
+5. Click **Open Anyway**, then confirm **Open**.
 
-The current beta is distributed outside the Mac App Store. On first launch,
-macOS may ask you to confirm that you want to open it.
+You normally only need to approve the current Beta once.
 
-If the app is blocked: **System Settings → Privacy & Security → Open Anyway**.
-You normally only need to do this once.
+### Option B — Terminal fallback
+
+Use this only if **Open Anyway** is unavailable after you have tried opening the
+app:
+
+1. Confirm that **ND Blocking & Previs.app** has been copied into
+   `/Applications`.
+2. Open **Terminal**.
+3. Run exactly:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/ND Blocking & Previs.app"
+```
+
+4. Press Return.
+5. Open ND Blocking & Previs from Applications again.
+
+This command removes the macOS quarantine attribute only from
+`/Applications/ND Blocking & Previs.app`. It does not disable Gatekeeper,
+System Integrity Protection, or global macOS security settings.
+
+## Updating the Beta
+
+Use **About → Check for Updates** inside the app. When a newer version is
+available, **Download Update** downloads the ZIP directly. Close the current
+app, repeat the installation steps with the new DMG, and reopen it. Updates are
+manual; the app does not replace itself.
+
+Your `.ndblock` projects remain separate files. Keep backups of important
+production work.
+
+## Need help?
+
+Report a reproducible issue through
+[GitHub Issues](https://github.com/duongtruongdp/nd-blocking-previs/issues) or
+contact [ndtruong.contact@gmail.com](mailto:ndtruong.contact@gmail.com).
+Include the app version, macOS version, and the steps that led to the problem.
+
+Developer: **Dương Trương (Andy)** ·
+[duongtruongdp.net](https://duongtruongdp.net)

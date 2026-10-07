@@ -2,14 +2,6 @@
 
 User-visible changes are recorded here. This project is currently in Beta.
 
-## 0.1.3 — Beta
-
-### Updates
-
-- Fixed Download Update on macOS desktop so the browser opens the latest
-  release package correctly.
-- Added clearer feedback if the download link cannot be opened.
-
 ## 0.1.0 — Beta
 
 ### Added
@@ -71,3 +63,8 @@ User-visible changes are recorded here. This project is currently in Beta.
 
 - Cleaned up the Inspector presentation.
 - Improved consistency across Timeline, Camera, and runtime editing workflows.
+
+### Updates
+
+- Download Update now opens the latest macOS ZIP in the default browser.
+- Added clearer feedback when the external download cannot be opened.

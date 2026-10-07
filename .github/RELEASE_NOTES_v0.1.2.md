@@ -1,7 +1,7 @@
 # ND Blocking & Previs 0.1.2 Beta
 
-This update focuses on Timeline editing, Camera reliability, and a smoother
-everyday blocking and previs workflow.
+This update focuses on Timeline editing, Camera reliability, Frame Guides,
+and a smoother everyday blocking and previs workflow.
 
 ## Highlights
 
@@ -11,6 +11,8 @@ everyday blocking and previs workflow.
 - Realtime Camera Preview and Camera View scene updates.
 - Corrected Pan, Tilt, and Dutch controls.
 - Frame Guide editing and Active Camera workflow improvements.
+- Download Update now opens the latest macOS ZIP in the default browser.
+- Clearer feedback when the external download cannot be opened.
 
 ## Platform
 

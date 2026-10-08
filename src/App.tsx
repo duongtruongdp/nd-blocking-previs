@@ -46,6 +46,7 @@ import { V2RecoveryCenter } from './components/V2RecoveryCenter'
 import { APP_CONTACT_EMAIL, APP_VERSION, APP_WEBSITE_URL } from './core/appMetadata'
 import { checkLatestRelease, openUpdateDownload, platformForUserAgent, releaseHasAsset, type UpdateCheckResult } from './platform/updateChecker'
 import type { UpdatePreferences } from './platform/platformAdapter'
+import { PhoneCameraController, type PhoneCameraControllerState } from './phoneCamera/phoneCameraController'
 
 function createDefaultV2Scene(id = 'scene-01', name = 'Scene 01', includeDefaultProps = true): SceneDocument {
   const scene = createEmptySceneDocument()
@@ -123,6 +124,7 @@ function V2EditorApp() {
   const [wallDrawState, setWallDrawState] = useState<WallDrawingState>({ active: false, start: null, end: null, length: 0 })
   const [snapPreviewWallId, setSnapPreviewWallId] = useState<string | null>(null)
   const [cameraPreview, setCameraPreview] = useState(false)
+  const [phoneCameraState, setPhoneCameraState] = useState<PhoneCameraControllerState>({ status: 'idle', pairingUrl: null, isRecording: false, activeCameraId: null, orientation: 'unknown', requiresRecenter: false, message: null })
   const [exportOpen, setExportOpen] = useState(false)
   const [exportStatus, setExportStatus] = useState<VideoExportStatus>('idle')
   const [exportProgress, setExportProgress] = useState<VideoExportProgress | null>(null)
@@ -149,6 +151,11 @@ function V2EditorApp() {
   const currentProjectPathRef = useRef<string | null>(null)
   const recentProjectsRef = useRef<RecentProjectEntry[]>([])
   const thumbnailCaptureRef = useRef<(() => Promise<Blob | null>) | null>(null)
+  const phoneCameraLiveApplyRef = useRef<((cameraId: string, rotation: [number, number, number]) => void) | null>(null)
+  const phoneCameraControllerRef = useRef<PhoneCameraController | null>(null)
+  const phoneRecordingBeforeRef = useRef<SceneDocument | null>(null)
+  const phoneRecordingCameraIdRef = useRef<string | null>(null)
+  const phoneProjectIdentityRef = useRef<string | null>(null)
   const isDirtyRef = useRef(isDirty)
   const workspaceModeRef = useRef(workspaceMode)
   const savedProjectFingerprintRef = useRef(creativeProjectFingerprint(projectDocument))
@@ -1262,6 +1269,123 @@ function V2EditorApp() {
     applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current }, suspendedIds)
   }
 
+  const recordPhoneCameraSample = (frame: number, rotation: [number, number, number]) => {
+    const before = sceneDocumentRef.current
+    const cameraId = phoneRecordingCameraIdRef.current
+    if (!cameraId) return
+    const camera = before.cameras.find((item) => item.id === cameraId)
+    if (!camera) return
+    if (frame > before.timeline.markOut) {
+      phoneCameraControllerRef.current?.stopRecording()
+      return
+    }
+    const safeFrame = clampTimelineFrame(frame, before.timeline.startFrame, before.timeline.endFrame)
+    const timeline = upsertTimelineKeyframe(before.timeline, cameraId, 'Camera', 'rotation', safeFrame, rotation, 'linear')
+    const after: SceneDocument = {
+      ...before,
+      timeline: { ...timeline, currentFrame: safeFrame },
+      cameras: before.cameras.map((item) => item.id === cameraId ? { ...item, rotation: [...rotation] } : item),
+    }
+    sceneDocumentRef.current = after
+    updateActiveSceneDocument(after, false)
+  }
+
+  const finishPhoneCameraRecording = () => {
+    const before = phoneRecordingBeforeRef.current
+    const after = sceneDocumentRef.current
+    const cameraId = phoneRecordingCameraIdRef.current
+    phoneRecordingBeforeRef.current = null
+    phoneRecordingCameraIdRef.current = null
+    setSuspendedTimelineEntityIds(new Set())
+    if (before && after && creativeSceneChanged(before, after)) {
+      const camera = after.cameras.find((item) => item.id === cameraId)
+      recordAction(`Record ${camera?.name ?? 'Camera'} Move`, before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
+    }
+  }
+
+  const startPhoneCameraRecording = () => {
+    const activeCamera = sceneDocumentRef.current.cameras.find((camera) => camera.id === sceneDocumentRef.current.activeCameraId) ?? null
+    if (!activeCamera || phoneCameraState.status !== 'connected') return
+    if (isPlaying) {
+      playbackRef.current = null
+      setIsPlaying(false)
+    }
+    phoneRecordingBeforeRef.current = sceneDocumentRef.current
+    phoneRecordingCameraIdRef.current = activeCamera.id
+    setSuspendedTimelineEntityIds(new Set([activeCamera.id]))
+    if (!phoneCameraControllerRef.current?.startRecording()) {
+      phoneRecordingBeforeRef.current = null
+      phoneRecordingCameraIdRef.current = null
+      setSuspendedTimelineEntityIds(new Set())
+    }
+  }
+
+  const stopPhoneCameraRecording = () => phoneCameraControllerRef.current?.stopRecording()
+
+  const setPhoneCameraKey = (): boolean => {
+    const before = sceneDocumentRef.current
+    const camera = before.cameras.find((item) => item.id === before.activeCameraId)
+    const rotation = phoneCameraControllerRef.current?.getCurrentRotation()
+    const phoneState = phoneCameraControllerRef.current?.currentState
+    if (!camera || phoneState?.status !== 'connected' || phoneState.activeCameraId !== camera.id || !rotation) return false
+    const frame = before.timeline.currentFrame
+    const timeline = upsertTimelineKeyframe(before.timeline, camera.id, 'Camera', 'rotation', frame, rotation, 'linear')
+    const after: SceneDocument = {
+      ...before,
+      metadata: { ...before.metadata, updatedAt: new Date().toISOString() },
+      cameras: before.cameras.map((item) => item.id === camera.id ? { ...item, rotation: [...rotation] } : item),
+      timeline,
+    }
+    recordAction(`Set ${camera.name} Camera Key`, before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
+    applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current })
+    return true
+  }
+
+  useEffect(() => {
+    const controller = new PhoneCameraController({
+      getActiveCamera: () => {
+        const current = sceneDocumentRef.current
+        return current.cameras.find((camera) => camera.id === current.activeCameraId) ?? null
+      },
+      getCurrentFrame: () => sceneDocumentRef.current.timeline.currentFrame,
+      getFrameRate: () => sceneDocumentRef.current.timeline.frameRate,
+      applyLiveRotation: (cameraId, rotation) => phoneCameraLiveApplyRef.current?.(cameraId, rotation),
+      onState: (state) => setPhoneCameraState(state),
+      onRecordSample: recordPhoneCameraSample,
+      onRecordingFinished: finishPhoneCameraRecording,
+      onSetCameraKey: setPhoneCameraKey,
+    })
+    phoneCameraControllerRef.current = controller
+    const current = sceneDocumentRef.current
+    controller.setActiveCamera(current.cameras.find((camera) => camera.id === current.activeCameraId) ?? null)
+    return () => {
+      controller.dispose()
+      phoneCameraControllerRef.current = null
+      phoneRecordingBeforeRef.current = null
+      phoneRecordingCameraIdRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    const current = sceneDocumentRef.current
+    phoneCameraControllerRef.current?.setActiveCamera(current.cameras.find((camera) => camera.id === current.activeCameraId) ?? null)
+  }, [sceneDocument.activeCameraId])
+
+  useEffect(() => {
+    const identity = `${projectDocument.id}:${projectDocument.activeSceneId}`
+    if (phoneProjectIdentityRef.current === null) {
+      phoneProjectIdentityRef.current = identity
+      return
+    }
+    if (phoneProjectIdentityRef.current !== identity) {
+      phoneProjectIdentityRef.current = identity
+      const controller = phoneCameraControllerRef.current
+      controller?.disconnect()
+      const current = sceneDocumentRef.current
+      controller?.setActiveCamera(current.cameras.find((camera) => camera.id === current.activeCameraId) ?? null)
+    }
+  }, [projectDocument.id, projectDocument.activeSceneId])
+
   const addKeyframe = (entityId: string, property: TimelineProperty) => {
     const before = sceneDocumentRef.current
     const actor = before.actors.find((item) => item.id === entityId)
@@ -1787,9 +1911,11 @@ function V2EditorApp() {
         lastTransformDebug={lastTransformDebug}
         selectedFrameGuideId={selectedFrameGuideId}
         thumbnailCaptureRef={thumbnailCaptureRef}
+        phoneCameraLiveApplyRef={phoneCameraLiveApplyRef}
+        phoneCameraLive={phoneCameraState.status === 'connected'}
         shortcutBindings={shortcutBindings}
       />
-      <V2DetailsPanel actor={selectedActor} prop={selectedProp} wall={selectedWall} opening={selectedOpening} sun={selectedSun} camera={selectedCamera} timeline={sceneDocument.timeline} onActorChange={updateActor} onPropChange={updateProp} onCameraChange={updateCamera} onWallChange={updateWall} onOpeningChange={updateOpening} onSunChange={updateSun} onDuplicateEntity={duplicateEntity} onDeleteEntity={deleteEntity} onSetActiveCamera={setActiveCamera} onAddKeyframe={addKeyframe} activeCameraId={sceneDocument.activeCameraId} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={setSelectedFrameGuideId} />
+      <V2DetailsPanel actor={selectedActor} prop={selectedProp} wall={selectedWall} opening={selectedOpening} sun={selectedSun} camera={selectedCamera} timeline={sceneDocument.timeline} onActorChange={updateActor} onPropChange={updateProp} onCameraChange={updateCamera} onWallChange={updateWall} onOpeningChange={updateOpening} onSunChange={updateSun} onDuplicateEntity={duplicateEntity} onDeleteEntity={deleteEntity} onSetActiveCamera={setActiveCamera} onAddKeyframe={addKeyframe} activeCameraId={sceneDocument.activeCameraId} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={setSelectedFrameGuideId} phoneCamera={{ enabled: platformAdapter.kind === 'desktop', state: phoneCameraState, onPair: () => { try { phoneCameraControllerRef.current?.beginPairing() } catch (error) { if (import.meta.env.DEV) console.error('[phone-camera] pairing failed', error) } }, onDisconnect: () => phoneCameraControllerRef.current?.disconnect(), onRecenter: () => phoneCameraControllerRef.current?.recenter(), onSetCameraKey: setPhoneCameraKey, onStartRecording: startPhoneCameraRecording, onStopRecording: stopPhoneCameraRecording }} />
       <div
         className="v2-timeline-resize-handle"
         role="separator"

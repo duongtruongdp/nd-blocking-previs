@@ -17,6 +17,12 @@ export default defineConfig(({ mode }) => {
       outDir: fileURLToPath(new URL('./dist', import.meta.url)),
       sourcemap: mode === 'staging',
       emptyOutDir: true,
+      rollupOptions: {
+        input: {
+          app: fileURLToPath(new URL('./index.html', import.meta.url)),
+          phoneCamera: fileURLToPath(new URL('./phone-camera/index.html', import.meta.url)),
+        },
+      },
     },
   }
 })

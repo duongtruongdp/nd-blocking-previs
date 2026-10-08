@@ -29,6 +29,22 @@ the Project dirty. Saving the Project clears the Project dirty state; exporting
 an individual `.ndscene` does not.
 Scope: Phase 1 foundation, workspace shell, Actor/Prop blocking, locked Actor/Pose system, verified camera data, and serializable Camera objects.
 
+## Phone Camera V1 rotation-controller checkpoint
+
+The accepted Phone Camera V1 adds a separate HTTPS companion entry point and a
+Cloudflare Worker/Durable Object relay without changing the existing
+StageEngine, projection math, Camera View, or Timeline evaluator. The desktop
+creates one short-lived pairing token, the phone sends only normalized
+orientation quaternions, and the desktop applies them through an imperative
+runtime bridge. V1 owns Camera Rotation only. `Set Camera Key` captures the
+current visible rotation at the current frame; `Record Move` writes linear
+rotation keys at the Scene frame rate and commits one history transaction. The
+relay stores no project or pose history.
+
+Camera Position XYZ, ARKit/ARCore, phone video, and native mobile companions
+remain future work. The accepted physical test record is in
+[PHONE_CAMERA_ACCEPTANCE.md](PHONE_CAMERA_ACCEPTANCE.md).
+
 The current root application also exposes the procedural Actor pose preset
 library described in [ACTOR_POSE_PRESETS.md](ACTOR_POSE_PRESETS.md). Pose is a
 static blocking choice, stored as an additive `posePreset` field with Standing

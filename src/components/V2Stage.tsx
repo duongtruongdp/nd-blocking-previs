@@ -61,6 +61,8 @@ type V2StageProps = {
   lastTransformDebug: V2TransformDebugState | null
   selectedFrameGuideId: string | null
   thumbnailCaptureRef: MutableRefObject<(() => Promise<Blob | null>) | null>
+  phoneCameraLiveApplyRef: MutableRefObject<((cameraId: string, rotation: [number, number, number]) => void) | null>
+  phoneCameraLive: boolean
   shortcutBindings: Partial<Record<'select' | 'move' | 'rotate' | 'scale' | 'frameSelected', ShortcutBinding>>
 }
 
@@ -140,7 +142,7 @@ function deliveryAspect(camera: CameraDocument): number {
   return deliveryAspectValue(camera.deliveryAspectRatio, cameraDisplayAspect(camera))
 }
 
-export function V2Stage({ view, actors, props, walls, openings, lights, cameras, activeCameraId, selectedEntityId, tool, onSelectionChange, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onCaptureFrameReady, cameraPreview, onCameraPreviewChange, onOpenCameraView, wallDrawing, wallDrawState, onWallDrawCommit, onWallDrawState, onWallDrawExit, snapPreviewWallId, evaluatedEntities, sceneRevision, isPlaying, transformingEntityId, suspendedTimelineEntityIds, timeline, isScrubbing, lastTransformDebug, selectedFrameGuideId, thumbnailCaptureRef, shortcutBindings }: V2StageProps) {
+export function V2Stage({ view, actors, props, walls, openings, lights, cameras, activeCameraId, selectedEntityId, tool, onSelectionChange, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onCaptureFrameReady, cameraPreview, onCameraPreviewChange, onOpenCameraView, wallDrawing, wallDrawState, onWallDrawCommit, onWallDrawState, onWallDrawExit, snapPreviewWallId, evaluatedEntities, sceneRevision, isPlaying, transformingEntityId, suspendedTimelineEntityIds, timeline, isScrubbing, lastTransformDebug, selectedFrameGuideId, thumbnailCaptureRef, phoneCameraLiveApplyRef, phoneCameraLive, shortcutBindings }: V2StageProps) {
   const stageRef = useRef<HTMLDivElement>(null)
   const engineRef = useRef<StageEngine | null>(null)
   const cameraViewRef = useRef<CameraViewRuntime | null>(null)
@@ -157,11 +159,17 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
   const [captureError, setCaptureError] = useState<string | null>(null)
   const [graphicsContextMessage, setGraphicsContextMessage] = useState<string | null>(null)
   const callbacksRef = useRef({ onSelectionChange, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onWallDrawCommit, onWallDrawState, onWallDrawExit })
+  const phoneCameraLiveRef = useRef(phoneCameraLive)
   const debugEnabled = import.meta.env.DEV && new URLSearchParams(window.location.search).get('interactionDebug') === '1'
 
   useEffect(() => {
     callbacksRef.current = { onSelectionChange, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onWallDrawCommit, onWallDrawState, onWallDrawExit }
   }, [onSelectionChange, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onWallDrawCommit, onWallDrawState, onWallDrawExit])
+
+  useEffect(() => {
+    phoneCameraLiveRef.current = phoneCameraLive
+    if (phoneCameraLive && tool === 'rotate') callbacksRef.current.onToolChange('select')
+  }, [phoneCameraLive, tool])
 
   useEffect(() => {
     const stageElement = stageRef.current
@@ -170,7 +178,7 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
     const cameraRuntimes = cameraRuntimesRef.current
     const scenicRuntimes = scenicRuntimesRef.current
     const engine = new StageEngine(stageElement, {
-      onToolChanged: (nextTool) => callbacksRef.current.onToolChange(nextTool),
+      onToolChanged: (nextTool) => callbacksRef.current.onToolChange(phoneCameraLiveRef.current && nextTool === 'rotate' ? 'select' : nextTool),
       onTransformStart: (change) => callbacksRef.current.onTransformStart(change),
       onTransformEnd: (change) => callbacksRef.current.onTransformEnd(change),
       onTransformPreview: (change) => {
@@ -205,9 +213,16 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
     engine.setTool(initialToolRef.current)
     engine.setSelected(initial.selectedEntityId)
     engineRef.current = engine
+    phoneCameraLiveApplyRef.current = (cameraId, rotation) => {
+      const runtime = cameraRuntimesRef.current.get(cameraId)
+      runtime?.applyLiveRotation(rotation)
+      if (runtime) engine.setEntityTransform(cameraId, { position: runtime.root.position.toArray() as ActorVector3, rotation })
+      cameraViewRef.current?.applyLiveCameraRotation(cameraId, rotation)
+    }
     thumbnailCaptureRef.current = () => cameraViewRef.current?.captureStill({ width: 320, includeGuides: false }) ?? Promise.resolve(null)
     return () => {
       thumbnailCaptureRef.current = null
+      phoneCameraLiveApplyRef.current = null
       removeSelectionListener()
       engineRef.current = null
       cameraViewRef.current = null
@@ -221,7 +236,7 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
       cameraRuntimes.clear()
       scenicRuntimes.clear()
     }
-  }, [])
+  }, [phoneCameraLiveApplyRef, thumbnailCaptureRef])
 
   useEffect(() => {
     const updateSize = () => {
@@ -333,7 +348,7 @@ export function V2Stage({ view, actors, props, walls, openings, lights, cameras,
               {(['select', 'move', 'rotate', 'scale'] as const).map((item) => {
                 const selectedProp = props.find((prop) => prop.id === selectedEntityId)
                 const scaleAvailable = Boolean(selectedProp && ['cube', 'sphere', 'cylinder'].includes(selectedProp.propType ?? selectedProp.shape))
-                return <button className={tool === item ? 'is-active' : ''} key={item} disabled={isPlaying || (item === 'scale' && !scaleAvailable)} onClick={() => onToolChange(item)} type="button">
+                return <button className={tool === item ? 'is-active' : ''} key={item} disabled={isPlaying || (phoneCameraLive && item === 'rotate') || (item === 'scale' && !scaleAvailable)} onClick={() => onToolChange(item)} type="button">
                   <span>{(shortcutBindings[item]?.key ?? ({ select: 'e', move: 'q', rotate: 'r', scale: 's' }[item])).toUpperCase()}</span>{item[0].toUpperCase() + item.slice(1)}
                 </button>
               })}

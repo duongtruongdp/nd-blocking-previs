@@ -64,6 +64,12 @@ export class ProceduralCameraRuntime {
     this.root.updateMatrixWorld(true)
   }
 
+  /** Apply a temporary phone-orientation rotation without changing the saved Camera document. */
+  applyLiveRotation(rotation: [number, number, number]): void {
+    this.root.rotation.set(...rotation)
+    this.root.updateMatrixWorld(true)
+  }
+
   setSelected(selected: boolean): void {
     this.selectionMaterials.forEach((entry) => {
       entry.emissive.set(selected ? SELECTION_COLOR : '#000000')

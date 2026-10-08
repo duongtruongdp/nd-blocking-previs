@@ -1,0 +1,12 @@
+name = "nd-blocking-phone-relay"
+main = "relay/worker.ts"
+compatibility_date = "2026-10-07"
+
+[durable_objects]
+bindings = [
+  { name = "PHONE_SESSIONS", class_name = "PhoneSessionRoom" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PhoneSessionRoom"]

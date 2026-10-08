@@ -1,10 +1,12 @@
-import { useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { ACTOR_POSE_PRESETS, createActorPoseForPreset, normalizeActorPosePreset } from '../core/actorPosePresets'
 import type { ActorDocument, CameraDocument, OpeningDocument, PropDocument, SunDocument, TimelineDocument, TimelineProperty, WallDocument } from '../core/sceneDocument'
 import { CAMERA_DATABASE, CAMERA_MANUFACTURERS, camerasForManufacturer, defaultCaptureModeForDefinition, resolveCameraDefinition } from '../core/cameraDatabase'
 import { activeCaptureAspect, cameraProjectionForDocument } from '../runtime/cameraMath'
 import { degreesToRadians, formatCameraNumber, parseCameraNumber, radiansToDegrees } from '../runtime/cameraInputMath'
 import { FrameGuideInspector } from './FrameGuideInspector'
+import QRCode from 'qrcode'
+import type { PhoneCameraControllerState } from '../phoneCamera/phoneCameraController'
 
 type V2DetailsPanelProps = {
   actor: ActorDocument | null
@@ -27,20 +29,31 @@ type V2DetailsPanelProps = {
   onAddKeyframe: (entityId: string, property: TimelineProperty) => void
   selectedFrameGuideId: string | null
   onFrameGuideSelection: (guideId: string | null) => void
+  phoneCamera: {
+    enabled: boolean
+    state: PhoneCameraControllerState
+    onPair: () => void
+    onDisconnect: () => void
+    onRecenter: () => void
+    onSetCameraKey: () => void
+    onStartRecording: () => void
+    onStopRecording: () => void
+  }
 }
 
-export function V2DetailsPanel({ actor, prop, wall, opening, sun, camera, activeCameraId, timeline, onActorChange, onPropChange, onCameraChange, onWallChange, onOpeningChange, onSunChange, onDuplicateEntity, onDeleteEntity, onSetActiveCamera, onAddKeyframe, selectedFrameGuideId, onFrameGuideSelection }: V2DetailsPanelProps) {
+export function V2DetailsPanel({ actor, prop, wall, opening, sun, camera, activeCameraId, timeline, onActorChange, onPropChange, onCameraChange, onWallChange, onOpeningChange, onSunChange, onDuplicateEntity, onDeleteEntity, onSetActiveCamera, onAddKeyframe, selectedFrameGuideId, onFrameGuideSelection, phoneCamera }: V2DetailsPanelProps) {
   return (
     <aside className="v2-panel v2-details-panel" aria-label="Details">
-      {camera ? <CameraInspector camera={camera} activeCameraId={activeCameraId} timeline={timeline} onCameraChange={onCameraChange} onSetActiveCamera={onSetActiveCamera} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={onFrameGuideSelection} /> : actor ? <ActorInspector actor={actor} timeline={timeline} onActorChange={onActorChange} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} /> : prop ? <PropInspector prop={prop} timeline={timeline} onPropChange={onPropChange} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} /> : wall ? <WallInspector wall={wall} timeline={timeline} onWallChange={onWallChange} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} /> : opening ? <OpeningInspector opening={opening} timeline={timeline} onOpeningChange={onOpeningChange} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} /> : sun ? <SunInspector sun={sun} timeline={timeline} onSunChange={onSunChange} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} /> : <EmptyInspector />}
+      {camera ? <CameraInspector camera={camera} activeCameraId={activeCameraId} timeline={timeline} onCameraChange={onCameraChange} onSetActiveCamera={onSetActiveCamera} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={onFrameGuideSelection} phoneCamera={phoneCamera} /> : actor ? <ActorInspector actor={actor} timeline={timeline} onActorChange={onActorChange} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} /> : prop ? <PropInspector prop={prop} timeline={timeline} onPropChange={onPropChange} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} /> : wall ? <WallInspector wall={wall} timeline={timeline} onWallChange={onWallChange} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} /> : opening ? <OpeningInspector opening={opening} timeline={timeline} onOpeningChange={onOpeningChange} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} /> : sun ? <SunInspector sun={sun} timeline={timeline} onSunChange={onSunChange} onAddKeyframe={onAddKeyframe} onDuplicateEntity={onDuplicateEntity} onDeleteEntity={onDeleteEntity} /> : <EmptyInspector />}
     </aside>
   )
 }
 
-function CameraInspector({ camera, activeCameraId, timeline, onCameraChange, onSetActiveCamera, onAddKeyframe, onDuplicateEntity, onDeleteEntity, selectedFrameGuideId, onFrameGuideSelection }: { camera: CameraDocument; activeCameraId: string | null; timeline: TimelineDocument; onCameraChange: V2DetailsPanelProps['onCameraChange']; onSetActiveCamera: V2DetailsPanelProps['onSetActiveCamera']; onAddKeyframe: V2DetailsPanelProps['onAddKeyframe']; onDuplicateEntity: V2DetailsPanelProps['onDuplicateEntity']; onDeleteEntity: V2DetailsPanelProps['onDeleteEntity']; selectedFrameGuideId: string | null; onFrameGuideSelection: V2DetailsPanelProps['onFrameGuideSelection'] }) {
+function CameraInspector({ camera, activeCameraId, timeline, onCameraChange, onSetActiveCamera, onAddKeyframe, onDuplicateEntity, onDeleteEntity, selectedFrameGuideId, onFrameGuideSelection, phoneCamera }: { camera: CameraDocument; activeCameraId: string | null; timeline: TimelineDocument; onCameraChange: V2DetailsPanelProps['onCameraChange']; onSetActiveCamera: V2DetailsPanelProps['onSetActiveCamera']; onAddKeyframe: V2DetailsPanelProps['onAddKeyframe']; onDuplicateEntity: V2DetailsPanelProps['onDuplicateEntity']; onDeleteEntity: V2DetailsPanelProps['onDeleteEntity']; selectedFrameGuideId: string | null; onFrameGuideSelection: V2DetailsPanelProps['onFrameGuideSelection']; phoneCamera: V2DetailsPanelProps['phoneCamera'] }) {
   const definition = resolveCameraDefinition(camera.cameraDefinitionId)
   const projection = cameraProjectionForDocument(camera)
   const captureMode = projection?.captureMode
+  const phoneLive = phoneCamera.state.status === 'connected' && phoneCamera.state.activeCameraId === camera.id
   return (
     <div className="v2-inspector-content">
       <span className="v2-eyebrow">Camera</span>
@@ -48,6 +61,7 @@ function CameraInspector({ camera, activeCameraId, timeline, onCameraChange, onS
       <span className="v2-eyebrow v2-inspector-subsection">Appearance</span>
       <ColorField key={camera.id} value={camera.proxyColor} onCommit={(value) => onCameraChange(camera.id, { proxyColor: value })} />
       <button className={`v2-inspector-action${activeCameraId === camera.id ? ' is-active' : ''}`} onClick={() => onSetActiveCamera(camera.id)} disabled={activeCameraId === camera.id} type="button">{activeCameraId === camera.id ? 'Active Camera' : 'Make Active Camera'}</button>
+      <PhoneCameraPanel camera={camera} activeCameraId={activeCameraId} phoneCamera={phoneCamera} />
       <div className="v2-inspector-divider" />
       <span className="v2-eyebrow">Manufacturer</span>
       <select className="v2-inspector-select" value={definition?.manufacturer ?? CAMERA_MANUFACTURERS[0]} onChange={(event) => {
@@ -102,7 +116,7 @@ function CameraInspector({ camera, activeCameraId, timeline, onCameraChange, onS
       </div>
       <span className="v2-eyebrow v2-inspector-field-label v2-inspector-keyframe-label">Orientation <KeyframeButton active={hasTimelineKeyframe(timeline, camera.id, 'rotation')} hasTrack={hasTimelineTrack(timeline, camera.id, 'rotation')} onClick={() => onAddKeyframe(camera.id, 'rotation')} label="Add Camera Rotation keyframe" /></span>
       <div className="v2-editable-vector">
-        {(['Pitch', 'Heading', 'Roll'] as const).map((label, index) => <NumericCameraInput key={label} label={label} value={radiansToDegrees(camera.rotation[index])} unit="°" min={-360} max={360} step={0.1} onCommit={(value) => {
+        {(['Pitch', 'Heading', 'Roll'] as const).map((label, index) => <NumericCameraInput key={label} label={label} value={radiansToDegrees(camera.rotation[index])} unit="°" min={-360} max={360} step={0.1} disabled={phoneLive} onCommit={(value) => {
           const rotation = [...camera.rotation] as [number, number, number]
           rotation[index] = degreesToRadians(value)
           onCameraChange(camera.id, { rotation })
@@ -112,6 +126,35 @@ function CameraInspector({ camera, activeCameraId, timeline, onCameraChange, onS
       <p className="v2-inspector-note">{definition?.manufacturer} {definition?.model}. Capture geometry is resolved from the selected production mode.</p>
     </div>
   )
+}
+
+function PhoneCameraPanel({ camera, activeCameraId, phoneCamera }: { camera: CameraDocument; activeCameraId: string | null; phoneCamera: V2DetailsPanelProps['phoneCamera'] }) {
+  const [qrState, setQrState] = useState<{ source: string | null; url: string | null }>({ source: null, url: null })
+  const isActive = activeCameraId === camera.id
+  const state = phoneCamera.state
+  useEffect(() => {
+    let active = true
+    if (!state.pairingUrl) return () => { active = false }
+    void QRCode.toDataURL(state.pairingUrl, { width: 190, margin: 1, color: { dark: '#1a2230', light: '#ffffff' } }).then((url) => { if (active) setQrState({ source: state.pairingUrl, url }) }).catch(() => { if (active) setQrState({ source: state.pairingUrl, url: null }) })
+    return () => { active = false }
+  }, [state.pairingUrl])
+  return <section className="v2-phone-camera-panel" aria-label="Phone Camera">
+    <div className="v2-phone-camera-heading"><span className="v2-eyebrow">Phone Camera</span>{state.status === 'connected' ? <span className="v2-phone-camera-status is-connected">LIVE</span> : null}</div>
+    {!phoneCamera.enabled ? <p className="v2-phone-camera-copy">Phone Camera control is available in the desktop app.</p> : state.status === 'connected' && state.activeCameraId === camera.id ? <>
+      <p className="v2-phone-camera-copy">{state.orientation === 'portrait' ? 'Rotate your phone sideways to continue Camera control.' : state.requiresRecenter ? 'Recenter after changing phone orientation to resume Camera control.' : 'The active Camera is receiving orientation from the paired phone.'}</p>
+      <div className="v2-phone-camera-actions"><button className="v2-inspector-action" onClick={phoneCamera.onRecenter} type="button">Recenter</button><button className="v2-inspector-action" onClick={phoneCamera.onSetCameraKey} type="button">Set Camera Key</button>{state.isRecording ? <button className="v2-inspector-action is-danger" onClick={phoneCamera.onStopRecording} type="button">Stop Recording</button> : <button className="v2-inspector-action" onClick={phoneCamera.onStartRecording} type="button">Record Move</button>}<button className="v2-inspector-action" onClick={phoneCamera.onDisconnect} type="button">Disconnect</button></div>
+    </> : state.pairingUrl ? <>
+      <p className="v2-phone-camera-copy">Scan this QR code with the phone you want to use as a Camera controller.</p>
+      {qrState.source === state.pairingUrl && qrState.url ? <img className="v2-phone-camera-qr" src={qrState.url} alt="Phone Camera pairing QR code" /> : <span className="v2-phone-camera-copy">Preparing pairing code…</span>}
+      <span className="v2-phone-camera-status">{state.status === 'error' ? 'Relay connection error.' : 'Waiting for phone…'}</span>
+      <button className="v2-inspector-action" onClick={phoneCamera.onDisconnect} type="button">Cancel Pairing</button>
+    </> : <>
+      <p className="v2-phone-camera-copy">Use a phone as a temporary orientation controller for the active Camera.</p>
+      {state.message ? <span className="v2-phone-camera-status">{state.message}</span> : null}
+      <button className="v2-inspector-action" onClick={phoneCamera.onPair} disabled={!isActive} type="button">{isActive ? 'Pair Phone Camera' : 'Make Camera Active First'}</button>
+    </>}
+    {state.status === 'connected' && state.activeCameraId !== camera.id ? <span className="v2-phone-camera-status">Live control is assigned to the active Camera.</span> : null}
+  </section>
 }
 
 function ActorInspector({ actor, timeline, onActorChange, onAddKeyframe, onDuplicateEntity, onDeleteEntity }: { actor: ActorDocument; timeline: TimelineDocument; onActorChange: V2DetailsPanelProps['onActorChange']; onAddKeyframe: V2DetailsPanelProps['onAddKeyframe']; onDuplicateEntity: V2DetailsPanelProps['onDuplicateEntity']; onDeleteEntity: V2DetailsPanelProps['onDeleteEntity'] }) {
@@ -182,7 +225,7 @@ function ColorField({ value, onCommit }: { value: string; onCommit: (value: stri
   return <label className="v2-color-field"><span>Color</span><span><input type="color" value={/^#[0-9a-f]{6}$/i.test(value) ? value : '#808080'} onChange={(event) => commit(event.target.value)} /><input type="text" value={draft} onChange={(event) => setDraft(event.target.value)} onBlur={() => commit(draft)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commit(draft) } }} /></span></label>
 }
 
-function NumericCameraInput({ label, value, unit, min, max, step, keyframe, onCommit }: { label: string; value: number; unit: string; min: number; max: number; step: number; keyframe?: { active: boolean; hasTrack: boolean; onClick: () => void }; onCommit: (value: number) => void }) {
+function NumericCameraInput({ label, value, unit, min, max, step, keyframe, disabled = false, onCommit }: { label: string; value: number; unit: string; min: number; max: number; step: number; keyframe?: { active: boolean; hasTrack: boolean; onClick: () => void }; disabled?: boolean; onCommit: (value: number) => void }) {
   const [draft, setDraft] = useState(() => formatCameraNumber(value))
   const [editing, setEditing] = useState(false)
 
@@ -211,7 +254,7 @@ function NumericCameraInput({ label, value, unit, min, max, step, keyframe, onCo
     }
   }
 
-  return <label className="v2-editable-number"><span className="v2-inspector-keyframe-label">{label}{keyframe ? <KeyframeButton active={keyframe.active} hasTrack={keyframe.hasTrack} onClick={keyframe.onClick} label={`Add ${label} keyframe`} /> : null}</span><span className="v2-editable-number-field"><input type="number" inputMode="decimal" step={step} min={min} max={max} value={editing ? draft : formatCameraNumber(value)} onFocus={() => { setDraft(formatCameraNumber(value)); setEditing(true) }} onChange={(event) => { setEditing(true); setDraft(event.target.value) }} onBlur={commit} onKeyDown={handleKeyDown} /><small>{unit}</small></span></label>
+  return <label className="v2-editable-number"><span className="v2-inspector-keyframe-label">{label}{keyframe ? <KeyframeButton active={keyframe.active} hasTrack={keyframe.hasTrack} onClick={keyframe.onClick} label={`Add ${label} keyframe`} /> : null}</span><span className="v2-editable-number-field"><input disabled={disabled} type="number" inputMode="decimal" step={step} min={min} max={max} value={editing ? draft : formatCameraNumber(value)} onFocus={() => { setDraft(formatCameraNumber(value)); setEditing(true) }} onChange={(event) => { setEditing(true); setDraft(event.target.value) }} onBlur={commit} onKeyDown={handleKeyDown} /><small>{unit}</small></span></label>
 }
 
 function hasTimelineKeyframe(timeline: TimelineDocument, entityId: string, property: TimelineProperty): boolean {

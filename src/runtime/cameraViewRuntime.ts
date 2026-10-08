@@ -140,6 +140,14 @@ export class CameraViewRuntime {
     if (this.displayMode !== 'hidden') this.render()
   }
 
+  /** Keep Camera View aligned with the temporary desktop Camera orientation. */
+  applyLiveCameraRotation(cameraId: string, rotation: [number, number, number]): void {
+    if (!this.cameraRuntime || this.currentCamera?.id !== cameraId) return
+    this.cameraRuntime.applyLiveRotation(rotation)
+    this.currentCamera = { ...this.currentCamera, rotation: [...rotation] }
+    if (this.displayMode !== 'hidden') this.render()
+  }
+
   async captureStill(options: StillCaptureOptions): Promise<Blob | null> {
     const camera = this.currentCamera
     const projection = camera ? cameraProjectionForDocument(camera) : null

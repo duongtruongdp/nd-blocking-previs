@@ -119,6 +119,17 @@ describe('V2 timeline foundation', () => {
     expect(timelineEasingMode(timeline.tracks[0].keyframes[0])).toBe('easeInOut')
   })
 
+  it('supports a manual Camera Rotation key at the current frame without moving the playhead', () => {
+    const camera = createCameraDocument('camera-01', 'Camera 01', [0, 1, 5], [0, 0, 0], CAMERA_DATABASE[0].id, CAMERA_DATABASE[0].captureModes[0].id)
+    let document = { ...createEmptySceneDocument(), cameras: [camera], timeline: { ...createEmptySceneDocument().timeline, currentFrame: 42 } }
+    document = { ...document, timeline: upsertTimelineKeyframe(document.timeline, camera.id, 'Camera', 'rotation', document.timeline.currentFrame, [0.1, 0.2, 0.3], 'linear') }
+    document = { ...document, timeline: upsertTimelineKeyframe(document.timeline, camera.id, 'Camera', 'rotation', document.timeline.currentFrame, [0.4, 0.5, 0.6], 'linear') }
+    const track = document.timeline.tracks.find((item) => item.id === `${camera.id}:rotation`)
+    expect(track?.keyframes).toHaveLength(1)
+    expect(track?.keyframes[0]).toMatchObject({ frame: 42, value: [0.4, 0.5, 0.6], interpolation: 'linear' })
+    expect(document.timeline.currentFrame).toBe(42)
+  })
+
   it('keeps Delivery Frame separate from physical FOV during focal animation', () => {
     const definition = CAMERA_DATABASE[0]
     const camera = createCameraDocument('camera-01', 'Camera 01', [0, 1, 5], [0, 0, 0], definition.id, definition.captureModes[0].id)

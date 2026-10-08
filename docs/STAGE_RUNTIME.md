@@ -164,6 +164,18 @@ runtime keeps the camera document, proxy, production camera, and active-camera
 selection as separate concerns so multiple Cameras can coexist without shared
 transform or projection state.
 
+### Phone Camera live control
+
+Phone Camera is an external, temporary orientation source. The desktop runtime
+keeps the phone session and latest quaternion outside the StageEngine render
+loop, then applies a live Euler presentation to the existing Camera proxy and
+isolated Camera View. This bridge is intentionally not a second Camera runtime:
+it does not change projection, FOV, Frame Guides, navigation, or saved Camera
+data during live sensor control. `Set Camera Key` is an explicit current-frame
+mutation; `Record Move` is stopped and committed as Timeline rotation keys.
+Pairing state and phone orientation are never serialized. V1 does not own
+Camera Position XYZ.
+
 ### V2.7A capture and anamorphic projection
 
 The capture database is a per-camera, per-image-window dataset with official

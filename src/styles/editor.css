@@ -272,6 +272,14 @@ h2 { margin: 3px 0 0; font-size: 16px; letter-spacing: -0.02em; }
 .v2-readonly-value { display: block; padding: 9px 10px; border-radius: 8px; background: var(--surface-inset); color: var(--text-secondary); box-shadow: var(--shadow-inset); font-variant-numeric: tabular-nums; }
 .v2-readonly-value small { color: var(--text-muted); }
 .v2-inspector-note { margin: 13px 0 0; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+.v2-phone-camera-panel { display: grid; gap: 8px; margin: 10px 0 4px; padding: 10px; border: 1px solid rgba(var(--color-primary-hover-rgb), .22); border-radius: 10px; background: var(--surface-inset); }
+.v2-phone-camera-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.v2-phone-camera-copy { margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.4; }
+.v2-phone-camera-status { color: var(--text-muted); font-size: 10px; }
+.v2-phone-camera-status.is-connected { color: var(--color-primary-strong); font-weight: 800; letter-spacing: .08em; }
+.v2-phone-camera-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.v2-phone-camera-actions .v2-inspector-action { flex: 1 1 auto; }
+.v2-phone-camera-qr { width: 190px; height: 190px; justify-self: center; border-radius: 6px; background: #fff; }
 .v2-inspector-subsection { margin-top: 8px; }
 .v2-inspector-field-label { margin-top: 2px; letter-spacing: .08em; }
 .v2-inspector-action { padding: 8px 10px; border: 1px solid rgba(var(--color-primary-hover-rgb), .28); border-radius: 8px; background: var(--surface-inset); color: var(--color-primary-strong); cursor: pointer; font-size: 11px; font-weight: 700; }

@@ -1,6 +1,9 @@
-import { useState } from 'react'
-import type { ActorDocument, CameraDocument, OpeningDocument, PropDocument, SunDocument, WallDocument } from '../core/sceneDocument'
+import { useEffect, useRef, useState, type MouseEvent } from 'react'
+import type { ActorDocument, CameraDocument, OpeningDocument, PropDocument, RationalFrameRate, SunDocument, WallDocument } from '../core/sceneDocument'
 import type { ProjectSceneEntry } from '../core/projectDocument'
+import type { ShotDocument } from '../core/shotDocument'
+import { shotDurationFrames } from '../core/shotDocument'
+import { frameToTimecode, timecodeToFrame } from '../timeline/timelineMath'
 
 type V2ScenePanelProps = {
   scenes: readonly ProjectSceneEntry[]
@@ -12,7 +15,7 @@ type V2ScenePanelProps = {
   lights: readonly SunDocument[]
   cameras: readonly CameraDocument[]
   activeCameraId: string | null
-  selectedEntityId: string | null
+  selectedEntityIds: readonly string[]
   onSelectScene: (sceneId: string) => void
   onAddScene: () => void
   onRenameScene: (sceneId: string, name: string) => void
@@ -27,12 +30,53 @@ type V2ScenePanelProps = {
   onAddSun: () => void
   onAddCamera: () => void
   onSetActiveCamera: (cameraId: string) => void
-  onSelectEntity: (entityId: string) => void
+  onSelectEntity: (entityId: string, additive?: boolean) => void
+  onBeginEntityRename: (entityId: string) => void
+  shots: readonly ShotDocument[]
+  activeShotId: string | null
+  onCreateShot: () => void
+  onSelectShot: (shotId: string) => void
+  onRenameShot: (shotId: string, name: string) => void
+  onDuplicateShot: (shotId: string) => void
+  onDeleteShot: (shotId: string) => void
+  onMoveShot: (shotId: string, direction: -1 | 1) => void
+  onCaptureShotThumbnail: (shotId: string) => void
+  onShotNotesChange: (shotId: string, notes: string) => void
+  onShotRangeChange: (shotId: string, startFrame: number, endFrame: number) => void
+  onPreviewShot: (shotId: string) => void
+  onAddShotToMaster: (shotId: string) => void
 }
 
-export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, openings, lights, cameras, activeCameraId, selectedEntityId, onSelectScene, onAddScene, onRenameScene, onDuplicateScene, onDeleteScene, onImportScene, onExportScene, onAddActor, onAddProp, onAddWall, onAddOpening, onAddSun, onAddCamera, onSetActiveCamera, onSelectEntity }: V2ScenePanelProps) {
+export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, openings, lights, cameras, activeCameraId, selectedEntityIds, onSelectScene, onAddScene, onRenameScene, onDuplicateScene, onDeleteScene, onImportScene, onExportScene, onAddActor, onAddProp, onAddWall, onAddOpening, onAddSun, onAddCamera, onSetActiveCamera, onSelectEntity, onBeginEntityRename, shots, activeShotId, onCreateShot, onSelectShot, onRenameShot, onDuplicateShot, onDeleteShot, onMoveShot, onCaptureShotThumbnail, onShotNotesChange, onShotRangeChange, onPreviewShot, onAddShotToMaster }: V2ScenePanelProps) {
   const [addOpen, setAddOpen] = useState(false)
   const [sceneMenuId, setSceneMenuId] = useState<string | null>(null)
+  const [shotMenuId, setShotMenuId] = useState<string | null>(null)
+  const [editingShotId, setEditingShotId] = useState<string | null>(null)
+  const [editingShotName, setEditingShotName] = useState('')
+  const [entityMenu, setEntityMenu] = useState<{ entityId: string; x: number; y: number } | null>(null)
+
+  useEffect(() => {
+    if (!entityMenu) return
+    const dismiss = (event: globalThis.PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest('.v2-entity-context-menu')) return
+      setEntityMenu(null)
+    }
+    window.addEventListener('pointerdown', dismiss)
+    return () => window.removeEventListener('pointerdown', dismiss)
+  }, [entityMenu])
+
+  const selectEntity = (entityId: string, additive = false) => {
+    setEntityMenu(null)
+    onSelectEntity(entityId, additive)
+  }
+
+  const openEntityMenu = (event: MouseEvent, entityId: string) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (selectedEntityIds.length > 1 && selectedEntityIds.includes(entityId)) return
+    onSelectEntity(entityId)
+    setEntityMenu({ entityId, x: event.clientX, y: event.clientY })
+  }
 
   const renameScene = (scene: ProjectSceneEntry) => {
     const name = window.prompt('Scene name', scene.name)
@@ -43,6 +87,17 @@ export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, open
   const addActor = () => { onAddActor(); setAddOpen(false) }
   const addCamera = () => { onAddCamera(); setAddOpen(false) }
   const addProp = (propType: NonNullable<PropDocument['propType']>) => { onAddProp(propType); setAddOpen(false) }
+  const activeShot = shots.find((shot) => shot.id === activeShotId) ?? null
+  const beginShotRename = (shot: ShotDocument) => {
+    setShotMenuId(null)
+    setEditingShotId(shot.id)
+    setEditingShotName(shot.name)
+  }
+  const finishShotRename = () => {
+    if (!editingShotId) return
+    onRenameShot(editingShotId, editingShotName)
+    setEditingShotId(null)
+  }
 
   return (
     <aside className="v2-panel v2-scene-panel" aria-label="Scene">
@@ -52,6 +107,7 @@ export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, open
           <button className="v2-add-button" onClick={() => setAddOpen((open) => !open)} type="button">+ Add</button>
           {addOpen ? <div className="v2-add-menu">
             <AddMenuItem kind="scene" label="Scene" onClick={() => { onAddScene(); setAddOpen(false) }} />
+            <AddMenuItem kind="shot" label="Shot" onClick={() => { onCreateShot(); setAddOpen(false) }} />
             <AddMenuItem kind="actor" label="Actor" onClick={addActor} />
             <AddMenuItem kind="camera" label="Camera" onClick={addCamera} />
             <span className="v2-add-menu-label">Props</span>
@@ -76,18 +132,65 @@ export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, open
         </div>
         <div className="v2-scene-actions"><button className="v2-small-action" onClick={onAddScene} type="button">+ Add Scene</button><button className="v2-small-action" onClick={onImportScene} type="button">Import Scene</button><button className="v2-small-action" onClick={() => onExportScene()} type="button">Export Scene</button></div>
       </section>
+      <section className="v2-shot-section">
+        <div className="v2-section-title"><span>Shots</span><span className="v2-shot-heading-actions"><span className="v2-count">{shots.length}</span><button className="v2-inline-add" onClick={onCreateShot} type="button" title="Create Shot">+</button></span></div>
+        {shots.length === 0 ? <p>No Shots yet. Create one from the active Camera.</p> : <div className="v2-shot-list">
+          {shots.map((shot, index) => {
+            const shotScene = scenes.find((scene) => scene.id === shot.sceneId)?.scene
+            const shotCamera = shotScene?.cameras.find((camera) => camera.id === shot.cameraId)
+            const cameraLabel = shotCamera ? `${shotCamera.name} · ${Math.round(shotCamera.focalLengthMm)}mm` : 'Missing Camera'
+            const rate = shotScene?.timeline.frameRate ?? { numerator: 24, denominator: 1 }
+            return <div className={`v2-shot-row${shot.id === activeShotId ? ' is-active' : ''}`} key={shot.id}>
+              <button className="v2-shot-select" onClick={() => onSelectShot(shot.id)} type="button">
+                {shot.thumbnail ? <img src={shot.thumbnail.dataUrl} alt="" /> : <span className="v2-shot-thumb-placeholder">{String(index + 1).padStart(2, '0')}</span>}
+                <span className="v2-shot-copy"><strong>{editingShotId === shot.id ? <input autoFocus value={editingShotName} onChange={(event) => setEditingShotName(event.target.value)} onBlur={finishShotRename} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); finishShotRename() } if (event.key === 'Escape') setEditingShotId(null) }} aria-label="Shot name" /> : shot.name}</strong><small>{cameraLabel} · {frameToTimecode(shotDurationFrames(shot), rate)}</small></span>
+              </button>
+              <button className="v2-scene-menu-button" aria-label={`Actions for ${shot.name}`} aria-expanded={shotMenuId === shot.id} onClick={() => setShotMenuId((current) => current === shot.id ? null : shot.id)} type="button">•••</button>
+              {shotMenuId === shot.id ? <div className="v2-scene-row-menu v2-shot-row-menu"><button onClick={() => { onAddShotToMaster(shot.id); setShotMenuId(null) }} type="button">Add to Master</button><button onClick={() => beginShotRename(shot)} type="button">Rename</button><button onClick={() => { onDuplicateShot(shot.id); setShotMenuId(null) }} type="button">Duplicate</button><button onClick={() => { onMoveShot(shot.id, -1); setShotMenuId(null) }} disabled={index === 0} type="button">Move Up</button><button onClick={() => { onMoveShot(shot.id, 1); setShotMenuId(null) }} disabled={index === shots.length - 1} type="button">Move Down</button><button onClick={() => { onCaptureShotThumbnail(shot.id); setShotMenuId(null) }} type="button">Capture Thumbnail</button><button className="is-danger" onClick={() => { onDeleteShot(shot.id); setShotMenuId(null) }} type="button">Delete</button></div> : null}
+            </div>
+          })}
+        </div>}
+        {activeShot ? <div className="v2-shot-details">
+          <div className="v2-shot-detail-title"><span>{activeShot.name}</span><small>{scenes.find((scene) => scene.id === activeShot.sceneId)?.name ?? 'Missing Scene'}</small></div>
+          {(() => {
+            const activeScene = scenes.find((scene) => scene.id === activeShot.sceneId)?.scene
+            const rate = activeScene?.timeline.frameRate ?? { numerator: 24, denominator: 1 }
+            const timelineStart = activeScene?.timeline.startFrame ?? 0
+            const timelineEnd = activeScene?.timeline.endFrame ?? Number.MAX_SAFE_INTEGER
+            return <div className="v2-shot-range"><ShotTimecodeField label="Start" value={activeShot.startFrame} rate={rate} minFrame={timelineStart} maxFrame={Math.min(timelineEnd - 1, activeShot.endFrame - 1)} onCommit={(frame) => onShotRangeChange(activeShot.id, frame, activeShot.endFrame)} /><ShotTimecodeField label="End" value={activeShot.endFrame} rate={rate} minFrame={activeShot.startFrame + 1} maxFrame={timelineEnd} onCommit={(frame) => onShotRangeChange(activeShot.id, activeShot.startFrame, frame)} /></div>
+          })()}
+          <textarea value={activeShot.notes} onChange={(event) => onShotNotesChange(activeShot.id, event.target.value)} placeholder="Shot notes" aria-label="Shot notes" />
+          <div className="v2-shot-actions"><button className="v2-small-action" onClick={() => onPreviewShot(activeShot.id)} type="button">Preview Shot</button><button className="v2-small-action" onClick={() => onCaptureShotThumbnail(activeShot.id)} type="button">Capture Thumbnail</button></div>
+        </div> : null}
+      </section>
       <div className="v2-scene-sections">
-        <section className="v2-scene-section"><div className="v2-section-title"><span>Actors</span><span className="v2-count">{actors.length}</span></div>{actors.length === 0 ? <p>No actors in this Scene</p> : <div className="v2-entity-list">{actors.map((actor) => <button className={`v2-entity-row${selectedEntityId === actor.id ? ' is-selected' : ''}`} key={actor.id} onClick={() => onSelectEntity(actor.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: actor.appearance.primaryColor }} /><span>{actor.name}</span></button>)}</div>}</section>
-        <section className="v2-scene-section"><div className="v2-section-title"><span>Props</span><span className="v2-count">{props.length}</span></div><div className="v2-entity-list">{props.map((entity) => <button className={`v2-entity-row${selectedEntityId === entity.id ? ' is-selected' : ''}`} key={entity.id} onClick={() => onSelectEntity(entity.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: entity.primaryColor }} /><span>{entity.name}</span><small>{entity.propType ?? entity.shape}</small></button>)}</div></section>
-        <section className="v2-scene-section"><div className="v2-section-title"><span>Architecture</span><span className="v2-count">{walls.length + openings.length}</span></div><div className="v2-entity-list">{[...walls, ...openings].map((entity) => <button className={`v2-entity-row${selectedEntityId === entity.id ? ' is-selected' : ''}`} key={entity.id} onClick={() => onSelectEntity(entity.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: entity.primaryColor }} /><span>{entity.name}</span><small>{entity.type === 'Wall' ? 'Wall' : entity.openingType}</small></button>)}</div></section>
-        <section className="v2-scene-section"><div className="v2-section-title"><span>Cameras</span><span className="v2-count">{cameras.length}</span></div>{cameras.length === 0 ? <p>No cameras in this Scene</p> : <div className="v2-entity-list">{cameras.map((camera) => <div className={`v2-camera-row${selectedEntityId === camera.id ? ' is-selected' : ''}`} key={camera.id}><button className="v2-camera-select" onClick={() => onSelectEntity(camera.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: camera.proxyColor }} /><span>{camera.name}</span></button><button className={`v2-camera-active${activeCameraId === camera.id ? ' is-active' : ''}`} onClick={() => onSetActiveCamera(camera.id)} type="button" title={activeCameraId === camera.id ? 'Active Camera' : 'Set Active Camera'}>{activeCameraId === camera.id ? 'A' : '·'}</button></div>)}</div>}</section>
-        <section className="v2-scene-section"><div className="v2-section-title"><span>Lights</span><span className="v2-count">{lights.length}</span></div>{lights.length === 0 ? <p>No lights in this Scene</p> : <div className="v2-entity-list">{lights.map((sun) => <button className={`v2-entity-row${selectedEntityId === sun.id ? ' is-selected' : ''}`} key={sun.id} onClick={() => onSelectEntity(sun.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: sun.color }} /><span>{sun.name}</span><small>Sun</small></button>)}</div>}</section>
+        <section className="v2-scene-section"><div className="v2-section-title"><span>Actors</span><span className="v2-count">{actors.length}</span></div>{actors.length === 0 ? <p>No actors in this Scene</p> : <div className="v2-entity-list">{actors.map((actor) => <button className={`v2-entity-row${selectedEntityIds.includes(actor.id) ? ' is-selected' : ''}`} key={actor.id} onClick={(event) => selectEntity(actor.id, event.shiftKey)} onContextMenu={(event) => openEntityMenu(event, actor.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: actor.appearance.primaryColor }} /><span>{actor.name}</span></button>)}</div>}</section>
+        <section className="v2-scene-section"><div className="v2-section-title"><span>Props</span><span className="v2-count">{props.length}</span></div><div className="v2-entity-list">{props.map((entity) => <button className={`v2-entity-row${selectedEntityIds.includes(entity.id) ? ' is-selected' : ''}`} key={entity.id} onClick={(event) => selectEntity(entity.id, event.shiftKey)} onContextMenu={(event) => openEntityMenu(event, entity.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: entity.primaryColor }} /><span>{entity.name}</span><small>{entity.propType ?? entity.shape}</small></button>)}</div></section>
+        <section className="v2-scene-section"><div className="v2-section-title"><span>Architecture</span><span className="v2-count">{walls.length + openings.length}</span></div><div className="v2-entity-list">{[...walls, ...openings].map((entity) => <button className={`v2-entity-row${selectedEntityIds.includes(entity.id) ? ' is-selected' : ''}`} key={entity.id} onClick={(event) => selectEntity(entity.id, event.shiftKey)} onContextMenu={(event) => openEntityMenu(event, entity.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: entity.primaryColor }} /><span>{entity.name}</span><small>{entity.type === 'Wall' ? 'Wall' : entity.openingType}</small></button>)}</div></section>
+        <section className="v2-scene-section"><div className="v2-section-title"><span>Cameras</span><span className="v2-count">{cameras.length}</span></div>{cameras.length === 0 ? <p>No cameras in this Scene</p> : <div className="v2-entity-list">{cameras.map((camera) => <div className={`v2-camera-row${selectedEntityIds.includes(camera.id) ? ' is-selected' : ''}`} key={camera.id} onContextMenu={(event) => openEntityMenu(event, camera.id)}><button className="v2-camera-select" onClick={(event) => selectEntity(camera.id, event.shiftKey)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: camera.proxyColor }} /><span>{camera.name}</span></button><button className={`v2-camera-active${activeCameraId === camera.id ? ' is-active' : ''}`} onClick={() => onSetActiveCamera(camera.id)} type="button" title={activeCameraId === camera.id ? 'Active Camera' : 'Set Active Camera'}>{activeCameraId === camera.id ? 'A' : '·'}</button></div>)}</div>}</section>
+        <section className="v2-scene-section"><div className="v2-section-title"><span>Lights</span><span className="v2-count">{lights.length}</span></div>{lights.length === 0 ? <p>No lights in this Scene</p> : <div className="v2-entity-list">{lights.map((sun) => <button className={`v2-entity-row${selectedEntityIds.includes(sun.id) ? ' is-selected' : ''}`} key={sun.id} onClick={(event) => selectEntity(sun.id, event.shiftKey)} onContextMenu={(event) => openEntityMenu(event, sun.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: sun.color }} /><span>{sun.name}</span><small>Sun</small></button>)}</div>}</section>
       </div>
+      {entityMenu ? <div className="v2-entity-context-menu" role="menu" style={{ left: entityMenu.x, top: entityMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { onBeginEntityRename(entityMenu.entityId); setEntityMenu(null) }} type="button">Rename</button></div> : null}
     </aside>
   )
 }
 
-type MenuIconKind = 'scene' | 'actor' | 'camera' | 'cube' | 'sphere' | 'cylinder' | 'table' | 'chair' | 'bicycle' | 'motorbike' | 'car' | 'wall' | 'door' | 'window' | 'sun'
+function ShotTimecodeField({ label, value, rate, minFrame, maxFrame, onCommit }: { label: string; value: number; rate: RationalFrameRate; minFrame: number; maxFrame: number; onCommit: (frame: number) => void }) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (inputRef.current && document.activeElement !== inputRef.current) inputRef.current.value = frameToTimecode(value, rate)
+  }, [value, rate])
+  const commit = () => {
+    const input = inputRef.current
+    if (!input) return
+    const parsed = timecodeToFrame(input.value, rate)
+    if (parsed !== null && parsed >= minFrame && parsed <= maxFrame) onCommit(parsed)
+    else input.value = frameToTimecode(value, rate)
+  }
+  return <label>{label} <input ref={inputRef} type="text" inputMode="numeric" defaultValue={frameToTimecode(value, rate)} aria-label={`Shot ${label} timecode`} onBlur={commit} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commit(); inputRef.current?.blur() } if (event.key === 'Escape' && inputRef.current) inputRef.current.value = frameToTimecode(value, rate) }} /></label>
+}
+
+type MenuIconKind = 'scene' | 'shot' | 'actor' | 'camera' | 'cube' | 'sphere' | 'cylinder' | 'table' | 'chair' | 'bicycle' | 'motorbike' | 'car' | 'wall' | 'door' | 'window' | 'sun'
 
 function AddMenuItem({ kind, label, onClick }: { kind: MenuIconKind; label: string; onClick: () => void }) {
   return <button onClick={onClick} type="button"><MenuIcon kind={kind} /><span>{label}</span></button>
@@ -96,6 +199,7 @@ function AddMenuItem({ kind, label, onClick }: { kind: MenuIconKind; label: stri
 function MenuIcon({ kind }: { kind: MenuIconKind }) {
   const paths: Record<MenuIconKind, string> = {
     scene: 'M3 4h18v16H3z M7 8h10 M7 12h10 M7 16h6',
+    shot: 'M4 6h16v12H4z M7 9h5 M7 12h10 M7 15h6',
     actor: 'M12 4a3 3 0 1 0 0 6a3 3 0 0 0 0-6 M6 20c.5-4 2.5-6 6-6s5.5 2 6 6',
     camera: 'M4 8h4l1.5-2h5L16 8h4v10H4z M12 10a3 3 0 1 0 0 6a3 3 0 0 0 0-6',
     cube: 'm12 3 8 4.5v9L12 21l-8-4.5v-9z M4 7.5l8 4.5 8-4.5 M12 12v9',

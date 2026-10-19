@@ -26,6 +26,26 @@ describe('native FFmpeg export arguments', () => {
     expect(qualityArguments('small', 'h264_videotoolbox')).toContain('4M')
   })
 
+  it('trims Master Music into the render duration and preserves output silence', () => {
+    const args = buildNativeFfmpegArgs({
+      inputPattern: '/tmp/master/frame_%06d.png',
+      outputPath: '/tmp/master/output.mp4',
+      width: 1920,
+      height: 1080,
+      frameRate: { numerator: 24, denominator: 1 },
+      quality: 'standard',
+      encoder: 'libx264',
+      totalDurationSeconds: 2,
+      music: { inputPath: '/tmp/music.wav', sourceStartSeconds: 3, outputStartSeconds: 0.5, durationSeconds: 1.25 },
+    })
+    expect(args).toContain('/tmp/music.wav')
+    expect(args).toContain('-filter_complex')
+    expect(args.join(' ')).toContain('atrim=duration=1.25')
+    expect(args).toContain('-t')
+    expect(args).toContain('2')
+    expect(args).not.toContain('-an')
+  })
+
   it('converts FFmpeg progress to bounded encoded frames', () => {
     const rate = { numerator: 24000, denominator: 1001 }
     expect(encodedFrameFromProgress('out_time_ms=1001000', rate, 24)).toBe(24)

@@ -78,10 +78,18 @@ export class PhoneSessionRoom {
     try { message = JSON.parse(raw) as Record<string, unknown> } catch { return this.reject(socket, 'invalid_json') }
     if (message.v !== RELAY_PROTOCOL_VERSION || message.session !== attachment.session || typeof message.type !== 'string') return this.reject(socket, 'invalid_protocol')
     if (message.type === 'hello' && message.role !== attachment.role) return this.reject(socket, 'role_mismatch')
-    if (message.type === 'pose' && (!Array.isArray(message.orientation) || message.orientation.length !== 4 || !message.orientation.every((value) => typeof value === 'number' && Number.isFinite(value)) || message.position !== null || typeof message.t !== 'number' || !Number.isFinite(message.t) || (message.screenOrientation !== undefined && message.screenOrientation !== 'landscape-left' && message.screenOrientation !== 'landscape-right' && message.screenOrientation !== 'portrait' && message.screenOrientation !== 'unknown'))) return this.reject(socket, 'invalid_pose')
+    if (message.type === 'hello' && (message.role !== attachment.role || (message.capabilities !== undefined && !validCapabilities(message.capabilities)))) return this.reject(socket, 'invalid_hello')
+    if (message.type === 'ready' && (message.capabilities !== undefined && !validCapabilities(message.capabilities))) return this.reject(socket, 'invalid_ready')
+    if (message.type === 'setMovementScale' && (typeof message.scale !== 'number' || !Number.isFinite(message.scale) || message.scale < 0.1 || message.scale > 10)) return this.reject(socket, 'invalid_movement_scale')
+    if (message.type === 'setRotationSensitivity' && (typeof message.sensitivity !== 'number' || !Number.isFinite(message.sensitivity) || message.sensitivity < 0.25 || message.sensitivity > 3)) return this.reject(socket, 'invalid_rotation_sensitivity')
+    if (message.type === 'controlChannels' && !validControlChannels(message.channels)) return this.reject(socket, 'invalid_control_channels')
+    if (message.type === 'controlState' && !validControlState(message.state)) return this.reject(socket, 'invalid_control_state')
+    if (message.type === 'recenterAck' && (typeof message.accepted !== 'boolean' || (message.message !== undefined && typeof message.message !== 'string'))) return this.reject(socket, 'invalid_recenter_ack')
+    if (message.type === 'recenterHoldState' && (typeof message.active !== 'boolean' || typeof message.accepted !== 'boolean' || (message.message !== undefined && typeof message.message !== 'string'))) return this.reject(socket, 'invalid_recenter_hold_state')
+    if (message.type === 'controlMode' && message.mode !== 'rotation' && message.mode !== 'position' && message.mode !== 'positionRotation') return this.reject(socket, 'invalid_control_mode')
+    if (message.type === 'pose' && (!Array.isArray(message.orientation) || message.orientation.length !== 4 || !message.orientation.every((value) => typeof value === 'number' && Number.isFinite(value)) || (message.position !== undefined && message.position !== null && !validPosition(message.position)) || typeof message.t !== 'number' || !Number.isFinite(message.t) || (message.screenOrientation !== undefined && message.screenOrientation !== 'landscape-left' && message.screenOrientation !== 'landscape-right' && message.screenOrientation !== 'portrait' && message.screenOrientation !== 'unknown'))) return this.reject(socket, 'invalid_pose')
     if ((message.type === 'ping' || message.type === 'pong') && (typeof message.t !== 'number' || !Number.isFinite(message.t))) return this.reject(socket, 'invalid_heartbeat')
     if (!canForwardMessage(attachment.role, message.type)) return this.reject(socket, 'message_not_allowed')
-    if (message.type === 'hello' || message.type === 'ready') return
     if (message.type === 'terminate') {
       if (attachment.role !== 'desktop') return this.reject(socket, 'message_not_allowed')
       await this.invalidateSession('Desktop disconnected.')
@@ -96,14 +104,15 @@ export class PhoneSessionRoom {
     })
   }
 
-  webSocketClose(socket: WebSocket): void {
+  webSocketClose(socket: WebSocket, code: number, reason: string, wasClean: boolean): void {
     const attachment = socket.deserializeAttachment() as SocketAttachment | null
+    const closeReason = (attachment?.role ?? 'peer') + ' disconnected: ' + (reason || 'no reason') + ' (close code ' + code + ', ' + (wasClean ? 'clean' : 'unclean') + ')'
     this.state.getWebSockets().forEach((peer) => {
-      if (peer !== socket) this.send(peer, JSON.stringify({ v: 1, type: 'disconnected', session: attachment?.session ?? this.sessionId, reason: `${attachment?.role ?? 'peer'} disconnected` }))
+      if (peer !== socket) this.send(peer, JSON.stringify({ v: 1, type: 'disconnected', session: attachment?.session ?? this.sessionId, reason: closeReason }))
     })
   }
 
-  webSocketError(socket: WebSocket): void { this.webSocketClose(socket) }
+  webSocketError(socket: WebSocket): void { this.webSocketClose(socket, 1011, 'socket-error', false) }
 
   async alarm(): Promise<void> {
     await this.hydrate()
@@ -145,4 +154,26 @@ export class PhoneSessionRoom {
   private send(socket: WebSocket, message: string | object): void {
     try { socket.send(typeof message === 'string' ? message : JSON.stringify(message)) } catch { /* Peer closed between lookup and send. */ }
   }
+}
+
+function validPosition(value: unknown): value is [number, number, number] {
+  return Array.isArray(value) && value.length === 3 && value.every((entry) => typeof entry === 'number' && Number.isFinite(entry))
+}
+
+function validCapabilities(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const capabilities = value as Record<string, unknown>
+  return typeof capabilities.orientation === 'boolean' && typeof capabilities.position === 'boolean' && (capabilities.controlChannels === undefined || typeof capabilities.controlChannels === 'boolean')
+}
+
+function validControlChannels(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const channels = value as Record<string, unknown>
+  return ['truck', 'pedestal', 'dolly', 'pan', 'tilt', 'dutch'].every((key) => typeof channels[key] === 'boolean')
+}
+
+function validControlState(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const state = value as Record<string, unknown>
+  return validControlChannels(state.channels) && typeof state.movementScale === 'number' && Number.isFinite(state.movementScale) && state.movementScale >= 0.1 && state.movementScale <= 10 && typeof state.rotationSensitivity === 'number' && Number.isFinite(state.rotationSensitivity) && state.rotationSensitivity >= 0.25 && state.rotationSensitivity <= 3
 }

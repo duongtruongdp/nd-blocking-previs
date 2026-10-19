@@ -2,7 +2,7 @@
 
 The relay is a small Cloudflare Worker plus one Durable Object class per
 pairing session. Source lives in `relay/worker.ts`; `wrangler.toml` is a
-deployment description, not an instruction to deploy during this milestone.
+canonical deployment description.
 
 The Durable Object holds only active WebSocket peer state and an expiring
 pairing token while the session is live. It does not write project files,
@@ -14,6 +14,14 @@ request contains a valid session, token, role, and WebSocket upgrade. The
 message allowlist is enforced again inside the session object. The relay is a
 transport boundary: it does not interpret camera math and does not persist
 orientation packets.
+
+Direction is explicit: phone `controlChannels`, `setMovementScale`,
+`setRotationSensitivity`, and `recenter` are requests; desktop `controlState`
+and `recenterAck` are authoritative responses. A desktop `controlChannels` or
+phone `controlState` packet is rejected, preventing accidental request/state
+echo loops and preserving compatibility with the legacy Web Rotation-only
+companion. Native hold requests are phone-only; `recenterHoldState` is a
+desktop-only acknowledgement.
 
 The current deployed Worker is:
 
@@ -27,8 +35,8 @@ Its secure WebSocket endpoint is:
 wss://nd-blocking-phone-relay.nd-blocking-previs.workers.dev/session
 ```
 
-The active deployment used by the accepted physical V1 test is
-`ac08a24c-11fc-42ed-8e71-c72b21db41a4`. The Worker is named
+The current channel-controls-compatible deployment is
+`8d9ba936-d645-4d55-b436-43eb470e45e0`. The Worker is named
 `nd-blocking-phone-relay` and uses the
 `PHONE_SESSIONS` Durable Object binding for `PhoneSessionRoom`. Its first
 deployment uses the single `v1` SQLite-backed class migration. The intended

@@ -1,12 +1,16 @@
 import type { CameraDeliveryFrame, RationalFrameRate, SceneDocument } from '../core/sceneDocument'
+import type { ProjectDocument } from '../core/projectDocument'
+import type { MasterRenderPlan } from './masterRenderPlan'
 
 export const EXPORT_WIDTHS = [1280, 1920, 2560] as const
 
 export type ExportWidth = typeof EXPORT_WIDTHS[number]
 export type ExportFormat = 'mp4' | 'webm'
 export type ExportQuality = 'high' | 'standard' | 'small'
+export type ExportSource = 'scene' | 'master'
 
 export type VideoExportSettings = {
+  source?: ExportSource
   cameraId: string | null
   markIn: number
   markOut: number
@@ -15,6 +19,7 @@ export type VideoExportSettings = {
   width: ExportWidth
   format: ExportFormat
   quality: ExportQuality
+  includeMusic?: boolean
 }
 
 export type VideoExportStatus = 'idle' | 'preparing' | 'exporting' | 'encoding' | 'finalizing' | 'completed' | 'error' | 'cancelled'
@@ -30,6 +35,9 @@ export type VideoExportProgressHandler = (progress: VideoExportProgress) => void
 
 export type VideoExportRequest = {
   document: SceneDocument
+  project?: ProjectDocument
+  masterPlan?: MasterRenderPlan
+  musicBlob?: Blob | null
   settings: VideoExportSettings
   signal?: AbortSignal
   onProgress?: VideoExportProgressHandler

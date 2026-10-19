@@ -1,0 +1,21 @@
+[Unit]
+Description=ND Blocking & Previs Live Review relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ndlive
+Group=ndlive
+WorkingDirectory=/opt/nd-live
+EnvironmentFile=/opt/nd-live/.env
+ExecStart=/usr/bin/node /opt/nd-live/live-server/dist/live-server/server.js
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -82,8 +82,8 @@ export function PhoneCameraPage() {
     socket.addEventListener('open', () => {
       setConnected(true)
       setMessage('Connection ready. Enable motion access to begin.')
-      socket.send(JSON.stringify({ v: 1, type: 'hello', role: 'phone', session }))
-      if (listeningRef.current) socket.send(JSON.stringify({ v: 1, type: 'ready', session, device: navigator.userAgent.slice(0, 120) }))
+      socket.send(JSON.stringify({ v: 1, type: 'hello', role: 'phone', session, capabilities: { orientation: true, position: false } }))
+      if (listeningRef.current) socket.send(JSON.stringify({ v: 1, type: 'ready', session, device: navigator.userAgent.slice(0, 120), capabilities: { orientation: true, position: false } }))
     })
     socket.addEventListener('message', (event) => {
       if (typeof event.data !== 'string') return
@@ -155,7 +155,7 @@ export function PhoneCameraPage() {
       listeningRef.current = true
       setStatus('ready')
       setMessage('Move the phone to aim the active Camera. Hold steady for a clean move.')
-      if (socketRef.current?.readyState === WebSocket.OPEN) send({ v: 1, type: 'ready', session, device: navigator.userAgent.slice(0, 120) })
+      if (socketRef.current?.readyState === WebSocket.OPEN) send({ v: 1, type: 'ready', session, device: navigator.userAgent.slice(0, 120), capabilities: { orientation: true, position: false } })
     } catch {
       setStatus('error')
       setMessage('Motion access could not be enabled.')

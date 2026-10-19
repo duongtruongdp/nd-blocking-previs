@@ -18,8 +18,14 @@ export function validRelaySession(value: string | null): value is string {
 
 export function canForwardMessage(role: RelayRole, type: string): boolean {
   if (type === 'pose') return role === 'phone'
-  if (type === 'recenter') return true
+  if (type === 'recenter') return role === 'phone'
+  if (type === 'recenterHoldStart' || type === 'recenterHoldEnd') return role === 'phone'
   if (type === 'setCameraKey') return role === 'phone'
+  if (type === 'setMovementScale') return role === 'phone'
+  if (type === 'setRotationSensitivity') return role === 'phone'
+  if (type === 'controlChannels') return role === 'phone'
+  if (type === 'controlMode') return role === 'phone'
+  if (type === 'controlState' || type === 'recenterAck' || type === 'recenterHoldState') return role === 'desktop'
   if (type === 'setCameraKeyAck' || type === 'recordAck') return role === 'desktop'
   if (type === 'recordStart' || type === 'recordStop') return true
   if (type === 'terminate') return role === 'desktop'

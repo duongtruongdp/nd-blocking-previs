@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createActorDocument, createCameraDocument, createEmptySceneDocument } from '../core/sceneDocument'
 import { CAMERA_DATABASE } from '../core/cameraDatabase'
 import { createDefaultProps } from '../scene/testEntities'
-import { captureTimelineValue, shouldApplyTimelineEvaluation, commitTimelineTransform, timelineEditingEnabled } from '../timeline/transformOwnership'
+import { captureTimelineValue, shouldApplyTimelineEvaluation, shouldApplyTimelinePropertyEvaluation, commitTimelineTransform, timelineEditingEnabled } from '../timeline/transformOwnership'
 import { upsertTimelineKeyframe } from '../timeline/timelineMath'
 
 const change = (entityId: string) => ({ entityId, position: [2, 0, -3] as [number, number, number], rotation: [0.1, 0.8, 0] as [number, number, number] })
@@ -43,6 +43,13 @@ describe('V2.6B timeline transform ownership and keyframe capture', () => {
     expect(shouldApplyTimelineEvaluation('actor-01', 'actor-01', new Set())).toBe(false)
     expect(shouldApplyTimelineEvaluation('actor-01', null, new Set(['actor-01']))).toBe(false)
     expect(shouldApplyTimelineEvaluation('actor-02', 'actor-01', new Set())).toBe(true)
+  })
+
+  it('suspends only the recorded Camera property', () => {
+    const suspended = { 'camera-01': new Set(['rotation' as const]) }
+    expect(shouldApplyTimelinePropertyEvaluation('camera-01', 'position', null, new Set(), suspended)).toBe(true)
+    expect(shouldApplyTimelinePropertyEvaluation('camera-01', 'rotation', null, new Set(), suspended)).toBe(false)
+    expect(shouldApplyTimelinePropertyEvaluation('camera-02', 'rotation', null, new Set(), suspended)).toBe(true)
   })
 
   it('restores transform editing as soon as playback stops', () => {

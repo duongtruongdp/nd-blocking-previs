@@ -12,6 +12,7 @@ export type ProceduralActorOptions = {
 }
 
 export class ProceduralActorRuntime {
+  readonly visualStyle = 'character' as const
   readonly root: THREE.Group
   readonly selectableMeshes: THREE.Mesh[] = []
   private readonly documentId: string

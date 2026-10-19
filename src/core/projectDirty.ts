@@ -10,5 +10,8 @@ export function creativeProjectFingerprint(project: ProjectDocument): string {
       name: entry.name,
       scene: JSON.parse(creativeSceneFingerprint(entry.scene)) as unknown,
     })),
+    shots: project.shots,
+    settings: project.settings,
+    masterSequence: project.masterSequence,
   })
 }

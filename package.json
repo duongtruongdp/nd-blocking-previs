@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.3",
   "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -10,6 +13,8 @@
     "build:web:staging": "vite build --mode staging",
     "desktop:dev": "tauri dev --config src-tauri/tauri.conf.json",
     "desktop:build": "tauri build --config src-tauri/tauri.conf.json",
+    "live-server": "npm run live-server:build && node live-server/dist/live-server/server.js",
+    "live-server:build": "tsc -p live-server/tsconfig.json",
     "release:package": "node scripts/package-release.mjs",
     "release:verify": "node scripts/version-tools.mjs verify-release",
     "version:check": "node scripts/version-tools.mjs check",
@@ -26,11 +31,14 @@
     "@tauri-apps/plugin-opener": "^2.7.0",
     "@tauri-apps/plugin-shell": "^2.4.0",
     "@tauri-apps/plugin-store": "^2.5.0",
+    "@types/ws": "^8.18.2",
+    "exceljs": "^4.4.0",
     "mediabunny": "^1.61.3",
     "qrcode": "^1.5.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "three": "^0.186.1"
+    "three": "^0.186.1",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261007.1",

@@ -6,7 +6,7 @@ import { applySceneEntityTransform, createCameraDocument, createEmptySceneDocume
 import { activeCaptureAspect, cameraDisplayAspect, cameraProjectionForDocument, cameraRotationLookingAt, horizontalFovDegrees, letterboxRect, verticalFovDegrees } from '../runtime/cameraMath'
 import { degreesToRadians, parseCameraNumber } from '../runtime/cameraInputMath'
 import { cameraFrustumGuideDimensions } from '../runtime/cameraFrustum'
-import { ProceduralCameraRuntime } from '../runtime/cameraRuntime'
+import { CAMERA_BODY_PIVOT_LOCAL, CAMERA_PROXY_FORWARD_AXIS, CAMERA_PROXY_SCALE, ProceduralCameraRuntime } from '../runtime/cameraRuntime'
 
 describe('V2 Camera system foundation', () => {
   it('seeds the current professional camera set with verified active capture areas', () => {
@@ -167,6 +167,92 @@ describe('V2 Camera system foundation', () => {
     runtime.dispose()
   })
 
+  it('keeps the visual proxy in a plausible real-world cinema-camera envelope', () => {
+    const definition = CAMERA_DATABASE[0]
+    const camera = createCameraDocument('camera-01', 'Camera 01', [0, 1, 3], [0, 0, 0], definition.id, definition.captureModes[0].id)
+    const runtime = new ProceduralCameraRuntime(camera)
+    runtime.root.updateMatrixWorld(true)
+
+    const bounds = new THREE.Box3().setFromObject(runtime.proxyRoot)
+    const size = bounds.getSize(new THREE.Vector3())
+    expect(CAMERA_PROXY_SCALE).toBeCloseTo(0.275, 8)
+    expect(size.x).toBeGreaterThanOrEqual(0.20)
+    expect(size.x).toBeLessThanOrEqual(0.30)
+    expect(size.y).toBeGreaterThanOrEqual(0.20)
+    expect(size.y).toBeLessThanOrEqual(0.35)
+    expect(size.z).toBeGreaterThanOrEqual(0.35)
+    expect(size.z).toBeLessThanOrEqual(0.55)
+    expect(runtime.root.scale.toArray()).toEqual([1, 1, 1])
+    expect(runtime.proxyRoot.scale.toArray()).toEqual([CAMERA_PROXY_SCALE, CAMERA_PROXY_SCALE, CAMERA_PROXY_SCALE])
+    runtime.dispose()
+  })
+
+  it('keeps the visual body pivot at the root while the optical rig points down -Z', () => {
+    const definition = CAMERA_DATABASE[0]
+    const camera = createCameraDocument('camera-01', 'Camera 01', [0, 1, 3], [0, 0, 0], definition.id, definition.captureModes[0].id)
+    const runtime = new ProceduralCameraRuntime(camera)
+    runtime.root.updateMatrixWorld(true)
+    const lensDirection = new THREE.Vector3(...CAMERA_PROXY_FORWARD_AXIS).applyQuaternion(runtime.proxyRoot.quaternion)
+    expect(runtime.proxyRoot.position.z).toBeCloseTo(-CAMERA_BODY_PIVOT_LOCAL[2], 8)
+    expect(lensDirection.toArray()).toEqual([0, 0, -1])
+    expect(runtime.productionCamera.position.toArray()).toEqual([0, 0, 0])
+    expect(runtime.productionCamera.getWorldPosition(new THREE.Vector3()).toArray()).toEqual(camera.position)
+    runtime.dispose()
+  })
+
+  it('converts between the stable body-center pivot and the optical document origin', () => {
+    const definition = CAMERA_DATABASE[0]
+    const camera = createCameraDocument('camera-01', 'Camera 01', [2, 1, 3], [0, 0, 0], definition.id, definition.captureModes[0].id)
+    const runtime = new ProceduralCameraRuntime(camera)
+    const initialPivot = runtime.getTransformPivot()
+
+    expect(runtime.root.position.z).toBeCloseTo(camera.position[2] + CAMERA_BODY_PIVOT_LOCAL[2], 8)
+    expect(runtime.productionCamera.position.toArray()).toEqual([0, 0, 0])
+    expect(initialPivot.x).toBeCloseTo(2, 8)
+    expect(initialPivot.y).toBeCloseTo(1, 8)
+    expect(initialPivot.z).toBeCloseTo(3 + CAMERA_BODY_PIVOT_LOCAL[2], 8)
+
+    // Direct runtime rotation is a true root rotation: the body pivot does
+    // not translate, while the optical document pose is converted back.
+    runtime.root.rotation.set(0, Math.PI / 2, 0)
+    runtime.root.updateMatrixWorld(true)
+    const rotatedPivot = runtime.getTransformPivot()
+    expect(rotatedPivot.distanceTo(initialPivot)).toBeLessThan(1e-8)
+    const converted = runtime.getDocumentTransform()
+    expect(converted.rotation[1]).toBeCloseTo(Math.PI / 2, 8)
+    expect(runtime.productionCamera.getWorldPosition(new THREE.Vector3()).toArray()).toEqual(converted.position)
+    expect(converted.position[0]).toBeCloseTo(2 - CAMERA_BODY_PIVOT_LOCAL[2], 8)
+    expect(converted.position[2]).toBeCloseTo(3 + CAMERA_BODY_PIVOT_LOCAL[2], 8)
+    runtime.applyDocumentPose(converted.position, converted.rotation)
+    expect(runtime.getTransformPivot().distanceTo(initialPivot)).toBeLessThan(1e-8)
+    runtime.dispose()
+  })
+
+  it('keeps the true body pivot stable for yaw, pitch, roll, repeated turns, and a full turn', () => {
+    const definition = CAMERA_DATABASE[0]
+    const camera = createCameraDocument('camera-01', 'Camera 01', [2, 1, 3], [0.2, -0.3, 0.1], definition.id, definition.captureModes[0].id)
+    const runtime = new ProceduralCameraRuntime(camera)
+    const initialPivot = runtime.getTransformPivot()
+    const rotations: [number, number, number][] = [
+      [0.2, Math.PI / 2, 0.1],
+      [Math.PI / 2, -0.3, 0.1],
+      [0.2, -0.3, Math.PI / 2],
+      [0.2, Math.PI, 0.1],
+      [0.2, 2 * Math.PI, 0.1],
+    ]
+    rotations.forEach((rotation) => {
+      runtime.root.quaternion.setFromEuler(new THREE.Euler(...rotation, 'XYZ'))
+      runtime.root.updateMatrixWorld(true)
+      expect(runtime.getTransformPivot().distanceTo(initialPivot)).toBeLessThan(1e-8)
+      const optical = runtime.getDocumentTransform()
+      runtime.applyDocumentPose(optical.position, optical.rotation)
+      expect(runtime.getTransformPivot().distanceTo(initialPivot)).toBeLessThan(1e-8)
+      const opticalWorld = runtime.productionCamera.getWorldPosition(new THREE.Vector3())
+      expect(opticalWorld.distanceTo(new THREE.Vector3(...optical.position))).toBeLessThan(1e-8)
+    })
+    runtime.dispose()
+  })
+
   it('keeps the generic Stage representation when capture model data changes', () => {
     const firstDefinition = CAMERA_DATABASE[0]
     const secondDefinition = CAMERA_DATABASE[1]
@@ -177,7 +263,7 @@ describe('V2 Camera system foundation', () => {
     runtime.applyDocument({ ...camera, cameraDefinitionId: secondDefinition.id, captureModeId: secondDefinition.captureModes[0].id })
     expect(runtime.selectableMeshes).toEqual(proxyMeshes)
     expect(runtime.selectableMeshes.map((mesh) => mesh.name)).toEqual(proxyNames)
-    expect(runtime.root.position.toArray()).toEqual(camera.position)
+    expect(runtime.root.position.z).toBeCloseTo(camera.position[2] + CAMERA_BODY_PIVOT_LOCAL[2], 8)
     runtime.dispose()
   })
 

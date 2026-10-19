@@ -7,7 +7,7 @@ export type TimelineTransformCommit = {
   position: ActorVector3
   rotation: ActorVector3
   scale?: ActorVector3
-  editedProperty?: 'position' | 'rotation' | 'heading'
+  editedProperty?: 'position' | 'rotation' | 'heading' | 'scale'
 }
 
 export type TimelineTransformCommitResult = {
@@ -24,9 +24,28 @@ export function shouldApplyTimelineEvaluation(entityId: string, transformingEnti
   return entityId !== transformingEntityId && !suspendedEntityIds.has(entityId)
 }
 
+export type SuspendedTimelineProperties = Readonly<Record<string, ReadonlySet<TimelineProperty>>>
+
+/**
+ * Timeline ownership can be suspended per property. This is intentionally
+ * separate from entity-level transform suspension: a live phone Rotation
+ * recording must not freeze a Camera's authored Position track.
+ */
+export function shouldApplyTimelinePropertyEvaluation(
+  entityId: string,
+  property: TimelineProperty,
+  transformingEntityId: string | null,
+  suspendedEntityIds: ReadonlySet<string>,
+  suspendedProperties: SuspendedTimelineProperties,
+): boolean {
+  if (!shouldApplyTimelineEvaluation(entityId, transformingEntityId, suspendedEntityIds)) return false
+  return !(suspendedProperties[entityId]?.has(property) ?? false)
+}
+
 export function captureTimelineValue(entity: ActorDocument | CameraDocument | PropDocument | OpeningDocument | WallDocument | SunDocument, property: TimelineProperty): TimelineValue | undefined {
   if (property === 'position') return 'position' in entity ? [...entity.position] as ActorVector3 : undefined
   if (property === 'rotation') return 'rotation' in entity ? [...entity.rotation] as ActorVector3 : undefined
+  if (property === 'scale') return 'scale' in entity && entity.scale ? [...entity.scale] as ActorVector3 : undefined
   if (property === 'heading') return 'rotation' in entity ? entity.rotation[1] : undefined
   if (property === 'focalLengthMm') return 'focalLengthMm' in entity ? entity.focalLengthMm : undefined
   if (property === 'openAngle') return 'openAngle' in entity ? entity.openAngle : undefined
@@ -52,6 +71,8 @@ export function commitTimelineTransform(document: SceneDocument, change: Timelin
     ? [...change.position] as ActorVector3
     : animatedProperty === 'rotation'
       ? [...change.rotation] as ActorVector3
+      : animatedProperty === 'scale'
+        ? [...(change.scale ?? [1, 1, 1])] as ActorVector3
       : animatedProperty === 'heading'
         ? change.rotation[1]
         : undefined

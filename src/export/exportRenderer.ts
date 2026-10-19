@@ -1,12 +1,13 @@
 import * as THREE from 'three'
 import type { ActorDocument, CameraDocument, SceneDocument } from '../core/sceneDocument'
 import { cameraProjectionForDocument } from '../runtime/cameraMath'
-import { ProceduralActorRuntime } from '../runtime/actor/proceduralActor'
+import { createActorRuntime, type ActorRuntime } from '../runtime/actor/actorRuntime'
 import { createScenicVisual, scenicGeometrySignature, type ScenicDefinition, type ScenicVisual } from '../runtime/scenicRuntime'
 import { evaluateExportFrame } from './exportEvaluation'
-import { centeredCrop, desqueezedCaptureAspect, dimensionsForDeliveryAspect, deliveryAspectForCamera } from './exportMath'
+import { centeredCrop, desqueezedCaptureAspect, dimensionsForDeliveryAspect, deliveryAspectForCamera, type ExportDimensions } from './exportMath'
 import type { VideoExportSettings } from './exportTypes'
 import { resolveOpeningAgainstWalls } from '../architecture/wallMath'
+import type { EvaluatedEntityState } from '../timeline/timelineEvaluator'
 
 /**
  * Dedicated production render path for browser video export.
@@ -20,7 +21,7 @@ export class VideoExportRenderer {
   private readonly scene = new THREE.Scene()
   private readonly cameraMount = new THREE.Group()
   private readonly camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.05, 500)
-  private readonly actorRuntimes = new Map<string, ProceduralActorRuntime>()
+  private readonly actorRuntimes = new Map<string, ActorRuntime>()
   private readonly scenicRuntimes = new Map<string, ScenicVisual>()
   private readonly scenicSignatures = new Map<string, string>()
   private readonly resources: Array<THREE.BufferGeometry | THREE.Material> = []
@@ -28,14 +29,16 @@ export class VideoExportRenderer {
   private readonly settings: VideoExportSettings
   private readonly sourceWidth: number
   private readonly sourceHeight: number
+  private readonly deliveryAspectOverride: number | null
   private disposed = false
 
-  constructor(sceneDocument: SceneDocument, settings: VideoExportSettings) {
+  constructor(sceneDocument: SceneDocument, settings: VideoExportSettings, options: { outputDimensions?: ExportDimensions; deliveryAspectOverride?: number } = {}) {
     this.document = sceneDocument
     this.settings = settings
+    this.deliveryAspectOverride = options.deliveryAspectOverride ?? null
     this.canvas = window.document.createElement('canvas')
-    const deliveryAspect = deliveryAspectForCamera(settings.deliveryAspectRatio, settings.cameraId, sceneDocument)
-    const outputDimensions = dimensionsForDeliveryAspect(settings.width, deliveryAspect)
+    const deliveryAspect = options.deliveryAspectOverride ?? deliveryAspectForCamera(settings.deliveryAspectRatio, settings.cameraId, sceneDocument)
+    const outputDimensions = options.outputDimensions ?? dimensionsForDeliveryAspect(settings.width, deliveryAspect)
     this.canvas.width = outputDimensions.width
     this.canvas.height = outputDimensions.height
     const outputContext = this.canvas.getContext('2d')
@@ -58,11 +61,11 @@ export class VideoExportRenderer {
     this.syncScenic([...sceneDocument.props, ...sceneDocument.walls, ...sceneDocument.openings.map((opening) => resolveOpeningAgainstWalls(opening, sceneDocument.walls)), ...sceneDocument.lights])
   }
 
-  renderFrame(frame: number): void {
+  renderFrame(frame: number, evaluatedOverride?: Record<string, EvaluatedEntityState>): void {
     if (this.disposed) throw new Error('The export renderer has been disposed.')
-    const cameraDocument = this.resolveCamera(frame)
+    const evaluated = evaluatedOverride ?? evaluateExportFrame(this.document, frame)
+    const cameraDocument = this.resolveCamera(frame, evaluated)
     if (!cameraDocument) throw new Error('The active Camera is not available for export.')
-    const evaluated = evaluateExportFrame(this.document, frame)
     const evaluatedProps = this.document.props.map((prop) => ({ ...prop, ...(evaluated[prop.id] ?? {}) }))
     const evaluatedWalls = this.document.walls.map((wall) => ({ ...wall, ...(evaluated[wall.id] ?? {}) }))
     const evaluatedOpenings = this.document.openings.map((opening) => {
@@ -101,7 +104,7 @@ export class VideoExportRenderer {
     this.sourceRenderer.clear()
     this.sourceRenderer.render(this.scene, this.camera)
 
-    const deliveryAspect = deliveryAspectForCamera(this.settings.deliveryAspectRatio, this.settings.cameraId, this.document)
+    const deliveryAspect = this.optionsDeliveryAspect()
     const crop = centeredCrop(this.sourceWidth, this.sourceHeight, deliveryAspect)
     this.outputContext.clearRect(0, 0, this.canvas.width, this.canvas.height)
     this.outputContext.drawImage(this.sourceCanvas, crop.x, crop.y, crop.width, crop.height, 0, 0, this.canvas.width, this.canvas.height)
@@ -128,16 +131,20 @@ export class VideoExportRenderer {
     this.canvas.height = 0
   }
 
-  private resolveCamera(frame: number): CameraDocument | null {
+  private resolveCamera(frame: number, evaluatedEntities?: Record<string, EvaluatedEntityState>): CameraDocument | null {
     const base = this.settings.cameraId ? this.document.cameras.find((camera) => camera.id === this.settings.cameraId) : null
     if (!base) return null
-    const evaluated = evaluateExportFrame(this.document, frame)[base.id]
+    const evaluated = (evaluatedEntities ?? evaluateExportFrame(this.document, frame))[base.id]
     return evaluated ? { ...base, ...evaluated, focalLengthMm: evaluated.focalLengthMm ?? base.focalLengthMm } : base
+  }
+
+  private optionsDeliveryAspect(): number {
+    return this.deliveryAspectOverride ?? deliveryAspectForCamera(this.settings.deliveryAspectRatio, this.settings.cameraId, this.document)
   }
 
   private syncActors(actors: readonly ActorDocument[]): void {
     actors.forEach((actor) => {
-      const runtime = new ProceduralActorRuntime(actor)
+      const runtime = createActorRuntime(actor)
       this.actorRuntimes.set(actor.id, runtime)
       this.scene.add(runtime.root)
     })

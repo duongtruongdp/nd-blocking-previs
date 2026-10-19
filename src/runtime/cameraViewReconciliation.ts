@@ -11,6 +11,11 @@ export type CameraViewEntityCollections = {
   scenicIds: Iterable<string>
 }
 
+/** Scene IDs are the runtime ownership boundary; entity IDs are scene-local. */
+export function sceneScopeChanged(previousSceneId: string | null, nextSceneId: string): boolean {
+  return previousSceneId !== null && previousSceneId !== nextSceneId
+}
+
 export function staleRuntimeEntityIds(runtimeIds: Iterable<string>, authoritativeIds: Iterable<string>): string[] {
   const authoritative = new Set(authoritativeIds)
   return Array.from(runtimeIds).filter((id) => !authoritative.has(id))

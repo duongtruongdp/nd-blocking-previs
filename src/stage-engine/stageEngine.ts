@@ -1,29 +1,40 @@
 import * as THREE from 'three'
 import type { PropDocument } from '../core/sceneDocument'
 import { classifyWheelInput } from '../runtime/inputNormalization'
-import { stageMovedBeyondThreshold, stageNdcFromEvent, stagePointerDeltaAlongAxis, stageProjectWorldAxisToScreen, stageRotationAxis, stageToolForKey, stageWorldUnitsPerPixelAlongAxis, stageZoomDistance, type StageCanvasRect, type StagePointerMode, type StageTool } from './stageEngineMath'
+import { constrainStageDeltaToAxis, dominantStageAxis, snapStagePosition, snapStageValue, stageApplyRotation, stageCameraSpaceDepth, stageIsometricAngles, stageLocalAxis, stageMovedBeyondThreshold, stageNdcFromEvent, stageOrbitAfterPointerDelta, stageOrbitAnglesFromDirection, stagePointerDeltaAlongAxis, stageProjectWorldAxisToScreen, stageRotationAxis, stageToolForKey, stageTransformAxis, stageTransformSpace, stageViewDirection, stageViewModeIsOrthographic, stageWorldAxis, stageWorldUnitsPerPixelAlongAxis, stageWorldUnitsPerPixelAtDepth, stageZoomDistance, type StageAxisName, type StageCanvasRect, type StageGizmoSpace, type StageIsometricCorner, type StagePointerMode, type StageTool, type StageViewMode, type StageViewSelection } from './stageEngineMath'
 import { scaleFromPointer, type ScaleAxis } from './stageEngineScaleMath'
+import { distributeOffsets, snapAngle } from './arrangeMath'
+import { normalizeSelection, toggleSelection } from './selectionMath'
+import type { CameraPathKeyframe, CameraPathSegmentSelection } from '../timeline/cameraPath'
 
 const MAX_PIXEL_RATIO = 2
 const SELECTION_COLOR = '#f0a032'
 const GIZMO_HOVER_COLOR = 0xffe066
 const GIZMO_AXIS_COLORS = { x: 0xe5484d, y: 0x62d16e, z: 0x4d8ff0 } as const
 
-type AxisName = keyof typeof GIZMO_AXIS_COLORS
+type AxisName = StageAxisName
 
 export type StageEntityType = 'Prop' | 'Actor' | 'Camera' | 'Wall' | 'Opening' | 'Sun'
 
 export type StageEntity = {
   id: string
+  sceneId?: string
   name: string
   type: StageEntityType
   root: THREE.Group
   mesh?: THREE.Mesh
   material?: THREE.MeshStandardMaterial
-  setSelected?: (selected: boolean) => void
+  /** Optional world-space pivot for direct manipulation. */
+  getTransformPivot?: () => THREE.Vector3
+  /** Optional document-facing transform snapshot for runtime-owned roots. */
+  getTransformSnapshot?: () => Pick<StageTransform, 'position' | 'rotation' | 'scale'>
+  /** Optional absolute transform application for runtime-owned roots. */
+  applyTransform?: (transform: Pick<StageTransform, 'position' | 'rotation' | 'scale'>) => void
+  setSelected?: (selected: boolean, primary?: boolean) => void
   setSnapPreview?: (active: boolean) => void
   dispose?: () => void
   transformable?: boolean
+  groupTransformable?: boolean
   scalable?: boolean
 }
 
@@ -35,6 +46,29 @@ export type StageTransform = {
   rotation: [number, number, number]
   scale?: [number, number, number]
 }
+
+export type StageTransformBatch = {
+  changes: StageTransform[]
+  primaryEntityId: string | null
+}
+
+export type StageSelection = {
+  ids: string[]
+  primaryId: string | null
+}
+
+export type StageViewOrientation = readonly [number, number, number, number]
+
+export type StageCameraPathOverlay = {
+  samples: readonly ActorVector3Like[]
+  segments: readonly { id: string; samples: readonly ActorVector3Like[]; selection: CameraPathSegmentSelection }[]
+  keyframes: readonly CameraPathKeyframe[]
+  selectedKeyframeId: string | null
+  selectedSegmentId: string | null
+  visible: boolean
+}
+
+type ActorVector3Like = [number, number, number]
 
 type StageGizmoHandle = {
   mode: 'move' | 'rotate' | 'scale'
@@ -75,6 +109,10 @@ type StageDrag = {
   transformStarted: boolean
   mode: Exclude<StagePointerMode, 'idle'>
   entity: StageEntity | null
+  groupEntities: StageEntity[]
+  groupPivot: THREE.Vector3 | null
+  startGroupPositions: Map<string, THREE.Vector3>
+  startGroupQuaternions: Map<string, THREE.Quaternion>
   handle: StageGizmoHandle | null
   origin: THREE.Vector3 | null
   axis: THREE.Vector3 | null
@@ -85,9 +123,18 @@ type StageDrag = {
   startQuaternion: THREE.Quaternion | null
   startAngle: number | null
   verticalMove: boolean
+  shiftActive: boolean
+  shiftAxis: StageAxisName | null
   gizmoScale: number | null
   screenAxis: THREE.Vector2 | null
   worldUnitsPerPixel: number | null
+  rotationSnapDelta: number | null
+  gizmoSpace: StageGizmoSpace
+  selectionChangedOnDown: boolean
+  pathKeyframe: CameraPathKeyframe | null
+  pathSegmentId: string | null
+  permissionGranted: boolean
+  permissionPending: boolean
 }
 
 export type StageEngineDebugSnapshot = {
@@ -105,20 +152,37 @@ export type StageEngineOptions = {
   onTransformStart?: (change: StageTransform) => void
   onTransformEnd?: (change: StageTransform) => void
   onTransformPreview?: (change: StageTransform) => void
+  onTransformBatchStart?: (batch: StageTransformBatch) => void
+  onTransformBatchEnd?: (batch: StageTransformBatch) => void
+  onTransformBatchPreview?: (batch: StageTransformBatch) => void
+  canTransformEntity?: (entityId: string) => boolean
+  canTransformGroup?: (entityIds: readonly string[]) => boolean
+  onTransformPermissionRequest?: (entityId: string) => boolean | Promise<boolean>
   onDebug?: (snapshot: StageEngineDebugSnapshot) => void
   debugEnabled?: boolean
   toolShortcuts?: Partial<Record<StageTool, string>>
   frameSelectedShortcut?: string
+  onAxisLockChange?: (axis: StageAxisName | null) => void
+  onContextMenu?: (entityId: string | null, point: { clientX: number; clientY: number }) => void
+  onViewChanged?: (selection: StageViewSelection) => void
+  onViewOrientationChanged?: (orientation: StageViewOrientation) => void
+  onCameraPathKeyframeSelect?: (keyframe: CameraPathKeyframe) => void
+  onCameraPathSegmentSelect?: (segment: CameraPathSegmentSelection) => void
+  onCameraPathPointMoveStart?: (keyframe: CameraPathKeyframe, position: ActorVector3Like) => void
+  onCameraPathPointMovePreview?: (keyframe: CameraPathKeyframe, position: ActorVector3Like) => void
+  onCameraPathPointMoveEnd?: (keyframe: CameraPathKeyframe, position: ActorVector3Like) => void
 }
 
-type SelectionListener = (entityId: string | null) => void
+type SelectionListener = (selection: StageSelection) => void
 
 export class StageEngine {
   readonly canvas: HTMLCanvasElement
 
   private readonly container: HTMLElement
   private readonly scene: THREE.Scene
-  private readonly editorCamera: THREE.PerspectiveCamera
+  private readonly perspectiveCamera: THREE.PerspectiveCamera
+  private readonly orthographicCamera: THREE.OrthographicCamera
+  private editorCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera
   private readonly renderer: THREE.WebGLRenderer
   private readonly raycaster = new THREE.Raycaster()
   private readonly orbitTarget = new THREE.Vector3(0, 1, 0)
@@ -130,7 +194,22 @@ export class StageEngine {
   private readonly gizmoRotate = new THREE.Group()
   private readonly gizmoScaleHandles = new THREE.Group()
   private readonly gizmoHandles: Array<{ pick: THREE.Mesh; handle: StageGizmoHandle }> = []
+  private readonly cameraPathRoot = new THREE.Group()
+  private readonly cameraPathMarkerMeshes: THREE.Mesh[] = []
+  private readonly cameraPathSegmentLines: THREE.Line[] = []
+  private cameraPathMarkerGeometry: THREE.SphereGeometry | null = null
+  private cameraPathMarkerMaterial: THREE.MeshBasicMaterial | null = null
+  private cameraPathSelectedMaterial: THREE.MeshBasicMaterial | null = null
+  private cameraPathPlayhead: THREE.Mesh | null = null
+  private cameraPathKeyframes: CameraPathKeyframe[] = []
+  private cameraPathSegments: Array<{ id: string; selection: CameraPathSegmentSelection }> = []
+  private cameraPathSegmentMaterial: THREE.LineBasicMaterial | null = null
+  private cameraPathSelectedSegmentMaterial: THREE.LineBasicMaterial | null = null
+  private cameraPathHoveredSegmentId: string | null = null
+  private cameraPathVisible = false
   private readonly orbit = { radius: 15, theta: 0.62, phi: 1.13 }
+  private savedPerspectiveOrbit: { radius: number; theta: number; phi: number; target: THREE.Vector3 } | null = null
+  private readonly orthographicViewStates = new Map<Exclude<StageViewMode, 'perspective'>, { target: THREE.Vector3; halfHeight: number }>()
   private readonly options: StageEngineOptions
   private readonly debugEnabled: boolean
   private selectionListener: SelectionListener | null = null
@@ -138,6 +217,7 @@ export class StageEngine {
   private resizeObserver: ResizeObserver | null = null
   private disposed = false
   private selectedId: string | null = null
+  private selectedIds: string[] = []
   private tool: StageTool = 'select'
   private toolShortcuts: Partial<Record<StageTool, string>>
   private frameSelectedShortcut: string
@@ -148,6 +228,14 @@ export class StageEngine {
   private lastRayHits = '—'
   private lastAxisDragDebug: StageAxisDragDebug | null = null
   private lastScaleDragDebug: StageScaleDragDebug | null = null
+  private viewMode: StageViewMode = 'perspective'
+  private isometricCorner: StageIsometricCorner | null = null
+  private orthographicHalfHeight = 8
+  private shiftKeyActive = false
+  private snapEnabled = false
+  private snapGridSize = 0.1
+  private rotationSnapEnabled = false
+  private rotationSnapRadians = THREE.MathUtils.degToRad(15)
 
   constructor(container: HTMLElement, options: StageEngineOptions = {}) {
     this.container = container
@@ -157,7 +245,9 @@ export class StageEngine {
     this.debugEnabled = options.debugEnabled ?? false
     this.scene = new THREE.Scene()
     this.scene.background = new THREE.Color('#d9deef')
-    this.editorCamera = new THREE.PerspectiveCamera(45, 1, 0.05, 500)
+    this.perspectiveCamera = new THREE.PerspectiveCamera(45, 1, 0.05, 500)
+    this.orthographicCamera = new THREE.OrthographicCamera(-8, 8, 8, -8, 0.05, 500)
+    this.editorCamera = this.perspectiveCamera
     this.canvas = document.createElement('canvas')
     this.canvas.className = 'v2-stage-canvas'
     this.canvas.setAttribute('aria-label', 'V2 Blocking Stage')
@@ -170,6 +260,9 @@ export class StageEngine {
     container.appendChild(this.canvas)
 
     this.createStageEnvironment()
+    this.cameraPathRoot.name = 'Camera Path Helpers'
+    this.cameraPathRoot.renderOrder = 998
+    this.scene.add(this.cameraPathRoot)
     this.createProps()
     this.createGizmo()
     this.installInput()
@@ -198,10 +291,208 @@ export class StageEngine {
     this.frameSelectedShortcut = frameSelectedShortcut
   }
 
-  addEntity(entity: { id: string; type: StageEntityType; root: THREE.Group; name?: string; setSelected?: (selected: boolean) => void; setSnapPreview?: (active: boolean) => void; dispose?: () => void; transformable?: boolean; scalable?: boolean }): void {
+  setSnapSettings(enabled: boolean, gridSize: number): void {
+    this.snapEnabled = enabled
+    this.snapGridSize = Number.isFinite(gridSize) && gridSize > 0 ? gridSize : 0.1
+    this.requestRender()
+  }
+
+  setRotationSnapSettings(enabled: boolean, degrees: number): void {
+    this.rotationSnapEnabled = enabled
+    this.rotationSnapRadians = THREE.MathUtils.degToRad(Number.isFinite(degrees) && degrees > 0 ? degrees : 15)
+    this.requestRender()
+  }
+
+  setCameraPathOverlay(overlay: StageCameraPathOverlay): void {
+    this.clearCameraPathOverlay()
+    this.cameraPathVisible = overlay.visible
+    if (!overlay.visible) return
+    this.cameraPathKeyframes = overlay.keyframes.map((keyframe) => ({ ...keyframe, position: [...keyframe.position] as ActorVector3Like }))
+    this.cameraPathSegmentMaterial = new THREE.LineBasicMaterial({ color: '#4d8ff0', transparent: true, opacity: 0.62, depthTest: false })
+    this.cameraPathSelectedSegmentMaterial = new THREE.LineBasicMaterial({ color: '#f0a032', transparent: true, opacity: 0.98, depthTest: false })
+    overlay.segments.forEach((segment) => {
+      if (segment.samples.length < 2) return
+      const geometry = new THREE.BufferGeometry().setFromPoints(segment.samples.map((point) => new THREE.Vector3(...point)))
+      const line = new THREE.Line(geometry, segment.id === overlay.selectedSegmentId ? this.cameraPathSelectedSegmentMaterial! : this.cameraPathSegmentMaterial!)
+      line.renderOrder = 998
+      line.userData.cameraPathSegmentId = segment.id
+      line.userData.cameraPathSelected = segment.id === overlay.selectedSegmentId
+      this.cameraPathSegmentLines.push(line)
+      this.cameraPathRoot.add(line)
+    })
+    this.cameraPathSegments = overlay.segments.map((segment) => ({ id: segment.id, selection: segment.selection }))
+    this.cameraPathMarkerGeometry = new THREE.SphereGeometry(0.085, 12, 8)
+    this.cameraPathMarkerMaterial = new THREE.MeshBasicMaterial({ color: '#75a8f5', transparent: true, opacity: 0.82, depthTest: false })
+    this.cameraPathSelectedMaterial = new THREE.MeshBasicMaterial({ color: '#f0a032', transparent: true, opacity: 1, depthTest: false })
+    this.cameraPathKeyframes.forEach((keyframe) => {
+      const marker = new THREE.Mesh(this.cameraPathMarkerGeometry!, keyframe.keyframeId === overlay.selectedKeyframeId ? this.cameraPathSelectedMaterial! : this.cameraPathMarkerMaterial!)
+      marker.position.set(...keyframe.position)
+      marker.renderOrder = 999
+      marker.userData.cameraPathKeyframeId = keyframe.keyframeId
+      this.cameraPathMarkerMeshes.push(marker)
+      this.cameraPathRoot.add(marker)
+    })
+    if (overlay.keyframes.length > 0) {
+      this.cameraPathPlayhead = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 8), new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.95, depthTest: false }))
+      this.cameraPathPlayhead.renderOrder = 1000
+      this.cameraPathRoot.add(this.cameraPathPlayhead)
+    }
+    this.requestRender()
+  }
+
+  setCameraPathPlayhead(position: ActorVector3Like | null): void {
+    if (!this.cameraPathPlayhead || !position) return
+    this.cameraPathPlayhead.position.set(...position)
+    this.requestRender()
+  }
+
+  setCameraPathSelectedKeyframe(keyframeId: string | null): void {
+    this.cameraPathMarkerMeshes.forEach((marker) => {
+      const selected = marker.userData.cameraPathKeyframeId === keyframeId
+      marker.material = selected ? this.cameraPathSelectedMaterial! : this.cameraPathMarkerMaterial!
+    })
+    this.requestRender()
+  }
+
+  setCameraPathSelectedSegment(segmentId: string | null): void {
+    this.cameraPathSegmentLines.forEach((line) => {
+      const selected = line.userData.cameraPathSegmentId === segmentId
+      line.userData.cameraPathSelected = selected
+      line.material = selected ? this.cameraPathSelectedSegmentMaterial! : this.cameraPathSegmentMaterial!
+    })
+    this.requestRender()
+  }
+
+  private clearCameraPathOverlay(): void {
+    this.cameraPathSegmentLines.forEach((line) => {
+      line.removeFromParent()
+      line.geometry.dispose()
+    })
+    this.cameraPathSegmentLines.length = 0
+    this.cameraPathSegmentMaterial?.dispose()
+    this.cameraPathSelectedSegmentMaterial?.dispose()
+    this.cameraPathSegmentMaterial = null
+    this.cameraPathSelectedSegmentMaterial = null
+    this.cameraPathSegments = []
+    this.cameraPathHoveredSegmentId = null
+    this.cameraPathMarkerMeshes.forEach((marker) => marker.removeFromParent())
+    this.cameraPathMarkerMeshes.length = 0
+    this.cameraPathPlayhead?.removeFromParent()
+    this.cameraPathPlayhead?.geometry.dispose()
+    ;(this.cameraPathPlayhead?.material as THREE.Material | undefined)?.dispose()
+    this.cameraPathPlayhead = null
+    this.cameraPathMarkerGeometry?.dispose()
+    this.cameraPathMarkerMaterial?.dispose()
+    this.cameraPathSelectedMaterial?.dispose()
+    this.cameraPathMarkerGeometry = null
+    this.cameraPathMarkerMaterial = null
+    this.cameraPathSelectedMaterial = null
+    this.cameraPathKeyframes = []
+    this.cameraPathRoot.clear()
+  }
+
+  frameSelected(): void {
+    const selected = this.selectedEntities
+    const bounds = selected.length > 0 ? this.boundsForEntities(selected) : this.relevantBounds()
+    const center = bounds.getCenter(new THREE.Vector3())
+    const boundsSize = bounds.getSize(new THREE.Vector3())
+    const size = boundsSize.length()
+    this.orbitTarget.copy(center)
+    if (stageViewModeIsOrthographic(this.viewMode)) {
+      const rect = this.getCanvasRect()
+      this.orthographicHalfHeight = THREE.MathUtils.clamp(Math.max(boundsSize.y * 0.7, boundsSize.x / Math.max(0.1, rect.width / Math.max(1, rect.height)) * 0.7, boundsSize.z * 0.7, 1.5), 1, 100)
+      this.saveOrthographicViewState()
+    } else {
+      this.orbit.radius = Math.max(2.5, size * 1.8)
+    }
+    this.applyViewCamera()
+  }
+
+  getViewMode(): StageViewMode {
+    return this.viewMode
+  }
+
+  getViewSelection(): StageViewSelection {
+    return this.isometricCorner ?? this.viewMode
+  }
+
+  setViewMode(mode: StageViewMode): void {
+    if (mode === 'perspective') {
+      if (this.viewMode === 'perspective' && !this.isometricCorner && !this.savedPerspectiveOrbit) return
+      if (this.savedPerspectiveOrbit) {
+        const { target, ...orbit } = this.savedPerspectiveOrbit
+        Object.assign(this.orbit, orbit)
+        this.orbitTarget.copy(target)
+        this.savedPerspectiveOrbit = null
+      }
+      this.isometricCorner = null
+      this.viewMode = mode
+      this.editorCamera = this.perspectiveCamera
+      this.applyViewCamera()
+      this.options.onViewChanged?.('perspective')
+      return
+    }
+    if (mode === this.viewMode && !this.isometricCorner) return
+    this.isometricCorner = null
+    const saved = this.orthographicViewStates.get(mode)
+    if (saved) {
+      this.orbitTarget.copy(saved.target)
+      this.orthographicHalfHeight = saved.halfHeight
+    } else {
+      const bounds = this.relevantBounds()
+      this.orbitTarget.copy(bounds.getCenter(new THREE.Vector3()))
+      const size = bounds.getSize(new THREE.Vector3())
+      const rect = this.getCanvasRect()
+      const aspect = rect.width / Math.max(1, rect.height)
+      this.orthographicHalfHeight = THREE.MathUtils.clamp(Math.max(size.y * 0.65, size.x / Math.max(0.1, aspect) * 0.65, size.z * 0.65, 2), 1, 100)
+      this.orthographicViewStates.set(mode, { target: this.orbitTarget.clone(), halfHeight: this.orthographicHalfHeight })
+    }
+    this.viewMode = mode
+    this.editorCamera = this.orthographicCamera
+    this.applyViewCamera()
+    this.options.onViewChanged?.(mode)
+  }
+
+  setIsometricView(corner: StageIsometricCorner): void {
+    if (!this.savedPerspectiveOrbit) this.savedPerspectiveOrbit = { ...this.orbit, target: this.orbitTarget.clone() }
+    const angles = stageIsometricAngles(corner)
+    this.orbit.theta = angles.theta
+    this.orbit.phi = angles.phi
+    this.isometricCorner = corner
+    this.viewMode = 'perspective'
+    this.editorCamera = this.perspectiveCamera
+    this.applyViewCamera()
+    this.options.onViewChanged?.(corner)
+  }
+
+  restorePerspectiveView(): void {
+    this.setViewMode('perspective')
+  }
+
+  orbitFromViewCube(deltaX: number, deltaY: number): void {
+    if (this.disposed) return
+    if (stageViewModeIsOrthographic(this.viewMode)) {
+      const angles = stageOrbitAnglesFromDirection(stageViewDirection(this.viewMode).direction, this.orbit.theta)
+      this.orbit.radius = Math.max(2.5, this.orthographicHalfHeight * 2.4)
+      this.orbit.theta = angles.theta
+      this.orbit.phi = angles.phi
+      this.viewMode = 'perspective'
+      this.editorCamera = this.perspectiveCamera
+    }
+    if (this.isometricCorner) {
+      this.isometricCorner = null
+      this.savedPerspectiveOrbit = null
+    }
+    Object.assign(this.orbit, stageOrbitAfterPointerDelta(this.orbit, deltaX, deltaY))
+    this.options.onViewChanged?.('perspective')
+    this.applyViewCamera()
+  }
+
+  addEntity(entity: { id: string; sceneId?: string; type: StageEntityType; root: THREE.Group; name?: string; getTransformPivot?: () => THREE.Vector3; getTransformSnapshot?: () => Pick<StageTransform, 'position' | 'rotation' | 'scale'>; applyTransform?: (transform: Pick<StageTransform, 'position' | 'rotation' | 'scale'>) => void; setSelected?: (selected: boolean, primary?: boolean) => void; setSnapPreview?: (active: boolean) => void; dispose?: () => void; transformable?: boolean; groupTransformable?: boolean; scalable?: boolean }): void {
     this.removeEntity(entity.id)
     const registered: StageEntity = { ...entity, name: entity.name ?? entity.id }
     registered.root.userData.entityId = registered.id
+    registered.root.userData.sceneId = registered.sceneId
     this.entities.set(entity.id, registered)
     this.selectableRoots.push(entity.root)
     this.scene.add(entity.root)
@@ -212,7 +503,7 @@ export class StageEngine {
   removeEntity(entityId: string): void {
     const entity = this.entities.get(entityId)
     if (!entity) return
-    if (this.selectedId === entityId) this.select(null)
+    if (this.selectedIds.includes(entityId)) this.select(this.selectedIds.filter((id) => id !== entityId), this.selectedId === entityId ? null : this.selectedId)
     entity.root.removeFromParent()
     entity.dispose?.()
     this.entities.delete(entityId)
@@ -220,8 +511,60 @@ export class StageEngine {
     this.requestRender()
   }
 
-  setSelected(entityId: string | null): void {
-    this.select(entityId)
+  clearEntities(): void {
+    Array.from(this.entities.keys()).forEach((entityId) => this.removeEntity(entityId))
+    this.select(null)
+  }
+
+  setSelected(entityId: string | null | readonly string[]): void {
+    if (Array.isArray(entityId)) this.select(entityId, entityId[entityId.length - 1] ?? null)
+    else if (typeof entityId === 'string') this.select(entityId, entityId)
+    else this.select(null)
+  }
+
+  setSelection(ids: readonly string[], primaryId: string | null = ids[ids.length - 1] ?? null): void {
+    this.select(ids, primaryId)
+  }
+
+  getSelection(): StageSelection {
+    return { ids: [...this.selectedIds], primaryId: this.selectedId }
+  }
+
+  alignSelection(axis: AxisName, edge: 'min' | 'center' | 'max'): void {
+    const entities = this.transformEntities(this.selectedEntities)
+    if (entities.length < 2) return
+    const before = this.snapshotEntities(entities)
+    const bounds = entities.map((entity) => this.entityBounds(entity))
+    const coordinate = (item: THREE.Box3, edgeName: 'min' | 'center' | 'max'): number => {
+      const min = axis === 'x' ? item.min.x : axis === 'y' ? item.min.y : item.min.z
+      const max = axis === 'x' ? item.max.x : axis === 'y' ? item.max.y : item.max.z
+      return edgeName === 'min' ? min : edgeName === 'max' ? max : (min + max) * 0.5
+    }
+    const combined = this.boundsForEntities(entities)
+    const target = coordinate(combined, edge)
+    this.options.onTransformBatchStart?.({ changes: before, primaryEntityId: this.selectedId })
+    entities.forEach((entity, index) => {
+      const item = bounds[index]
+      entity.root.position[axis] += target - coordinate(item, edge)
+    })
+    this.updateGizmo()
+    this.options.onTransformBatchEnd?.({ changes: this.snapshotEntities(entities), primaryEntityId: this.selectedId })
+    this.requestRender()
+  }
+
+  distributeSelection(axis: AxisName): void {
+    const entities = this.transformEntities(this.selectedEntities)
+    if (entities.length < 3) return
+    const before = this.snapshotEntities(entities)
+    this.options.onTransformBatchStart?.({ changes: before, primaryEntityId: this.selectedId })
+    const offsets = distributeOffsets(entities.map((entity) => {
+      const bounds = this.entityBounds(entity)
+      return { id: entity.id, min: [bounds.min.x, bounds.min.y, bounds.min.z], max: [bounds.max.x, bounds.max.y, bounds.max.z] }
+    }), axis)
+    entities.forEach((entity) => { entity.root.position[axis] += offsets.get(entity.id) ?? 0 })
+    this.updateGizmo()
+    this.options.onTransformBatchEnd?.({ changes: this.snapshotEntities(entities), primaryEntityId: this.selectedId })
+    this.requestRender()
   }
 
   setSnapPreview(entityId: string | null): void {
@@ -248,10 +591,20 @@ export class StageEngine {
   setEntityTransform(entityId: string, transform: Pick<StageTransform, 'position' | 'rotation' | 'scale'>): void {
     const entity = this.entities.get(entityId)
     if (!entity) return
-    entity.root.position.set(...transform.position)
-    entity.root.rotation.set(...transform.rotation)
-    if (transform.scale) entity.root.scale.set(...transform.scale)
-    if (entity.type === 'Actor') entity.root.position.y = 0
+    if (entity.applyTransform) entity.applyTransform(transform)
+    else {
+      entity.root.position.set(...transform.position)
+      entity.root.rotation.set(...transform.rotation)
+      if (transform.scale) entity.root.scale.set(...transform.scale)
+      if (entity.type === 'Actor') entity.root.position.y = 0
+    }
+    this.updateGizmo()
+    this.requestRender()
+  }
+
+  /** Refresh selection/gizmo presentation after a runtime-owned transform. */
+  refreshEntityTransform(entityId: string): void {
+    if (!this.entities.has(entityId)) return
     this.updateGizmo()
     this.requestRender()
   }
@@ -289,8 +642,9 @@ export class StageEngine {
     const height = Math.max(1, rect.height)
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO))
     this.renderer.setSize(width, height, false)
-    this.editorCamera.aspect = width / height
-    this.editorCamera.updateProjectionMatrix()
+    this.perspectiveCamera.aspect = width / height
+    this.perspectiveCamera.updateProjectionMatrix()
+    this.configureOrthographicCamera(width / height)
     this.applyViewCamera()
   }
 
@@ -302,6 +656,7 @@ export class StageEngine {
     if (!this.resizeObserver) window.removeEventListener('resize', this.handleWindowResize)
     this.removeInput()
     this.entities.forEach((entity) => entity.dispose?.())
+    this.clearCameraPathOverlay()
     this.resources.forEach((resource) => resource.dispose())
     this.renderer.dispose()
     this.canvas.remove()
@@ -318,6 +673,7 @@ export class StageEngine {
     this.canvas.addEventListener('lostpointercapture', this.handlePointerCancel)
     this.canvas.addEventListener('wheel', this.handleWheel, { passive: false })
     window.addEventListener('keydown', this.handleKeyDown)
+    window.addEventListener('keyup', this.handleKeyUp)
   }
 
   private removeInput(): void {
@@ -329,9 +685,17 @@ export class StageEngine {
     this.canvas.removeEventListener('lostpointercapture', this.handlePointerCancel)
     this.canvas.removeEventListener('wheel', this.handleWheel)
     window.removeEventListener('keydown', this.handleKeyDown)
+    window.removeEventListener('keyup', this.handleKeyUp)
   }
 
-  private readonly handleContextMenu = (event: MouseEvent) => event.preventDefault()
+  private readonly handleContextMenu = (event: MouseEvent) => {
+    event.preventDefault()
+    if (this.drag?.button === 2) this.releasePointer(this.drag.pointerId)
+    const hit = this.pick(event)
+    if (hit && this.selectedIds.length > 1 && this.selectedIds.includes(hit.id)) return
+    if (hit) this.select(hit.id)
+    this.options.onContextMenu?.(hit?.id ?? null, { clientX: event.clientX, clientY: event.clientY })
+  }
 
   private readonly handlePointerDown = (event: PointerEvent) => {
     if (this.disposed || this.drag) return
@@ -356,30 +720,66 @@ export class StageEngine {
       startScale: null,
       startQuaternion: null,
       startAngle: null,
+      groupEntities: [],
+      groupPivot: null,
+      startGroupPositions: new Map<string, THREE.Vector3>(),
+      startGroupQuaternions: new Map<string, THREE.Quaternion>(),
       verticalMove: event.shiftKey,
+      shiftActive: event.shiftKey || this.shiftKeyActive,
+      shiftAxis: null,
       gizmoScale: null,
       screenAxis: null,
       worldUnitsPerPixel: null,
+      rotationSnapDelta: null,
+      gizmoSpace: 'world' as StageGizmoSpace,
+      selectionChangedOnDown: false,
+      pathKeyframe: null,
+      pathSegmentId: null,
+      permissionGranted: false,
+      permissionPending: false,
     }
 
     if (event.button === 2 || event.button === 1 || (event.button === 0 && event.altKey && event.shiftKey)) {
       this.drag = { ...base, mode: 'pan' }
       this.pointerMode = 'pan'
     } else {
+      const pathKeyframe = event.button === 0 ? this.pickCameraPathKeyframe(event) : null
+      if (pathKeyframe) {
+        this.options.onCameraPathKeyframeSelect?.(pathKeyframe)
+        if (this.tool === 'move') {
+          const pathDrag = this.beginCameraPathMove(event, base, pathKeyframe)
+          this.drag = pathDrag
+          this.pointerMode = 'move'
+        } else {
+          this.drag = { ...base, mode: 'orbit', pathKeyframe }
+          this.pointerMode = 'orbit'
+        }
+      } else {
+      const pathSegment = event.button === 0 ? this.pickCameraPathSegment(event) : null
+      if (pathSegment) {
+        this.options.onCameraPathSegmentSelect?.(pathSegment.selection)
+        this.drag = { ...base, mode: 'orbit', pathSegmentId: pathSegment.id }
+        this.pointerMode = 'orbit'
+      } else {
       const gizmoHandle = event.button === 0 ? this.pickGizmo(event) : null
-      if (gizmoHandle && this.selectedEntity && this.selectedEntity.transformable !== false && this.tool !== 'select' && (this.tool !== 'scale' || this.selectedEntity.scalable === true)) {
+      if (gizmoHandle && this.selectedEntity && this.selectedEntity.transformable !== false && this.options.canTransformEntity?.(this.selectedEntity.id) !== false && this.options.canTransformGroup?.(this.selectedIds) !== false && this.tool !== 'select' && (this.tool !== 'scale' || (this.selectedEntities.length === 1 && this.selectedEntity.scalable === true))) {
         this.drag = this.beginGizmoDrag(event, base, gizmoHandle)
         this.pointerMode = 'gizmo'
       } else {
         const hit = event.button === 0 ? this.pick(event) : null
-        if (hit && this.tool === 'move' && hit.transformable !== false) {
-          this.select(hit.id)
+        if (hit && this.tool === 'move' && hit.transformable !== false && this.options.canTransformEntity?.(hit.id) !== false && this.options.canTransformGroup?.(this.selectedIds.includes(hit.id) ? this.selectedIds : [hit.id]) !== false) {
+          if (!this.selectedIds.includes(hit.id)) {
+            this.select(hit.id, null, event.shiftKey)
+            base.selectionChangedOnDown = true
+          }
           this.drag = this.beginDirectMove(event, base, hit)
           this.pointerMode = 'move'
         } else {
           this.drag = { ...base, mode: 'orbit' }
           this.pointerMode = 'orbit'
         }
+      }
+      }
       }
     }
     event.preventDefault()
@@ -388,31 +788,57 @@ export class StageEngine {
 
   private readonly handlePointerMove = (event: PointerEvent) => {
     const drag = this.drag
-    if (this.disposed || !drag || drag.pointerId !== event.pointerId) return
+    if (this.disposed || !drag || drag.pointerId !== event.pointerId) {
+      if (!this.disposed && !drag) this.updateCameraPathHover(event)
+      return
+    }
     const deltaX = event.clientX - drag.lastX
     const deltaY = event.clientY - drag.lastY
     if (!drag.moved && !stageMovedBeyondThreshold(drag.startX, drag.startY, event.clientX, event.clientY)) return
+    if ((drag.mode === 'move' || drag.mode === 'gizmo') && drag.entity && !drag.permissionGranted) {
+      this.requestTransformPermission(drag)
+      return
+    }
     drag.moved = true
     drag.lastX = event.clientX
     drag.lastY = event.clientY
 
-    if ((drag.mode === 'move' || drag.mode === 'gizmo') && drag.entity && !drag.transformStarted) {
-      this.beginTransform(drag.entity)
+    if (drag.mode === 'move' && drag.pathKeyframe && !drag.transformStarted) {
+      this.options.onCameraPathPointMoveStart?.(drag.pathKeyframe, this.pathDragPosition(drag))
+      drag.transformStarted = true
+    } else if ((drag.mode === 'move' || drag.mode === 'gizmo') && drag.entity && !drag.transformStarted) {
+      this.beginTransform(drag)
       drag.transformStarted = true
     }
 
     if (drag.mode === 'orbit') {
-      this.orbit.theta -= deltaX * 0.006
-      this.orbit.phi = THREE.MathUtils.clamp(this.orbit.phi - deltaY * 0.006, 0.05, 3.1)
-      this.applyViewCamera()
+      if (!stageViewModeIsOrthographic(this.viewMode)) {
+        if (this.isometricCorner) {
+          this.isometricCorner = null
+          this.savedPerspectiveOrbit = null
+          this.options.onViewChanged?.('perspective')
+        }
+        this.orbit.theta -= deltaX * 0.006
+        this.orbit.phi = THREE.MathUtils.clamp(this.orbit.phi - deltaY * 0.006, 0.05, 3.1)
+        this.applyViewCamera()
+      }
     } else if (drag.mode === 'pan') {
       this.pan(deltaX, deltaY)
     } else if (drag.mode === 'move') {
-      this.applyDirectMove(event, drag)
-    } else {
+      const shiftHeld = event.shiftKey || this.shiftKeyActive
+      if (shiftHeld !== drag.shiftActive) {
+        drag.shiftActive = shiftHeld
+        if (!shiftHeld) {
+          drag.shiftAxis = null
+          this.options.onAxisLockChange?.(null)
+        }
+      }
+      if (drag.pathKeyframe) this.applyCameraPathMove(event, drag)
+      else this.applyDirectMove(event, drag)
+    } else if (drag.mode === 'gizmo') {
       this.applyGizmoDrag(event, drag)
     }
-    if (drag.transformStarted && drag.entity) this.options.onTransformPreview?.(this.transformSnapshot(drag.entity))
+    if (drag.transformStarted && drag.entity) this.emitTransformPreview(drag)
     event.preventDefault()
     this.emitDebug()
     this.requestRender()
@@ -421,12 +847,24 @@ export class StageEngine {
   private readonly handlePointerUp = (event: PointerEvent) => {
     if (this.disposed || !this.drag || this.drag.pointerId !== event.pointerId) return
     const drag = this.drag
-    if (!drag.moved && drag.button === 0 && drag.mode !== 'gizmo') {
+    if (!drag.moved && drag.button === 0) {
       const hit = this.pick(event)
-      this.select(hit?.id ?? null)
+      if (drag.pathKeyframe || drag.pathSegmentId) {
+        // Marker selection is already handled on pointerdown; it must never
+        // fall through to entity selection.
+      } else if (drag.mode === 'move') {
+        // A Shift-click on an already selected object is a toggle, not a
+        // zero-distance move. Unmodified clicks retain the current group.
+        if (!drag.selectionChangedOnDown && event.shiftKey && hit && this.selectedIds.includes(hit.id)) this.select(hit.id, null, true)
+      } else if (drag.mode !== 'gizmo') {
+        this.select(hit?.id ?? null, null, event.shiftKey)
+      }
     }
-    if (drag.moved && drag.transformStarted && (drag.mode === 'move' || drag.mode === 'gizmo') && drag.entity) {
-      this.endTransform(drag.entity)
+    if (drag.moved && drag.transformStarted && drag.mode === 'move' && drag.pathKeyframe) {
+      this.options.onCameraPathPointMoveEnd?.(drag.pathKeyframe, this.pathDragPosition(drag))
+      this.requestRender()
+    } else if (drag.moved && drag.transformStarted && (drag.mode === 'move' || drag.mode === 'gizmo') && drag.entity) {
+      this.endTransform(drag)
       this.updateGizmo()
       this.requestRender()
     }
@@ -445,7 +883,10 @@ export class StageEngine {
     if (this.disposed) return
     const input = classifyWheelInput(event)
     if (input === 'trackpad-pan') this.pan(event.deltaX, event.deltaY)
-    else this.orbit.radius = stageZoomDistance(this.orbit.radius, event.deltaY)
+    else if (stageViewModeIsOrthographic(this.viewMode)) {
+      this.orthographicHalfHeight = THREE.MathUtils.clamp(stageZoomDistance(this.orthographicHalfHeight, event.deltaY), 1, 100)
+      this.saveOrthographicViewState()
+    } else this.orbit.radius = stageZoomDistance(this.orbit.radius, event.deltaY)
     this.applyViewCamera()
     event.preventDefault()
     this.emitDebug()
@@ -453,6 +894,10 @@ export class StageEngine {
   }
 
   private readonly handleKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Shift') {
+      this.shiftKeyActive = true
+      return
+    }
     if (this.isTypingTarget(event.target)) return
     if (event.metaKey || event.ctrlKey || event.altKey) return
     const configuredTool = Object.entries(this.toolShortcuts).find(([, key]) => key?.toLowerCase() === event.key.toLowerCase())?.[0] as StageTool | undefined
@@ -467,13 +912,28 @@ export class StageEngine {
       event.preventDefault()
     } else if (event.key === 'Home' || event.key.toLowerCase() === 'h') {
       this.orbitTarget.set(0, 1, 0)
-      this.orbit.radius = 15
-      this.orbit.theta = 0.62
-      this.orbit.phi = 1.13
+      if (stageViewModeIsOrthographic(this.viewMode)) {
+        this.orthographicHalfHeight = 8
+        this.saveOrthographicViewState()
+      } else {
+        this.orbit.radius = 15
+        this.orbit.theta = 0.62
+        this.orbit.phi = 1.13
+      }
       this.applyViewCamera()
       event.preventDefault()
     }
     this.emitDebug()
+  }
+
+  private readonly handleKeyUp = (event: KeyboardEvent) => {
+    if (event.key !== 'Shift') return
+    this.shiftKeyActive = false
+    if (this.drag?.mode === 'move') {
+      this.drag.shiftActive = false
+      this.drag.shiftAxis = null
+      this.options.onAxisLockChange?.(null)
+    }
   }
 
   private isTypingTarget(target: EventTarget | null): boolean {
@@ -485,6 +945,7 @@ export class StageEngine {
     if (this.canvas.hasPointerCapture(pointerId)) this.canvas.releasePointerCapture(pointerId)
     this.drag = null
     this.pointerMode = 'idle'
+    this.options.onAxisLockChange?.(null)
     this.setHover(null)
   }
 
@@ -492,43 +953,131 @@ export class StageEngine {
     return this.selectedId ? this.entities.get(this.selectedId) ?? null : null
   }
 
-  private select(entityId: string | null): void {
-    if (entityId !== null && !this.entities.has(entityId)) entityId = null
-    this.selectedId = entityId
+  private get selectedEntities(): StageEntity[] {
+    return this.selectedIds.map((id) => this.entities.get(id)).filter((entity): entity is StageEntity => Boolean(entity))
+  }
+
+  private select(entityOrIds: string | readonly string[] | null, primaryId: string | null = null, additive = false): void {
+    if (additive && entityOrIds === null) return
+    let nextSelection
+    if (additive && typeof entityOrIds === 'string') {
+      nextSelection = toggleSelection({ ids: this.selectedIds, primaryId: this.selectedId }, entityOrIds, new Set(this.entities.keys()))
+    } else {
+      const ids = typeof entityOrIds === 'string' ? [entityOrIds] : entityOrIds ? [...entityOrIds] : []
+      nextSelection = normalizeSelection(ids, primaryId ?? (typeof entityOrIds === 'string' ? entityOrIds : null), new Set(this.entities.keys()))
+    }
+    const ids = nextSelection.ids
+    primaryId = nextSelection.primaryId
+    if (primaryId === this.selectedId && ids.length === this.selectedIds.length && ids.every((id, index) => id === this.selectedIds[index])) return
+    this.selectedIds = ids
+    this.selectedId = primaryId
     this.entities.forEach((entity) => {
-      entity.setSelected?.(entity.id === entityId)
-      entity.material?.emissive.set(entity.id === entityId ? SELECTION_COLOR : '#000000')
-      if (entity.material) entity.material.emissiveIntensity = entity.id === entityId ? 0.35 : 0
-      entity.root.userData.stageSelected = entity.id === entityId
+      const selected = this.selectedIds.includes(entity.id)
+      const primary = entity.id === this.selectedId
+      entity.setSelected?.(selected, primary)
+      entity.material?.emissive.set(selected ? SELECTION_COLOR : '#000000')
+      if (entity.material) entity.material.emissiveIntensity = selected ? (primary ? 0.35 : 0.2) : 0
+      entity.root.userData.stageSelected = selected
+      entity.root.userData.stagePrimary = primary
       entity.root.traverse((object) => {
         if (object instanceof THREE.Mesh && object.material instanceof THREE.MeshStandardMaterial) {
-          object.material.emissive.set(entity.id === entityId ? SELECTION_COLOR : '#000000')
-          object.material.emissiveIntensity = entity.id === entityId ? 0.35 : 0
+          object.material.emissive.set(selected ? SELECTION_COLOR : '#000000')
+          object.material.emissiveIntensity = selected ? (primary ? 0.35 : 0.2) : 0
         }
       })
     })
     this.selectedEntity?.root.updateMatrixWorld(true)
     this.updateGizmo()
-    this.selectionListener?.(entityId)
+    this.selectionListener?.({ ids: [...this.selectedIds], primaryId: this.selectedId })
     this.emitDebug()
     this.requestRender()
   }
 
-  private beginTransform(entity: StageEntity): void {
-    this.options.onTransformStart?.(this.transformSnapshot(entity))
+  private beginTransform(drag: StageDrag): void {
+    if (drag.groupEntities.length > 1) this.options.onTransformBatchStart?.(this.batchSnapshot(drag))
+    else if (drag.entity) this.options.onTransformStart?.(this.transformSnapshot(drag.entity))
   }
 
-  private endTransform(entity: StageEntity): void {
-    this.options.onTransformEnd?.(this.transformSnapshot(entity))
+  private requestTransformPermission(drag: StageDrag): void {
+    if (drag.permissionPending || drag.permissionGranted || !drag.entity) return
+    const request = this.options.onTransformPermissionRequest
+    if (!request) {
+      drag.permissionGranted = true
+      return
+    }
+    const result = request(drag.entity.id)
+    if (typeof result === 'boolean') {
+      if (result) drag.permissionGranted = true
+      else this.releasePointer(drag.pointerId)
+      return
+    }
+    drag.permissionPending = true
+    void result.then((granted) => {
+      if (this.drag !== drag || this.disposed) return
+      drag.permissionPending = false
+      if (granted) {
+        drag.permissionGranted = true
+        this.requestRender()
+      } else this.releasePointer(drag.pointerId)
+    }).catch(() => {
+      if (this.drag !== drag || this.disposed) return
+      this.releasePointer(drag.pointerId)
+    })
+  }
+
+  private endTransform(drag: StageDrag): void {
+    if (drag.groupEntities.length > 1) this.options.onTransformBatchEnd?.(this.batchSnapshot(drag))
+    else if (drag.entity) this.options.onTransformEnd?.(this.transformSnapshot(drag.entity))
+  }
+
+  private emitTransformPreview(drag: StageDrag): void {
+    if (drag.groupEntities.length > 1) this.options.onTransformBatchPreview?.(this.batchSnapshot(drag))
+    else if (drag.entity) this.options.onTransformPreview?.(this.transformSnapshot(drag.entity))
   }
 
   private transformSnapshot(entity: StageEntity): StageTransform {
+    const snapshot = entity.getTransformSnapshot?.()
+    if (snapshot) {
+      return {
+        entityId: entity.id,
+        position: snapshot.position,
+        rotation: snapshot.rotation,
+        scale: snapshot.scale ?? [entity.root.scale.x, entity.root.scale.y, entity.root.scale.z],
+      }
+    }
     return {
       entityId: entity.id,
       position: [entity.root.position.x, entity.root.position.y, entity.root.position.z],
       rotation: [entity.root.rotation.x, entity.root.rotation.y, entity.root.rotation.z],
       scale: [entity.root.scale.x, entity.root.scale.y, entity.root.scale.z],
     }
+  }
+
+  private batchSnapshot(drag: StageDrag): StageTransformBatch {
+    return { changes: drag.groupEntities.map((entity) => this.transformSnapshot(entity)), primaryEntityId: this.selectedId }
+  }
+
+  private snapshotEntities(entities: readonly StageEntity[]): StageTransform[] {
+    return entities.map((entity) => this.transformSnapshot(entity))
+  }
+
+  private transformEntities(entities: readonly StageEntity[]): StageEntity[] {
+    return entities.filter((entity) => entity.transformable !== false && entity.groupTransformable !== false)
+  }
+
+  private entityBounds(entity: StageEntity): THREE.Box3 {
+    return new THREE.Box3().setFromObject(entity.root)
+  }
+
+  private transformPivot(entity: StageEntity): THREE.Vector3 {
+    entity.root.updateMatrixWorld(true)
+    return entity.getTransformPivot?.() ?? entity.root.getWorldPosition(new THREE.Vector3())
+  }
+
+  private boundsForEntities(entities: readonly StageEntity[]): THREE.Box3 {
+    const bounds = new THREE.Box3()
+    entities.forEach((entity) => bounds.union(this.entityBounds(entity)))
+    return bounds.isEmpty() ? this.relevantBounds() : bounds
   }
 
   private getCanvasRect(): StageCanvasRect {
@@ -551,7 +1100,7 @@ export class StageEngine {
     return this.raycaster
   }
 
-  private pick(event: PointerEvent): StageEntity | null {
+  private pick(event: { clientX: number; clientY: number }): StageEntity | null {
     const raycaster = this.pointerRay(event)
     const hits = raycaster.intersectObjects(this.selectableRoots, true)
     this.lastRayHits = String(hits.length)
@@ -560,6 +1109,79 @@ export class StageEngine {
     let current: THREE.Object3D | null = hit.object
     while (current && !this.selectableRoots.includes(current as THREE.Group)) current = current.parent
     return current ? this.entities.get(current.userData.entityId as string) ?? null : null
+  }
+
+  private pickCameraPathKeyframe(event: { clientX: number; clientY: number }): CameraPathKeyframe | null {
+    if (!this.cameraPathVisible || this.cameraPathMarkerMeshes.length === 0) return null
+    const hit = this.pointerRay(event).intersectObjects(this.cameraPathMarkerMeshes, false)[0]
+    const keyframeId = hit?.object.userData.cameraPathKeyframeId as string | undefined
+    return keyframeId ? this.cameraPathKeyframes.find((keyframe) => keyframe.keyframeId === keyframeId) ?? null : null
+  }
+
+  private pickCameraPathSegment(event: { clientX: number; clientY: number }): { id: string; selection: CameraPathSegmentSelection } | null {
+    if (!this.cameraPathVisible || this.cameraPathSegmentLines.length === 0) return null
+    this.raycaster.params.Line.threshold = 0.14
+    const hit = this.pointerRay(event).intersectObjects(this.cameraPathSegmentLines, false)[0]
+    const id = hit?.object.userData.cameraPathSegmentId as string | undefined
+    return id ? this.cameraPathSegments.find((segment) => segment.id === id) ?? null : null
+  }
+
+  private updateCameraPathHover(event: { clientX: number; clientY: number }): void {
+    const segment = this.pickCameraPathSegment(event)
+    const nextId = segment?.id ?? null
+    if (nextId === this.cameraPathHoveredSegmentId) return
+    this.cameraPathHoveredSegmentId = nextId
+    this.cameraPathSegmentLines.forEach((line) => {
+      const hovered = line.userData.cameraPathSegmentId === nextId
+      const selected = line.userData.cameraPathSelected === true
+      line.userData.cameraPathHovered = hovered
+      line.material = selected ? this.cameraPathSelectedSegmentMaterial! : hovered ? this.cameraPathSelectedSegmentMaterial! : this.cameraPathSegmentMaterial!
+    })
+    this.requestRender()
+  }
+
+  private beginCameraPathMove(event: PointerEvent, base: Omit<StageDrag, 'mode'>, keyframe: CameraPathKeyframe): StageDrag {
+    const startPosition = new THREE.Vector3(...keyframe.position)
+    const planeNormal = stageViewModeIsOrthographic(this.viewMode) ? stageViewDirection(this.viewMode).direction : new THREE.Vector3(0, 1, 0)
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, startPosition)
+    const startPoint = this.pointerRay(event).ray.intersectPlane(plane, new THREE.Vector3()) ?? startPosition.clone()
+    return { ...base, mode: 'move', pathKeyframe: keyframe, plane, startPoint, startPosition, groupPivot: startPosition.clone() }
+  }
+
+  private pathDragPosition(drag: StageDrag): ActorVector3Like {
+    const marker = drag.pathKeyframe ? this.cameraPathMarkerMeshes.find((candidate) => candidate.userData.cameraPathKeyframeId === drag.pathKeyframe?.keyframeId) : null
+    const position = marker?.position ?? (drag.startPosition ?? new THREE.Vector3())
+    return [position.x, position.y, position.z]
+  }
+
+  private applyCameraPathMove(event: PointerEvent, drag: StageDrag): void {
+    if (!drag.pathKeyframe || !drag.plane || !drag.startPoint || !drag.startPosition) return
+    const point = this.pointerRay(event).ray.intersectPlane(drag.plane, new THREE.Vector3())
+    if (!point) return
+    const delta = point.sub(drag.startPoint)
+    if (!stageViewModeIsOrthographic(this.viewMode)) delta.y = 0
+    const shiftHeld = event.shiftKey || this.shiftKeyActive
+    if (shiftHeld !== drag.shiftActive) {
+      drag.shiftActive = shiftHeld
+      if (!shiftHeld) {
+        drag.shiftAxis = null
+        this.options.onAxisLockChange?.(null)
+      }
+    }
+    if (shiftHeld) {
+      if (!drag.shiftAxis) {
+        const verticalIntent = -(event.clientY - drag.startY) * stageWorldUnitsPerPixelAtDepth(this.editorCamera, stageCameraSpaceDepth(this.editorCamera, drag.startPosition), this.getCanvasRect().height)
+        drag.shiftAxis = dominantStageAxis(new THREE.Vector3(delta.x, verticalIntent, delta.z))
+        this.options.onAxisLockChange?.(drag.shiftAxis)
+      }
+      if (drag.shiftAxis === 'y') delta.set(0, -(event.clientY - drag.startY) * stageWorldUnitsPerPixelAtDepth(this.editorCamera, stageCameraSpaceDepth(this.editorCamera, drag.startPosition), this.getCanvasRect().height), 0)
+      else delta.copy(constrainStageDeltaToAxis(delta, drag.shiftAxis))
+    }
+    const desired = drag.startPosition.clone().add(delta)
+    const snapped = this.snapPosition(desired, shiftHeld && drag.shiftAxis ? [drag.shiftAxis] : this.freeMoveSnapAxes(delta))
+    const marker = this.cameraPathMarkerMeshes.find((candidate) => candidate.userData.cameraPathKeyframeId === drag.pathKeyframe?.keyframeId)
+    marker?.position.copy(snapped)
+    this.options.onCameraPathPointMovePreview?.(drag.pathKeyframe, [snapped.x, snapped.y, snapped.z])
   }
 
   private pickGizmo(event: PointerEvent): StageGizmoHandle | null {
@@ -572,19 +1194,34 @@ export class StageEngine {
   }
 
   private beginDirectMove(event: PointerEvent, base: Omit<StageDrag, 'mode'>, entity: StageEntity): StageDrag {
-    const hit = this.pointerRay(event).ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -entity.root.position.y), new THREE.Vector3())
-    const startPoint = hit ?? entity.root.position.clone()
-    return { ...base, mode: 'move', entity, plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -startPoint.y), startPoint, startPosition: entity.root.position.clone(), gizmoScale: this.gizmoScale(entity.root.position) }
+    const groupEntities = this.transformEntities(this.selectedEntities)
+    const activeEntities = groupEntities.length > 0 ? groupEntities : [entity]
+    const groupPivot = activeEntities.length === 1 ? this.transformPivot(activeEntities[0]) : this.boundsForEntities(activeEntities).getCenter(new THREE.Vector3())
+    const planeNormal = stageViewModeIsOrthographic(this.viewMode) ? stageViewDirection(this.viewMode).direction : new THREE.Vector3(0, 1, 0)
+    const movePlane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, groupPivot)
+    const hit = this.pointerRay(event).ray.intersectPlane(movePlane, new THREE.Vector3())
+    const startPoint = hit ?? groupPivot.clone()
+    return { ...base, mode: 'move', entity, groupEntities: activeEntities, groupPivot, startGroupPositions: new Map(activeEntities.map((item) => [item.id, item.root.position.clone()])), startGroupQuaternions: new Map(activeEntities.map((item) => [item.id, item.root.quaternion.clone()])), plane: movePlane, startPoint, startPosition: entity.root.position.clone(), gizmoScale: this.gizmoScale(groupPivot) }
   }
 
   private beginGizmoDrag(event: PointerEvent, base: Omit<StageDrag, 'mode'>, handle: StageGizmoHandle): StageDrag {
     const entity = this.selectedEntity
     if (!entity) return { ...base, mode: 'orbit' }
-    const origin = this.gizmoRoot.position.clone()
+    const groupEntities = this.transformEntities(this.selectedEntities)
+    const activeEntities = groupEntities.length > 0 ? groupEntities : [entity]
+    const groupPivot = activeEntities.length === 1 ? this.transformPivot(activeEntities[0]) : this.boundsForEntities(activeEntities).getCenter(new THREE.Vector3())
+    const origin = groupPivot.clone()
+    const gizmoSpace = entity.groupTransformable === false
+      ? 'world'
+      : stageTransformSpace(entity.type === 'Camera' ? 'camera' : 'default', handle.mode, this.selectedEntities.length)
     const axis = handle.axis
       ? handle.mode === 'rotate'
-        ? stageRotationAxis([entity.root.rotation.x, entity.root.rotation.y, entity.root.rotation.z], handle.axis)
-        : new THREE.Vector3(handle.axis === 'x' ? 1 : 0, handle.axis === 'y' ? 1 : 0, handle.axis === 'z' ? 1 : 0)
+          ? entity.groupTransformable === false && entity.type !== 'Camera'
+            ? stageRotationAxis([entity.root.rotation.x, entity.root.rotation.y, entity.root.rotation.z], handle.axis)
+            : stageTransformAxis(entity.type === 'Camera' ? 'camera' : 'default', handle.mode, [entity.root.rotation.x, entity.root.rotation.y, entity.root.rotation.z], handle.axis, this.selectedEntities.length)
+        : gizmoSpace === 'local'
+          ? stageLocalAxis([entity.root.rotation.x, entity.root.rotation.y, entity.root.rotation.z], handle.axis)
+          : stageWorldAxis(handle.axis)
       : null
     const plane = handle.kind === 'plane' ? new THREE.Plane(new THREE.Vector3(0, 1, 0), -origin.y) : null
     const startPoint = plane ? this.pointerRay(event).ray.intersectPlane(plane, new THREE.Vector3()) : null
@@ -608,15 +1245,20 @@ export class StageEngine {
       handle,
       origin,
       axis,
+      gizmoSpace,
       plane,
       startPoint,
       startPosition: entity.root.position.clone(),
       startScale: entity.root.scale.clone(),
       startQuaternion: entity.root.quaternion.clone(),
       startAngle: handle.mode === 'rotate' && axis ? this.ringAngle(event, origin, axis) : null,
-      gizmoScale: this.gizmoScale(entity.root.position),
+      gizmoScale: this.gizmoScale(origin),
       screenAxis,
       worldUnitsPerPixel,
+      groupEntities: activeEntities,
+      groupPivot,
+      startGroupPositions: new Map(activeEntities.map((item) => [item.id, item.root.position.clone()])),
+      startGroupQuaternions: new Map(activeEntities.map((item) => [item.id, item.root.quaternion.clone()])),
     }
   }
 
@@ -625,16 +1267,50 @@ export class StageEngine {
     const point = this.pointerRay(event).ray.intersectPlane(drag.plane, new THREE.Vector3())
     if (!point) return
     const delta = point.sub(drag.startPoint)
-    if (!drag.verticalMove) delta.y = 0
-    else { delta.x = 0; delta.z = 0 }
-    drag.entity.root.position.copy(drag.startPosition).add(delta)
-    if (drag.entity.type === 'Actor' && !drag.verticalMove) drag.entity.root.position.y = 0
+    if (!stageViewModeIsOrthographic(this.viewMode)) delta.y = 0
+    if (drag.shiftActive) {
+      if (!drag.shiftAxis) {
+        const depth = stageCameraSpaceDepth(this.editorCamera, drag.entity.root.position)
+        const verticalIntent = -(event.clientY - drag.startY) * stageWorldUnitsPerPixelAtDepth(this.editorCamera, depth, this.getCanvasRect().height)
+        drag.shiftAxis = dominantStageAxis(new THREE.Vector3(delta.x, verticalIntent, delta.z))
+        this.options.onAxisLockChange?.(drag.shiftAxis)
+      }
+      if (drag.shiftAxis === 'y') {
+        delta.set(0, -(event.clientY - drag.startY) * stageWorldUnitsPerPixelAtDepth(this.editorCamera, stageCameraSpaceDepth(this.editorCamera, drag.entity.root.position), this.getCanvasRect().height), 0)
+      } else {
+        const constrained = constrainStageDeltaToAxis(delta, drag.shiftAxis)
+        delta.copy(constrained)
+      }
+    }
+    const pivot = drag.groupPivot ?? drag.startPosition
+    const desiredPosition = pivot.clone().add(delta)
+    const snapAxes = drag.shiftActive && drag.shiftAxis ? [drag.shiftAxis] : this.freeMoveSnapAxes(delta)
+    const snappedPivot = this.snapPosition(desiredPosition, snapAxes)
+    const groupDelta = snappedPivot.sub(pivot)
+    drag.groupEntities.forEach((entity) => {
+      const start = drag.startGroupPositions.get(entity.id) ?? entity.root.position
+      entity.root.position.copy(start).add(groupDelta)
+      if (drag.groupEntities.length === 1 && entity.type === 'Actor') entity.root.position.y = 0
+    })
     this.updateGizmo(drag)
+  }
+
+  private snapPosition(position: THREE.Vector3, axes: readonly StageAxisName[]): THREE.Vector3 {
+    return this.snapEnabled ? snapStagePosition(position, axes, this.snapGridSize) : position
+  }
+
+  private freeMoveSnapAxes(delta: THREE.Vector3): StageAxisName[] {
+    if (!stageViewModeIsOrthographic(this.viewMode)) return ['x', 'z']
+    const direction = stageViewDirection(this.viewMode).direction
+    const candidateAxes: StageAxisName[] = (['x', 'y', 'z'] as const).filter((axis) => Math.abs(direction[axis]) < 0.5)
+    const movedAxes = candidateAxes.filter((axis) => Math.abs(delta[axis]) > 0.000001)
+    return movedAxes.length > 0 ? movedAxes : candidateAxes.slice()
   }
 
   private applyGizmoDrag(event: PointerEvent, drag: StageDrag): void {
     if (!drag.entity || !drag.handle || !drag.origin) return
     if (drag.handle.mode === 'scale') {
+      if (drag.groupEntities.length > 1) return
       if (!drag.startScale) return
       const axis = drag.handle.axis ?? 'uniform'
       const axisVector = drag.axis
@@ -659,8 +1335,16 @@ export class StageEngine {
       let delta = angle - drag.startAngle
       if (delta > Math.PI) delta -= Math.PI * 2
       if (delta < -Math.PI) delta += Math.PI * 2
-      drag.entity.root.quaternion.copy(drag.startQuaternion)
-      drag.entity.root.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(drag.axis, delta))
+      if (this.rotationSnapEnabled && this.snapEnabled) delta = snapAngle(delta, this.rotationSnapRadians)
+      drag.rotationSnapDelta = delta
+      const rotation = new THREE.Quaternion().setFromAxisAngle(drag.axis, delta)
+      const pivot = drag.groupPivot ?? drag.origin
+      drag.groupEntities.forEach((entity) => {
+        const startPosition = drag.startGroupPositions.get(entity.id) ?? entity.root.position
+        const startQuaternion = drag.startGroupQuaternions.get(entity.id) ?? entity.root.quaternion
+        entity.root.position.copy(startPosition).sub(pivot).applyQuaternion(rotation).add(pivot)
+        entity.root.quaternion.copy(stageApplyRotation(startQuaternion, drag.axis!, delta, drag.gizmoSpace))
+      })
     } else {
       if (!drag.startPosition) return
       if (drag.handle.kind === 'plane') {
@@ -669,13 +1353,25 @@ export class StageEngine {
         if (!point) return
         const delta = point.sub(drag.startPoint)
         delta.y = 0
-        drag.entity.root.position.copy(drag.startPosition).add(delta)
+        const pivot = drag.groupPivot ?? drag.startPosition
+        const target = this.snapPosition(pivot.clone().add(delta), ['x', 'z'])
+        const translation = target.sub(pivot)
+        drag.groupEntities.forEach((entity) => entity.root.position.copy(drag.startGroupPositions.get(entity.id) ?? entity.root.position).add(translation))
       } else if (drag.axis && drag.screenAxis && drag.worldUnitsPerPixel !== null) {
         const pointerDeltaX = event.clientX - drag.startX
         const pointerDeltaY = event.clientY - drag.startY
         const pixelsAlongAxis = stagePointerDeltaAlongAxis(drag.startX, drag.startY, event.clientX, event.clientY, drag.screenAxis)
         const worldDistance = pixelsAlongAxis * drag.worldUnitsPerPixel
-        drag.entity.root.position.copy(drag.startPosition).addScaledVector(drag.axis, worldDistance)
+        const pivot = drag.groupPivot ?? drag.startPosition
+        const travel = drag.gizmoSpace === 'local' && drag.handle.axis && this.snapEnabled
+          ? snapStageValue(worldDistance, this.snapGridSize)
+          : worldDistance
+        const desiredPosition = pivot.clone().addScaledVector(drag.axis, travel)
+        const target = drag.gizmoSpace === 'local' && drag.handle.axis
+          ? desiredPosition
+          : this.snapPosition(desiredPosition, drag.handle.axis ? [drag.handle.axis] : [])
+        const translation = target.sub(pivot)
+        drag.groupEntities.forEach((entity) => entity.root.position.copy(drag.startGroupPositions.get(entity.id) ?? entity.root.position).add(translation))
         this.lastAxisDragDebug = {
           handle: drag.handle.axis ?? 'axis',
           screenAxisX: drag.screenAxis.x,
@@ -688,7 +1384,7 @@ export class StageEngine {
           resultPosition: [drag.entity.root.position.x, drag.entity.root.position.y, drag.entity.root.position.z],
         }
       }
-      if (drag.entity.type === 'Actor') drag.entity.root.position.y = 0
+      if (drag.groupEntities.length === 1 && drag.entity.type === 'Actor') drag.entity.root.position.y = 0
     }
     this.updateGizmo(drag)
   }
@@ -707,44 +1403,81 @@ export class StageEngine {
     this.editorCamera.updateMatrixWorld(true)
     const right = new THREE.Vector3().setFromMatrixColumn(this.editorCamera.matrixWorld, 0)
     const up = new THREE.Vector3().setFromMatrixColumn(this.editorCamera.matrixWorld, 1)
-    const scale = this.orbit.radius * 0.0014
+    const scale = stageViewModeIsOrthographic(this.viewMode)
+      ? (2 * this.orthographicHalfHeight) / Math.max(1, this.getCanvasRect().height)
+      : this.orbit.radius * 0.0014
     this.orbitTarget.addScaledVector(right, -deltaX * scale)
     this.orbitTarget.addScaledVector(up, deltaY * scale)
     this.applyViewCamera()
   }
 
   private applyViewCamera(): void {
-    const { radius, theta, phi } = this.orbit
-    this.editorCamera.position.set(
-      this.orbitTarget.x + radius * Math.sin(phi) * Math.sin(theta),
-      this.orbitTarget.y + radius * Math.cos(phi),
-      this.orbitTarget.z + radius * Math.sin(phi) * Math.cos(theta),
-    )
-    this.editorCamera.lookAt(this.orbitTarget)
+    if (stageViewModeIsOrthographic(this.viewMode)) {
+      this.editorCamera = this.orthographicCamera
+      const { direction, up } = stageViewDirection(this.viewMode)
+      const distance = Math.max(20, this.orthographicHalfHeight * 4)
+      this.configureOrthographicCamera(this.getCanvasRect().width / Math.max(1, this.getCanvasRect().height))
+      this.editorCamera.position.copy(this.orbitTarget).addScaledVector(direction, distance)
+      this.editorCamera.up.copy(up)
+      this.editorCamera.lookAt(this.orbitTarget)
+    } else {
+      this.editorCamera = this.perspectiveCamera
+      const { radius, theta, phi } = this.orbit
+      this.editorCamera.position.set(
+        this.orbitTarget.x + radius * Math.sin(phi) * Math.sin(theta),
+        this.orbitTarget.y + radius * Math.cos(phi),
+        this.orbitTarget.z + radius * Math.sin(phi) * Math.cos(theta),
+      )
+      this.editorCamera.up.set(0, 1, 0)
+      this.editorCamera.lookAt(this.orbitTarget)
+    }
     this.editorCamera.updateMatrixWorld(true)
+    this.options.onViewOrientationChanged?.([
+      this.editorCamera.quaternion.x,
+      this.editorCamera.quaternion.y,
+      this.editorCamera.quaternion.z,
+      this.editorCamera.quaternion.w,
+    ])
     this.updateGizmo()
     this.requestRender()
   }
 
-  private frameSelected(): void {
-    const entity = this.selectedEntity
-    if (!entity) return
-    const bounds = new THREE.Box3().setFromObject(entity.root)
-    const center = bounds.getCenter(new THREE.Vector3())
-    const size = bounds.getSize(new THREE.Vector3()).length()
-    this.orbitTarget.copy(center)
-    this.orbit.radius = Math.max(2.5, size * 1.8)
-    this.applyViewCamera()
+  private gizmoScale(position: THREE.Vector3): number {
+    if (this.editorCamera instanceof THREE.OrthographicCamera) return this.orthographicHalfHeight * 0.3
+    return this.editorCamera.position.distanceTo(position) * Math.tan(THREE.MathUtils.degToRad(this.editorCamera.fov) / 2) * 0.3
   }
 
-  private gizmoScale(position: THREE.Vector3): number {
-    return this.editorCamera.position.distanceTo(position) * Math.tan(THREE.MathUtils.degToRad(this.editorCamera.fov) / 2) * 0.3
+  private configureOrthographicCamera(aspect: number): void {
+    this.orthographicCamera.left = -this.orthographicHalfHeight * aspect
+    this.orthographicCamera.right = this.orthographicHalfHeight * aspect
+    this.orthographicCamera.top = this.orthographicHalfHeight
+    this.orthographicCamera.bottom = -this.orthographicHalfHeight
+    this.orthographicCamera.updateProjectionMatrix()
+  }
+
+  private saveOrthographicViewState(): void {
+    if (!stageViewModeIsOrthographic(this.viewMode)) return
+    this.orthographicViewStates.set(this.viewMode, { target: this.orbitTarget.clone(), halfHeight: this.orthographicHalfHeight })
+  }
+
+  private relevantBounds(): THREE.Box3 {
+    const bounds = new THREE.Box3()
+    const roots = this.entities.size > 0 ? Array.from(this.entities.values(), (entity) => entity.root) : []
+    roots.forEach((root) => bounds.expandByObject(root))
+    if (bounds.isEmpty()) bounds.setFromCenterAndSize(new THREE.Vector3(0, 1, 0), new THREE.Vector3(4, 2, 4))
+    return bounds
   }
 
   private updateGizmo(drag: StageDrag | null = null): void {
     const entity = this.selectedEntity
+    const entities = this.transformEntities(this.selectedEntities)
+    const gizmoSpace = entity?.groupTransformable === false
+      ? 'world'
+      : entity
+        ? stageTransformSpace(entity.type === 'Camera' ? 'camera' : 'default', this.tool, this.selectedEntities.length)
+        : 'world'
     const activeTransform = !!drag?.moved && (drag.mode === 'move' || drag.mode === 'gizmo')
-    const visible = !!entity && this.tool !== 'select'
+    const visible = !!entity && (this.tool === 'move' || this.tool === 'rotate' || this.tool === 'scale')
     if (!activeTransform) {
       this.gizmoRoot.visible = visible
       this.gizmoMove.visible = visible && this.tool === 'move'
@@ -752,7 +1485,9 @@ export class StageEngine {
       this.gizmoScaleHandles.visible = visible && this.tool === 'scale' && entity?.scalable === true
       this.gizmoHandles.forEach(({ pick, handle }) => {
         if (handle.mode === 'rotate' && handle.axis && entity) {
-          const axis = stageRotationAxis([entity.root.rotation.x, entity.root.rotation.y, entity.root.rotation.z], handle.axis)
+          const axis = entity.groupTransformable === false && entity.type !== 'Camera'
+            ? stageRotationAxis([entity.root.rotation.x, entity.root.rotation.y, entity.root.rotation.z], handle.axis)
+            : stageTransformAxis(entity.type === 'Camera' ? 'camera' : 'default', handle.mode, [entity.root.rotation.x, entity.root.rotation.y, entity.root.rotation.z], handle.axis, this.selectedEntities.length)
           const ringQuaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), axis)
           pick.quaternion.copy(ringQuaternion)
           handle.visible.forEach((mesh) => mesh.quaternion.copy(ringQuaternion))
@@ -762,7 +1497,9 @@ export class StageEngine {
         const axisVisible = !((handle.mode === 'move' || handle.mode === 'scale') && handle.kind === 'axis' && handle.axis) || !!stageProjectWorldAxisToScreen(
           this.editorCamera,
           entity?.root.position ?? new THREE.Vector3(),
-          new THREE.Vector3(handle.axis === 'x' ? 1 : 0, handle.axis === 'y' ? 1 : 0, handle.axis === 'z' ? 1 : 0),
+          handle.axis && gizmoSpace === 'local'
+            ? stageLocalAxis([entity?.root.rotation.x ?? 0, entity?.root.rotation.y ?? 0, entity?.root.rotation.z ?? 0], handle.axis)
+            : new THREE.Vector3(handle.axis === 'x' ? 1 : 0, handle.axis === 'y' ? 1 : 0, handle.axis === 'z' ? 1 : 0),
           this.getCanvasRect(),
         )
         const handleVisible = !actorYMove && !actorZRotate && axisVisible && (handle.mode !== 'scale' || (this.tool === 'scale' && entity?.scalable === true))
@@ -771,9 +1508,10 @@ export class StageEngine {
       })
     }
     if (!entity) return
-    this.gizmoRoot.position.copy(entity.root.position)
-    this.gizmoRoot.quaternion.identity()
-    this.gizmoRoot.scale.setScalar(activeTransform && drag?.gizmoScale !== null ? drag.gizmoScale : this.gizmoScale(entity.root.position))
+    const origin = entities.length > 1 ? this.boundsForEntities(entities).getCenter(new THREE.Vector3()) : this.transformPivot(entity)
+    this.gizmoRoot.position.copy(origin)
+    this.gizmoRoot.quaternion.copy(gizmoSpace === 'local' ? entity.root.quaternion : new THREE.Quaternion())
+    this.gizmoRoot.scale.setScalar(activeTransform && drag?.gizmoScale !== null ? drag.gizmoScale : this.gizmoScale(origin))
     if (!activeTransform) this.gizmoRoot.updateMatrixWorld(true)
   }
 

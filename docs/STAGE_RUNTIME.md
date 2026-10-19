@@ -31,7 +31,24 @@ sensor dimensions and focal length; it is not an infinite line or a hardcoded
 field of view. Its origin is placed at the visual lens front. The guide is
 shown for the selected Camera in Blocking View and is removed with the Camera.
 Selection bounds include the visible body, lens, matte box, and handle, while
-excluding the optical reference and frustum guide helpers.
+excluding the optical reference and frustum guide helpers. The StageEntity root
+is a true `CameraBodyPivot`, centered from the main Body and Rear Battery proxy
+parts. Its children are a shifted visual proxy and an `CameraOpticalRig` that
+contains the production PerspectiveCamera and frustum guide. The optical rig's
+fixed local offset preserves the historical CameraDocument position as the
+optical origin while the actual Stage transform rotates the housing in place.
+There is no sibling pivot helper and no root-position compensation state.
+
+The conversion is deterministic in both directions: Document optical position
+plus rotation derives the body-pivot runtime position; a transformed runtime
+body pivot derives the optical position written back to the document. The
+pivot excludes lens, matte box, frustum, path, target, and gizmo helpers and
+remains stable when capture settings or guide geometry change. Evaluated
+Timeline and temporary Phone Camera poses continue to be authoritative optical
+poses and are converted into the same hierarchy on every evaluation. Direct
+Stage edits are converted back through the document-facing Stage snapshot, so
+local axes, history, save/load, Camera View, and live review protocols retain
+their existing semantics.
 
 Camera height is the CameraDocument world-Y placement value. Pan, Tilt, and
 Roll are displayed in degrees at the Inspector boundary and stored as XYZ
@@ -119,6 +136,14 @@ proxy and its guides remain hidden. The image is rendered by the production
 camera in the separate read-only adapter; selection and transform controls are
 intentionally unavailable from inside that Camera's own image.
 
+Transform space is context-specific: single Actors and Props retain the
+existing local Move/Rotate policy, multi-selection retains world/group policy,
+and Camera Path points retain their existing world-position workflow. A single
+filmmaking Camera uses the same body-center pivot for Move and Rotate, but its
+Rotate rings are explicitly world X/Y/Z. The Camera body rotates around that
+center while the rings remain aligned to the Stage grid; no global Actor/Prop
+space policy is changed.
+
 React mounts `SceneRuntime` through the `Stage` component and only owns the mount element and user-facing failure state. Three.js objects are not placed in React state.
 
 ## V2.10E openable Windows
@@ -171,8 +196,12 @@ keeps the phone session and latest quaternion outside the StageEngine render
 loop, then applies a live Euler presentation to the existing Camera proxy and
 isolated Camera View. This bridge is intentionally not a second Camera runtime:
 it does not change projection, FOV, Frame Guides, navigation, or saved Camera
-data during live sensor control. `Set Camera Key` is an explicit current-frame
-mutation; `Record Move` is stopped and committed as Timeline rotation keys.
+data during live sensor control. The final rendered pose is output-only: it is
+composed from the evaluated Timeline/document pose plus the latest temporary
+Phone layer, and is never read back as a new base. `Set Camera Key` is an
+explicit current-frame mutation; `Record Move` samples one Timeline rotation
+key per canonical frame while retaining its recording-start base until the
+recording transaction ends.
 Pairing state and phone orientation are never serialized. V1 does not own
 Camera Position XYZ.
 
@@ -507,3 +536,180 @@ renderers, and Blob URLs are cleaned up. No service worker, cloud storage,
 authentication, analytics, or backend was added. Deployment and staging checks,
 HTTPS, cache policy, WordPress separation, and browser limitations are recorded
 in `docs/WEB_DEPLOYMENT.md`.
+
+## M3A scene ownership and editor view presets
+
+`ProjectDocument.scenes` is the logical ownership boundary for the shared
+Stage workspace. Entity IDs remain local to their SceneDocument; runtime
+instances therefore carry the active Project Scene ID in `userData.sceneId`
+and the Stage and Camera View reconcile paths reset their scene-local maps
+when that ID changes. Camera View owns a separate Three.js scene and removes
+all previous actors, scenic elements, and the production Camera before
+reconciling the new Scene. The reset scope includes Project ID as well as
+Scene ID, so opening a different Project with `Scene 01` cannot reuse the
+previous runtime. This prevents a repeated local ID such as
+`actor-01` or `camera-01` from reusing a previous-scene render instance.
+
+The editor Stage has one Perspective camera plus one reusable Orthographic
+camera. Perspective retains the orbit/pan/zoom editor navigation. Top and
+Bottom look along world Y; Front and Back look along world Z; Left and Right
+look along world X. The current world convention is Y-up, camera forward
+along -Z, and right along +X. Orthographic view state is session-only and is
+not a production Camera, Camera View setting, or serialized Scene field.
+
+While a free object move is active, Shift selects a deterministic dominant
+world axis and keeps the move constrained until Shift is released. Gizmo axis
+drags remain authoritative. The small `Axis Lock · X/Y/Z` indicator is
+transient Stage feedback; it is not persisted.
+## M3A.1 Stage ViewCube navigation
+
+Blocking View exposes a compact interactive ViewCube inside the Stage viewport. Its six face controls call the existing `StageEngine.setViewMode()` path for Perspective-independent Top, Bottom, Front, Back, Left, and Right editor views. Four corner controls call the StageEngine's deterministic editor-only isometric preset path.
+
+The ViewCube is navigation UI, not a production Camera. A corner preset temporarily uses the editor Perspective camera while retaining the user's saved free Perspective orbit; the Perspective control restores that orbit. The production Camera document, Camera View, capture math, and serialized scene data are unaffected. ViewCube pointer events are contained in its DOM control so they cannot begin a Stage selection, move, rotate, or orbit gesture.
+
+## M3B Stage precision tools
+
+Blocking View position transforms can opt into world-space `Snap to Grid` using
+the compact 0.01 m, 0.05 m, 0.10 m, 0.25 m, 0.50 m, and 1.00 m presets. Snap
+is applied to the computed Stage entity position, only on the axes participating
+in the current free or gizmo move. Rotation and production Camera optics are
+not affected. Snapped movement continues through the existing single
+transform-start/transform-end history transaction.
+
+The Stage V1 `Measure` tool was removed from the product surface. It was not
+necessary for the current blocking workflow, so the tool state, guide overlays,
+endpoint selection, measurement labels, and measurement keyboard handling are
+not retained as dead runtime paths. The shared floor-plane picking helper
+remains available to wall drawing.
+
+`Frame Selected` changes only the editor view. Perspective preserves the
+current viewing direction while fitting the selected world bounds; orthographic
+views preserve their planar direction while fitting the same bounds. The
+production Camera document, Camera View, and capture settings remain outside
+this path.
+
+## M3C Multi-selection and arrangement
+
+Stage selection now has an ordered ID list plus a primary ID. Normal clicks
+replace the selection; Shift-click toggles membership, and Shift-clicking empty
+Stage space is a no-op. The active Scene remains the selection boundary, while
+the Scene panel and Stage share the same selection state. The Inspector keeps
+the existing single-entity editor and shows a read-only type summary for two or
+more selected entities.
+
+Move and Rotate use the combined visible world-bounds center as an editor-only
+group pivot. Group Move applies one delta to every supported entity and snaps
+that pivot, preserving spacing. Group Rotate applies one shared world rotation
+delta to positions and orientations. Attached Wall Openings are excluded from
+unsupported group transforms rather than being detached. Scale remains
+single-object only.
+
+The Precision control is contextual: Move uses metre grid steps, while Rotate
+uses optional 5°, 15°, 30°, 45°, and 90° angle steps (15° default, disabled by
+default). Arrange uses visible bounds: Left/Center/Right map to X min/center/max,
+Bottom/Middle/Top map to Y min/center/max, and Front/Center/Back map to Z
+min/center/max; because forward is -Z, Front is the minimum-Z side. X and Z
+distribution keeps the spatially outermost items fixed and equalizes visible
+gaps. Arrangement and multi-object transforms are committed as one history
+transaction and are not serialized as a group object. The contextual Arrange
+trigger lives inside the existing View group when two or more supported
+entities are selected. Its popover is positioned from the trigger's live DOM
+bounds, clamped to the Stage viewport, and isolated from Stage pointer input.
+
+## M3F Camera path and move previs
+
+Blocking View can display a session-only path for exactly one selected
+production Camera. The path is derived from that Camera's authoritative
+`Camera / position` Timeline track and is omitted from Camera View, preview
+capture, and export. Samples use the existing `evaluateTimeline()` result, so
+linear, hold, and easing behavior remains authoritative. Authored position
+keys are editor markers; the playhead marker is the evaluated camera position
+at the current Timeline frame.
+
+Clicking a marker selects the Camera position keyframe and moves the Timeline
+playhead. With the existing Move tool, dragging a marker uses established
+position snapping and Shift axis locking. The edit commits as one history
+transaction at pointer-up and updates only that position keyframe; it does not
+silently author rotation or change the Camera base pose. Automatic lock-target
+re-aiming is intentionally deferred. Helpers are excluded from entity picking
+and dispose their Three.js resources when replaced or the Stage is destroyed.
+
+## M3G Camera move timing and speed tools
+
+Camera move segments are derived from consecutive authored Camera position
+keys. Segment identity is stable and uses the Camera ID plus the two stable
+position keyframe IDs; no persistent segment object is serialized. Stage path
+segments, the Camera Path Inspector, and Camera position-key selection resolve
+to this same identity.
+
+Duration editing converts seconds to integer frames using the project rational
+FPS and nearest-frame rounding. Move End changes only the selected ending
+position key and any matching Camera rotation key. Ripple Following shifts the
+selected ending key and following Camera position keys, together with matching
+rotation keys. Optical tracks, actors, props, effects, and unrelated Camera
+rotation keys are not retimed. Move End clamps before the next position key;
+collisions are rejected rather than silently overwritten. Ripple extends the
+Timeline when its final Camera key moves beyond the current end, following the
+existing keyframe editing policy.
+
+Retiming preserves position/rotation values, interpolation/easing metadata,
+selection IDs, path world geometry, target/lock settings, and camera optics.
+The retime is one history transaction. If the playhead was on the moved ending
+key, it follows that key; otherwise it remains unchanged. Average Speed is
+reported as total segment distance divided by duration and is explicitly not
+instantaneous eased speed.
+
+## M3H Camera move review transport
+
+The Camera Path Inspector exposes session-only Start, Preview Move, End, and
+Loop Move actions for the selected position segment. Review bounds are resolved
+from the current stable A/B keyframe IDs on every playback tick, so retiming or
+path-point edits cannot leave a stale review endpoint. Preview stops exactly at
+B; loop playback includes B and wraps directly to A without evaluating a frame
+outside the selected segment. Review uses normal Timeline evaluation and the
+same Camera Preview/Camera View update path. It does not touch serialized Mark
+In/Mark Out, global Loop, history, or the production Camera document. Segment,
+Camera, or Scene invalidation cancels the temporary review session. No ghost
+camera helpers are currently created.
+
+## M4A Shot Planning integration
+
+Shot planning lives above the Stage runtime. A Shot references an existing
+Scene and production Camera by stable IDs plus an inclusive Timeline range;
+the Stage continues to render the active Scene and the existing Timeline
+evaluator remains authoritative. Activating a Shot changes editor selection,
+active Camera, and playhead context only. A Shot preview is a temporary
+playback bound and does not alter Mark In/Mark Out, global Loop, or history.
+
+Shot thumbnails call the existing clean production Camera still-capture
+path, render at a 1280px source width, downsample once to a 960px JPEG data
+URL at practical quality, and store that optional preview metadata in the
+project document. Existing older low-resolution JPEGs remain valid until
+recaptured. The thumbnail is not a
+Stage entity, is not raycastable, and does not change Camera View or capture
+math. Shot references remain valid-but-explicitly-missing when a referenced
+Camera is deleted; dependent Shots are removed atomically when their Scene is
+deleted. Future Master Timeline clips should reference `shotId` rather than
+copying Scene or Camera state.
+
+## M4B Master Timeline runtime boundary
+
+The Master Timeline is a project-level planning surface above the Stage
+runtime. Its one-row clips reference Shots by `shotId`; they do not mount a
+second Three.js renderer or duplicate Scene/Camera state. Shot thumbnails are
+reused directly, so recapturing a Shot updates every Master clip that displays
+it. Selecting a clip is editor state, while adding, trimming, reordering,
+duplicating, and removing clips are project edits that participate in the
+existing dirty/save/recovery path.
+
+`resolveMasterFrame()` is the shared M4C contract. It resolves a Master frame
+to the ordered clip, the referenced Shot, its Scene/Camera IDs, the source
+frame, and the local clip frame. M4B uses exclusive source ends (`[start,
+end)`) to match the existing Timeline duration convention and prevent a
+boundary frame from being counted twice. The Master rate is derived from the
+first referenced Scene; mixed Scene FPS is rejected when adding a new clip.
+
+The current renderer/export path remains Scene-scoped in M4B: it evaluates the
+active Scene and Camera for an integer frame range and encodes those captures
+at the selected output rate. No Master playback, cross-scene switching,
+transitions, audio, or concatenated export is performed until M4C.

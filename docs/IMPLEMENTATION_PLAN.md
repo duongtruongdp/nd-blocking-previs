@@ -41,9 +41,37 @@ current visible rotation at the current frame; `Record Move` writes linear
 rotation keys at the Scene frame rate and commits one history transaction. The
 relay stores no project or pose history.
 
-Camera Position XYZ, ARKit/ARCore, phone video, and native mobile companions
-remain future work. The accepted physical test record is in
+Camera Position XYZ and native iOS ARKit now have an isolated prototype path;
+the Web companion remains Rotation-only while the native companion supports
+independent Truck, Pedestal, Dolly, Pan, Tilt, and Dutch channels with Move,
+Rotate, Full, and Custom presets. Android/ARCore and phone video remain future
+work. The accepted physical test record is in
 [PHONE_CAMERA_ACCEPTANCE.md](PHONE_CAMERA_ACCEPTANCE.md).
+
+## Phone Camera spatial-control prototype boundary
+
+`mobile/ios/NDPhoneCamera` is a small SwiftUI/ARKit companion. It reuses the
+existing relay and version-1 packet envelope, with optional position and
+capability metadata. The desktop keeps the Web companion's Rotation Only mode
+and applies native channel masks through the existing Camera runtime and Camera
+View seams. No per-frame SceneDocument/history writes occur. Native Timeline
+persistence is explicitly gated on physical iPhone acceptance; see
+[PHONE_CAMERA_IOS_PROTOTYPE.md](PHONE_CAMERA_IOS_PROTOTYPE.md).
+
+## Timeline–Camera interop boundary
+
+Timeline duration is stored as canonical integer `durationFrames`; `endFrame`
+is retained as a derived compatibility field for older runtime code and files.
+Mark In and Mark Out remain an independent playback/export range. The Timeline
+uses `HH:MM:SS:FF` as its input and presentation layer while frame math remains
+rational and frame-authoritative. Fractional rates use deterministic non-drop
+display semantics until drop-frame timecode is implemented explicitly.
+
+Camera evaluation carries authored-property authority. A Camera Position track
+does not write Rotation, a Rotation track does not write Position, and an empty
+track has no authority. The document/Timeline pose is composed first, then the
+temporary Phone Camera live layer is added. This prevents a missing Camera
+channel from continuously reasserting a stale document value over live control.
 
 The current root application also exposes the procedural Actor pose preset
 library described in [ACTOR_POSE_PRESETS.md](ACTOR_POSE_PRESETS.md). Pose is a
@@ -817,6 +845,17 @@ selection without disabling selection inside real inputs.
 
 Milestone 2I is complete. The production Actor baseline contains Male 01 and Female 01, 18 stable semantic poses (six Standing, six Sitting, six Lying), shared semantic definitions adapted through Rig Profiles, support/contact-aware Sitting and Lying, height-preserving Actor placement, and a development-only Pose Calibration tool hidden from normal use. The full Actor/Pose development phase is locked.
 
+### M2C.2 Procedural Previs Mannequin Actor
+
+The current runtime adds a serializable `visualStyle` choice with
+`mannequin` as the default for newly created Actors and `character` as the
+backward-compatible default for legacy records. The mannequin is a lightweight
+faceted Three.js hierarchy built around normalized anatomical anchors, the
+existing ActorRoot, and pose joints;
+it does not add a pose vocabulary, IK, animation, or network geometry. This
+checkout contains no GLB registry/loader/assets, so Character remains the
+existing procedural character path until that separate asset layer is present.
+
 Milestone 2.5A, 2.5B, 2.5B-FIX, and 2.5C are complete. The Camera Data
 Foundation contains an independent dataset version, stable manufacturer,
 camera, mode, and output IDs, physical sensor and recording-mode separation,
@@ -1121,3 +1160,346 @@ still require a separately reviewed H.264 encoder/license build. Quality is
 limited to High, Standard, and Small File. Export is session-only, does not
 dirty the Project or create recovery snapshots, and blocks Project navigation
 while active. Manual desktop export acceptance remains a release gate.
+
+## M3A Scene-isolated Camera Preview, axis-constrained move, and editor views
+
+M3A keeps scene ownership at the existing `ProjectSceneEntry` boundary and
+adds explicit runtime scene resets. `V2Stage` clears entity registrations,
+runtime maps, camera composition caches, and selection on active Scene change;
+`CameraViewRuntime` removes its previous render instances and production
+Camera before reconciling the new Scene. Both paths annotate live roots with
+the logical Scene ID while retaining shared procedural geometry/material
+behavior where possible. The .ndblock format already serializes independent
+SceneDocuments and active Camera IDs, so no schema migration is required.
+
+Free move now tracks Shift through window keydown/keyup as well as pointer
+modifier state. The first constrained displacement chooses the largest
+intended world component and remains locked until release. Existing gizmo
+axis and plane behavior remains authoritative.
+
+Blocking View adds session-only Perspective, Top, Bottom, Front, Back, Left,
+and Right presets. Planar presets use a reusable `THREE.OrthographicCamera`,
+frame the selected entity or current Scene bounds on first entry, remember
+their own pan/zoom state, and restore the prior Perspective orbit when the
+user returns. Production Camera parameters, Camera View, timeline evaluation,
+and persistence are independent of this editor navigation state.
+## M3A.1 Stage ViewCube navigation
+
+Replace the Blocking View's primary view dropdown with a compact, accessible ViewCube component anchored inside the Stage viewport. Face and corner controls remain a presentation layer over the existing StageEngine view API: planar faces use `setViewMode`, while isometric corners use a deterministic temporary Perspective orbit that preserves and restores the prior free Perspective orbit. No production Camera, Camera View, timeline, or persistence state is changed.
+
+## M3B Grid Snap and Frame Selected
+
+M3B extends the existing Stage interaction foundation with optional world-space
+position snapping and an explicit Frame Selected action. Snap is evaluated
+inside the established move and gizmo transform paths so one drag remains one
+history transaction. Frame Selected uses visible world bounds and changes only
+the editor camera state. The Measure tool was removed from Stage V1 because it
+is not necessary for the current blocking workflow; measurement overlays,
+surface-edge measurement, persistent annotations, custom units, and the `M`
+shortcut are not retained. Rotation snap and multi-selection remain deferred
+at this milestone.
+
+## M3C Rotation Snap, Multi-selection, Align, and Distribute
+
+M3C adds the minimum stable selection abstraction needed for layout work:
+ordered selected IDs plus a primary selection. It preserves the accepted
+single-selection API while extending Stage, Scene panel, Inspector, delete,
+frame, and history transaction paths for multiple entities. Group transforms
+are runtime-only operations around combined visible bounds; supported objects
+receive one shared movement or rotation delta, while attached openings remain
+excluded from unsafe group transforms.
+
+Pure arrangement helpers cover combined bounds, bounds centers, alignment
+offsets, visible-gap distribution, group rotation, angle snapping, and safe
+Arrange popover placement. The Precision toolbar changes units contextually
+between metre grid snapping and degree rotation snapping. Arrange is a
+contextual action inside the existing View group and commits atomically.
+Multi-scale, persistent groups, range selection, multi-property editing, and
+align-to-primary remain deferred.
+
+## M3F Camera Path & Move Previs Foundation
+
+Implemented the first camera-move previs layer without changing the existing
+Timeline or camera systems. A selected Camera's authored position track is the
+single source for a Blocking View-only path, keyframe markers, and evaluated
+playhead marker. Marker selection synchronizes Camera selection, Timeline
+keyframe selection, and current frame. Marker Move uses established position
+snap, Shift axis lock, and one history transaction per drag. Segment distance,
+duration, and average speed are read-only diagnostics in the Camera Inspector.
+
+Automatic lock-target re-aiming, rotation-path authoring, and a full curve
+editor remain intentionally deferred.
+
+## M3G Camera Move Timing & Speed Tools
+
+Added shared Camera path segment selection and lightweight Stage hover/click
+highlighting. The Camera Path Inspector now lists consecutive move segments,
+shows interpolation, distance, duration, and average speed, and supports
+Move End or Ripple Following duration edits. Retiming uses exact integer
+Timeline frames with nearest-frame seconds conversion, stable keyframe IDs,
+atomic history, collision protection, automatic duration extension for ripple,
+and matching Camera position/rotation timing synchronization. Camera optics and
+unrelated tracks remain outside the retime policy. Existing interpolation math
+and playback remain authoritative.
+
+## M3H Camera Motion Playback and Move Review Tools
+
+Selected Camera path segments now have a session-only review transport. Preview
+Move starts at the selected A key and stops inclusively at B; Loop Move uses the
+same temporary A→B bounds and wraps directly from B to A. Start and End are
+playhead navigation actions. Review state is never serialized, does not mutate
+Mark In/Mark Out or the global Timeline Loop setting, and creates no history
+entries. The current Timeline evaluator remains authoritative, so Camera
+Preview, Camera View, composition overlays, path edits, retimes, and existing
+interpolation continue through the same runtime path. Invalidated segment,
+Camera, or Scene selection stops review safely. Ghost-camera helpers remain
+deferred to keep this checkpoint lightweight.
+
+## M4A Shot Planning Foundation
+
+Shots are project-level references rather than duplicated Scenes or Cameras.
+Each `ShotDocument` stores a stable ID, display name, `sceneId`, optional
+`cameraId`, ordered start/end Timeline frames, notes, lightweight planned
+status metadata, and an optional compact thumbnail. The active Scene remains
+the owner of geometry, Camera documents, Camera keyframes, composition, and
+the authoritative Timeline.
+
+The Scene panel provides a project-wide Shot list with create, activate,
+rename, duplicate, reorder, delete, notes, range editing, preview, and
+thumbnail capture. Activation selects the referenced Scene and Camera and
+moves the playhead to the Shot start. Preview uses a temporary playback range
+and does not change Mark In/Mark Out, the global Loop setting, or history.
+
+Shot thumbnails are optional high-resolution JPEG data URLs in `.ndblock` files.
+The accepted recapture path renders a clean production Camera still at 1280px
+source width, downsamples once to a 960px target, and stores it at practical
+quality. Older 320px-class JPEG thumbnails remain valid until recaptured.
+Older version-1 project files migrate missing `shots` and `activeShotId` to an
+empty collection and `null`. Scene deletion removes dependent Shots after an
+explicit confirmation; Camera deletion keeps dependent Shots and changes their
+reference to an explicit Missing Camera state. Project-level undo/redo is not
+invented here: existing Scene history remains Scene-scoped, while Shot edits
+are project mutations persisted through the normal dirty/save/recovery path.
+
+The model is ready for M4B: a future MasterClip should reference `shotId` and
+must not duplicate Scene or Camera documents. Master Timeline, sequence
+assembly, cross-shot playback, transitions, audio, and export remain deferred.
+
+## M4B Master Timeline / Sequence Assembly
+
+M4B adds a project-level `MasterSequenceDocument` containing one lightweight,
+ordered row of `MasterClipDocument` references. A Master clip stores only its
+stable clip ID, `shotId`, source start/end frames, and order; Scene, Camera, and
+Timeline state continue to resolve through the referenced Shot. A Shot may
+appear multiple times, and Master order is independent from Shot List order.
+
+Master ranges use the existing timeline boundary convention: source start is
+inclusive, source end is exclusive, and duration is `end - start`. Trims are
+validated against the Shot range and never mutate the Shot. `resolveMasterFrame`
+is the canonical Master-position → clip → Shot source-frame mapping prepared
+for M4C. Missing Shots remain visible as removable invalid clips; Missing
+Cameras inherit the existing Shot validity state.
+
+Because FPS belongs to each Scene Timeline rather than the Project, M4B uses a
+safe common-rate policy: the first referenced Scene establishes the Master
+rate, and adding a Shot with a different FPS is rejected with a clear message.
+This avoids silent mixed-rate drift. The derived total duration is the sum of
+clip durations and is not persisted redundantly. Clip selection and the Master
+playhead are session state; sequence edits use the existing project dirty/save
+path and do not invent a global history system.
+
+The editor keeps the accepted Scene Timeline and adds a clearly labelled Master
+tab with a single horizontal clip row, proportional widths with a readable
+minimum, reused Shot thumbnails, source trim fields, reorder/duplicate/remove,
+and Open Shot. M4B intentionally does not implement cross-scene playback,
+Master export, transitions, audio, or multi-track editing.
+
+Export audit for the M4C handoff: the current exporter evaluates one active
+Scene/Camera over an integer frame range and sends those captures through the
+existing video renderer/encoder at the selected output FPS. It does not switch
+Scene or Camera during one export session. M4C must therefore use the Master
+mapping contract and add a deliberate cross-scene render session rather than
+assuming the current active Scene exporter can concatenate Master clips.
+
+## M4B.1 Master Workspace UX + Music Track Foundation
+
+M4B.1 separates Master mode into a project-wide Shot Bin, a compact two-track
+Master timeline (`SHOTS` and `MUSIC`), and a Master Inspector. Scene entity
+selection is cleared when entering Master mode so Master clip/music selection
+cannot leak into the accepted Scene workspace. Shot Bin items reference the
+existing project-level Shot documents and carry stable drag payloads.
+
+The optional music row currently stores metadata only: file name, MIME type,
+size, last-modified time, duration, Master start frame, and source trim
+seconds. No bytes, object URLs, waveform, playback, or audio export are
+persisted. `resolveMasterMusicTime` is isolated from `resolveMasterFrame` for
+the M4C playback/export handoff. See `docs/M4B1_MASTER_WORKSPACE.md`.
+
+## M4B.2 Master Timeline Usability + Waveform + Basic Transport
+
+The Master canvas now keeps one frame-based scale for ruler, clips, waveform,
+playhead, and drop insertion. Fit All uses the complete visible duration,
+`max(Shot end, Music end)`, including Music offset and source trim. The two
+fixed height rows stay aligned under a fixed label column. Browser-imported Music is
+decoded once with Web Audio into runtime-only downsampled peaks and rendered
+on a Canvas. Return-to-start, Play/Pause, Stop, seek, scrub, and current-file
+Music audition are provided without mutating Scene activation. Cross-Scene
+visual preview and final Master export remain M4C work. See
+`docs/M4B2_MASTER_TIMELINE_USABILITY.md` for the asset persistence boundary:
+metadata remains in `.ndblock`, while the source file is kept in a separate
+project-scoped IndexedDB sidecar when available. Same-profile reopen can
+regenerate the waveform; copied projects without that sidecar require an
+explicit Music re-import.
+
+## M4B.3 Master Playback Context + Shortcut Routing + Fit All
+
+Master playback has an explicit runtime-only context resolved from the Master
+frame. The existing timeline evaluator evaluates the referenced Scene at the
+resolved source frame, and the isolated Camera View runtime displays the
+resolved Camera without mutating the active Scene editor state. Scene and
+Master transport share one keyboard routing policy, including Space and input
+guards. Master pause, Stop, seek, and Return-to-Start semantics preserve or
+reset only the Master frame as specified.
+
+Fit All uses the complete visible duration, including Music start offset and
+source trim. Structural edits stop playback before mutation and clamp the
+Master frame to the resulting Shot sequence. Missing references remain safe
+and visible as explicit preview states. Cross-scene export and transitions
+remain deferred to M4C.
+
+## M4B.4 Compact Workspace + Master Camera Evaluation
+
+Master Camera reconciliation now applies the evaluated source Camera pose on
+every frame, including position and rotation tracks, instead of refreshing only
+projection settings when the Camera ID is unchanged. This preserves the same
+Scene timeline evaluator for floating Camera Preview and dedicated Camera View,
+while Scene playback may still add its temporary composed layer afterward.
+
+The shared editor shell uses compact 8px edge/workspace/timeline-gap tokens and
+12px panel padding. Desktop side columns are constrained to 224px and 264px so
+the flexible Stage receives the recovered width. Timeline headers and mode tabs
+are shorter, while the resize handle, track geometry, waveform, Fit All, and
+Master playback boundary remain unchanged. See
+`docs/M4B4_COMPACT_WORKSPACE.md`.
+
+## M4B.5 Master Timeline Density + Toolbar Re-layout
+
+The Master Timeline now uses one compact horizontal toolbar for Scene/Master
+mode selection, the Master title, transport, timecode, zoom/Fit, and Add Shot.
+The separate Master modebar and music footer row are removed; the MUSIC label
+owns the compact Import/Replace action while existing Music Inspector actions
+remain authoritative for editing and removal. Master uses a 190px collapsed
+default while preserving the existing resize handle and user expansion.
+
+The ruler and fixed SHOTS/MUSIC rows remain separate, with the playhead spanning
+the track area. Fit extent, frame mapping, drag/drop, playback, waveform, and
+Scene Timeline structure are unchanged. See
+`docs/M4B5_MASTER_TIMELINE_DENSITY.md`.
+
+## M4B.6 Timeline UI Unification + Compact Track Labels
+
+Scene and Master Timeline now own matching compact header structures: mode tabs
+and title at left, core status/transport at center, and zoom/actions at right.
+This is presentation-only; evaluation, frame mapping, playback, keyframe
+editing, Master sequencing, and persistence remain unchanged.
+
+Timeline groups now have a transient display label separate from the persisted
+entity name. Custom names remain unchanged. Default names collapse to their
+type when unique and use a stable, compact type number when multiple default
+entities of that type are animated. This removes redundant labels such as
+`Camera Camera 01` without mutating documents or Scene panel naming.
+
+## M4B.7 Unified Timeline Transport + Master Mark Range
+
+Scene and Master headers now share one compact, natural-width control flow:
+mode tabs, context, transport, timecode, zoom, marks, then the Master-only Add
+Shot action. The duplicate visual timeline titles are removed. The headers no
+longer use a growing center group or auto-pushed action group, so their order
+does not change with viewport width.
+
+Master documents persist optional `markInFrame` and `markOutFrame` values in
+Master-frame coordinates. `effectiveMasterRenderRange()` resolves those marks
+to a valid start-inclusive, end-exclusive range clamped to the Shot/video
+sequence. Music remains part of Fit All's visual extent but cannot lengthen
+Master playback, Master loop, or the future M4C render/export range. Master
+loop is a session-only UI preference; it is not serialized with the project.
+See `docs/M4B7_UNIFIED_TIMELINE_TRANSPORT.md`.
+
+## M4C Master Playback Render + Final Video Export
+
+Master export now has a deterministic render-plan boundary instead of
+concatenating already-rendered Scene output. `buildMasterRenderPlan()` resolves
+the effective Master mark range as start-inclusive/end-exclusive, validates Shot
+source ranges and frame-rate compatibility, and records every clip boundary.
+`resolveMasterRenderFrame()` then maps each Master frame to its canonical Shot,
+Scene, Camera, source frame, and evaluated timeline entities. The production
+renderer keeps one clean Scene renderer per Scene/Camera pair and composites
+those frames into one fixed Delivery Frame output. Scene export remains on its
+existing path.
+
+The export UI lets the operator choose Scene or Master source. Master defaults
+when the Master timeline is active, uses the Master range, and keeps the
+selected Delivery Frame independent from physical camera capture geometry.
+Master Music is optional, but a selected Music asset that cannot be loaded is
+reported explicitly. Audio is trimmed into Master output coordinates and the
+video duration remains the authority, so a music-only tail cannot extend the
+render. Browser MP4/WebM and desktop PNG/FFmpeg paths share the same plan and
+frame resolver. Cancellation, render progress, and editor state remain
+isolated from the render snapshot.
+
+This milestone provides production-ready code paths for manual acceptance; it
+does not claim browser or desktop export acceptance until those flows are
+observed with real media and a real output file.
+
+## M4D.2 Shot List Export Suite + Presentation Cleanup
+
+Shot List export now uses one canonical human-readable export model for
+landscape storyboard print/PDF, XLSX, and CSV. It respects project-persisted
+visible columns and either all Shots or the active Scene filter while excluding
+editor Actions and Master usage from shared output. XLSX is generated locally
+with a lazy-loaded ExcelJS dependency and embeds persisted Shot thumbnails;
+CSV is dependency-free UTF-8 with BOM and omits Thumbnail by design. Present
+mode and print output use the clean `<Project Name>` / `Shot List` title policy.
+See `docs/M4D2_SHOT_LIST_EXPORT.md`.
+
+## M4D.3 PDF Export Modes + Print Margins
+
+Browser Print/Save as PDF now has deterministic Storyboard and Shot List
+layouts. The default follows the active Grid/List view, while the export
+dialog permits an explicit PDF layout override. Storyboard cards remain
+large and page-safe; Shot List output uses a semantic repeating-header table
+with compact thumbnails and wrapped Notes. Print uses landscape orientation
+with 12mm/14mm page margins and does not compress the document to one page.
+XLSX and CSV generation remain unchanged. See
+`docs/M4D3_PDF_EXPORT_MODES.md`.
+
+## M4D.4 Print Typography + Table Geometry
+
+Print now combines an 8mm physical landscape page margin with a normal-flow
+document wrapper using `6mm 8mm 8mm` internal padding. The header, Storyboard
+grid, and Shot List table share that safe area without viewport sizing or
+edge-pinned print roots. Shot identity formatting detects generated names so
+`Shot 01` is not repeated beside `SHOT 01`; custom names remain explicit.
+
+The semantic Shot List table uses normalized canonical column weights over the
+currently visible columns, keeps Duration and short production values on one
+line, wraps Notes, and preserves useful thumbnail geometry. Pagination remains
+browser-controlled with repeating table headers and no scale-to-one-page
+behavior. XLSX, CSV, stored Shot data, and runtime behavior are unchanged.
+See `docs/M4D4_PRINT_TYPOGRAPHY.md`.
+
+## M5A Live Review Foundation
+
+M5A adds the read-only Host → Viewer Live Review foundation through the
+app-owned WebSocket transport in `src/liveReview/` and the standalone Node
+relay in `live-server/`. The persistent ProjectDocument remains separate from
+runtime-only `LiveReviewState`; viewers receive a validated session snapshot
+and render it locally. See `docs/M5A_LIVE_REVIEW.md`.
+
+## M5A.2 Live Presence + Review Tools
+
+Live Review now has session-only participant identity and presence, Viewer
+Follow Host/Free Look buffering, a Host-only normalized presenter pointer, and
+bounded ephemeral room chat. These are protocol-level features shared by Web
+and Desktop clients; they do not add persistent project fields or an Editor
+role. See `docs/M5A2_LIVE_PRESENCE_REVIEW_TOOLS.md`.

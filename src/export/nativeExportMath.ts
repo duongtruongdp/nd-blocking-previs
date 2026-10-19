@@ -11,6 +11,13 @@ export type NativeFfmpegArgsRequest = {
   frameRate: RationalFrameRate
   quality: ExportQuality
   encoder: NativeH264Encoder
+  totalDurationSeconds?: number
+  music?: {
+    inputPath: string
+    sourceStartSeconds: number
+    outputStartSeconds: number
+    durationSeconds: number
+  }
 }
 
 export function rationalRateArgument(rate: RationalFrameRate): string {
@@ -33,16 +40,24 @@ export function qualityArguments(quality: ExportQuality, encoder: NativeH264Enco
  * string is ever assembled, so paths with spaces or Unicode remain arguments.
  */
 export function buildNativeFfmpegArgs(request: NativeFfmpegArgsRequest): string[] {
+  const music = request.music
+  const audioArgs = music ? [
+    '-ss', String(Math.max(0, music.sourceStartSeconds)),
+    '-i', music.inputPath,
+    '-filter_complex', `[1:a]atrim=duration=${Math.max(0, music.durationSeconds)},asetpts=PTS-STARTPTS,adelay=${Math.round(Math.max(0, music.outputStartSeconds) * 1000)}|${Math.round(Math.max(0, music.outputStartSeconds) * 1000)},apad[a]`,
+    '-map', '0:v:0', '-map', '[a]',
+  ] : ['-an']
   return [
     '-hide_banner', '-loglevel', 'error', '-y',
     '-framerate', rationalRateArgument(request.frameRate),
     '-start_number', '0',
     '-i', request.inputPattern,
+    ...audioArgs,
     '-s:v', `${request.width}x${request.height}`,
-    '-an',
     '-c:v', request.encoder,
     ...qualityArguments(request.quality, request.encoder),
     '-pix_fmt', 'yuv420p',
+    ...(request.totalDurationSeconds === undefined ? [] : ['-t', String(Math.max(0, request.totalDurationSeconds))]),
     '-movflags', '+faststart',
     '-progress', 'pipe:1',
     '-nostats',

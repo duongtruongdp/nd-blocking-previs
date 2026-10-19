@@ -1,5 +1,8 @@
 import { normalizeSceneDocument, prepareSceneForSave, validateSceneDocument } from './scenePersistence'
 import type { ProjectDocument } from './projectDocument'
+import { normalizeShotDocuments } from './shotDocument'
+import { normalizeMasterSequence } from './masterSequence'
+import { normalizeShotListSettings } from './shotListSettings'
 
 export const NDBLOCK_FORMAT = 'ndblock' as const
 export const CURRENT_NDBLOCK_VERSION = 1
@@ -23,10 +26,16 @@ export class ProjectFileError extends Error {
 }
 
 export function prepareProjectForSave(project: ProjectDocument, savedAt = new Date().toISOString()): ProjectDocument {
+  const shots = normalizeShotDocuments(project.shots)
+  const settings = isRecord(project) && isRecord(project.settings) ? { ...project.settings, shotList: normalizeShotListSettings(project.settings.shotList) } : { shotList: normalizeShotListSettings(undefined) }
   return {
     ...project,
     updatedAt: savedAt,
     scenes: project.scenes.map((entry) => ({ ...entry, scene: prepareSceneForSave(entry.scene, savedAt) })),
+    shots,
+    activeShotId: shots.some((shot) => shot.id === project.activeShotId) ? project.activeShotId : null,
+    masterSequence: normalizeMasterSequence(project.masterSequence),
+    settings,
   }
 }
 
@@ -59,10 +68,14 @@ export function migrateProjectFile(value: unknown): NdblockFile {
   if (version > CURRENT_NDBLOCK_VERSION) throw new ProjectFileError('unsupported-newer-version', 'This Project file was created by an unsupported newer version.')
   if (version !== CURRENT_NDBLOCK_VERSION) throw new ProjectFileError('invalid-file', 'This Project file version is not supported.')
   const project = value.project as ProjectDocument
+  const shots = normalizeShotDocuments(isRecord(project) ? project.shots : [])
+  const masterSequence = normalizeMasterSequence(isRecord(project) ? project.masterSequence : undefined)
+  const activeShotId = isRecord(project) && typeof project.activeShotId === 'string' && shots.some((shot) => shot.id === project.activeShotId) ? project.activeShotId : null
+  const settings = isRecord(project) && isRecord(project.settings) ? { ...project.settings, shotList: normalizeShotListSettings(project.settings.shotList) } : { shotList: normalizeShotListSettings(undefined) }
   return {
     format: NDBLOCK_FORMAT,
     version: CURRENT_NDBLOCK_VERSION,
-    project: { ...project, scenes: Array.isArray(project.scenes) ? project.scenes.map((entry) => ({ ...entry, scene: normalizeSceneDocument(entry.scene) })) : project.scenes },
+    project: { ...project, shots, activeShotId, masterSequence, settings, scenes: Array.isArray(project.scenes) ? project.scenes.map((entry) => ({ ...entry, scene: normalizeSceneDocument(entry.scene) })) : project.scenes },
   }
 }
 
@@ -77,6 +90,20 @@ export function validateProjectDocument(value: unknown): string[] {
   if (sceneIds.some((id) => !stringField(id)) || new Set(sceneIds.filter((id): id is string => typeof id === 'string')).size !== sceneIds.length) errors.push('Project Scene IDs must be unique.')
   if (!sceneIds.includes(value.activeSceneId)) errors.push('Active Scene does not resolve to a Project Scene.')
   scenes.forEach((entry, index) => validateProjectSceneEntry(entry, `scenes[${index}]`, errors))
+  if (value.shots !== undefined && !Array.isArray(value.shots)) errors.push('Project Shots are invalid.')
+  if (Array.isArray(value.shots)) {
+    const shots = value.shots as unknown[]
+    const shotIds = shots.map((shot) => isRecord(shot) ? shot.id : null)
+    if (shotIds.some((id) => !stringField(id)) || new Set(shotIds.filter((id): id is string => typeof id === 'string')).size !== shotIds.length) errors.push('Project Shot IDs must be unique.')
+    shots.forEach((shot, index) => validateShot(shot, `shots[${index}]`, errors))
+    if (value.activeShotId !== null && value.activeShotId !== undefined && !shotIds.includes(value.activeShotId)) errors.push('Active Shot does not resolve to a Project Shot.')
+  }
+  if (value.masterSequence !== undefined && (!isRecord(value.masterSequence) || !Array.isArray(value.masterSequence.clips))) errors.push('Project Master Sequence is invalid.')
+  if (isRecord(value.masterSequence) && Array.isArray(value.masterSequence.clips)) {
+    const clipIds = value.masterSequence.clips.map((clip) => isRecord(clip) ? clip.id : null)
+    if (clipIds.some((id) => !stringField(id)) || new Set(clipIds.filter((id): id is string => typeof id === 'string')).size !== clipIds.length) errors.push('Master Clip IDs must be unique.')
+    value.masterSequence.clips.forEach((clip, index) => validateMasterClip(clip, `masterSequence.clips[${index}]`, errors))
+  }
   return errors
 }
 
@@ -94,6 +121,18 @@ function validateProjectSceneEntry(value: unknown, path: string, errors: string[
   const metadata = isRecord(value.scene.metadata) ? value.scene.metadata : null
   if (value.id !== metadata?.id) errors.push(`${path} ID must match its SceneDocument ID.`)
   errors.push(...validateSceneDocument(value.scene).map((error) => `${path}: ${error}`))
+}
+
+function validateShot(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value) || !stringField(value.id) || !stringField(value.name) || !stringField(value.sceneId) || (value.cameraId !== null && value.cameraId !== undefined && !stringField(value.cameraId)) || !finiteNumber(value.startFrame) || !finiteNumber(value.endFrame) || Number(value.endFrame) <= Number(value.startFrame) || !finiteNumber(value.order) || typeof value.notes !== 'string' || (value.thumbnailFrame !== null && value.thumbnailFrame !== undefined && !finiteNumber(value.thumbnailFrame))) errors.push(`${path} is not a valid Project Shot.`)
+}
+
+function validateMasterClip(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value) || !stringField(value.id) || !stringField(value.shotId) || !finiteNumber(value.sourceStartFrame) || !finiteNumber(value.sourceEndFrame) || Number(value.sourceEndFrame) <= Number(value.sourceStartFrame) || !finiteNumber(value.order)) errors.push(`${path} is not a valid Master Clip.`)
+}
+
+function finiteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

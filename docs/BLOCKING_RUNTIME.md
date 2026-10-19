@@ -44,6 +44,25 @@ The imported assets' native forward points along +Z. A one-time π Y rotation is
 
 Facing continues to be communicated by the character silhouette and feet. The small brown/gold `facing-tick` is the Actor facing-direction indicator created by the fallback ActorRoot adapter. It is hidden unless an Actor is selected or Rotate is active, and custom character bounds/contact traversal excludes it. It is not part of either production GLB, pose normalization, or contact calculations.
 
+### Procedural previs mannequin style (M2C.2)
+
+The current checkout also exposes an explicit `ActorDocument.visualStyle`.
+New Actors default to `mannequin`; legacy documents without that field are
+normalized to `character`, preserving their existing appearance. The
+mannequin is assembled by `MannequinActorRuntime` from a normalized,
+height-relative anatomical anchor map: a connected neck/head, tapered torso,
+pelvis, and joint-to-joint faceted limb segments with low-detail joint meshes.
+Its shared semantic hierarchy keeps the
+existing pose rotations, ActorRoot transforms, selection identity, color, and
+pose-local floor correction intact. `Character` continues through the existing
+procedural character runtime in this source tree; the repository currently has
+no character registry, GLB loader, or character asset files to replace.
+
+All visible mannequin parts carry the parent Actor ID for raycast resolution.
+The same runtime factory is used by Blocking View, Camera View, video export,
+and the legacy stage runtime, so the presentation style does not alter the
+serializable Actor or Timeline model.
+
 ## Proxy ownership
 
 `SceneRuntime` owns the registry, proxy groups, TransformControls, selection helper, and render invalidation. `BlockingAssetLibrary` owns reusable geometries and materials. The domain store owns only serializable project state, selection state, and the active blocking tool.

@@ -5,12 +5,29 @@ import { interpolateAngleRadians, interpolateScalar, interpolateVector, timeline
 export type EvaluatedEntityState = {
   position: ActorVector3
   rotation: ActorVector3
+  scale?: ActorVector3
   focalLengthMm?: number
   openAngle?: number
   azimuth?: number
   elevation?: number
   intensity?: number
   color?: string
+  /** Properties with authored Timeline keys. Base values are not authority. */
+  authoredProperties?: readonly TimelineProperty[]
+}
+
+export function timelinePropertyIsAuthored(evaluated: EvaluatedEntityState | undefined, property: TimelineProperty): boolean {
+  return evaluated?.authoredProperties?.includes(property) === true
+}
+
+export function cameraDocumentWithTimelineEvaluation(camera: CameraDocument, evaluated: EvaluatedEntityState | undefined): CameraDocument {
+  if (!evaluated) return camera
+  return {
+    ...camera,
+    ...(timelinePropertyIsAuthored(evaluated, 'position') ? { position: [...evaluated.position] as ActorVector3 } : {}),
+    ...(timelinePropertyIsAuthored(evaluated, 'rotation') ? { rotation: [...evaluated.rotation] as ActorVector3 } : {}),
+    ...(timelinePropertyIsAuthored(evaluated, 'focalLengthMm') && evaluated.focalLengthMm !== undefined ? { focalLengthMm: evaluated.focalLengthMm } : {}),
+  }
 }
 
 function valueAtFrame(track: TimelineTrack | undefined, frame: number): TimelineValue | undefined {
@@ -47,12 +64,19 @@ function evaluateRotation(base: ActorVector3, track: TimelineTrack | undefined, 
   return [euler.x, euler.y, euler.z]
 }
 
-function evaluateEntity(base: { id: string; position: ActorVector3; rotation: ActorVector3 }, tracks: readonly TimelineTrack[], frame: number, focalLengthMm?: number, openAngle?: number): EvaluatedEntityState {
-  const positionValue = valueAtFrame(trackFor(tracks, base.id, 'position'), frame)
+function authoredPropertiesFor(tracks: readonly TimelineTrack[], entityId: string): TimelineProperty[] {
+  return tracks.filter((track) => track.entityId === entityId && track.keyframes.length > 0).map((track) => track.property)
+}
+
+function evaluateEntity(base: { id: string; position: ActorVector3; rotation: ActorVector3; scale?: ActorVector3 }, tracks: readonly TimelineTrack[], frame: number, focalLengthMm?: number, openAngle?: number): EvaluatedEntityState {
+  const positionTrack = trackFor(tracks, base.id, 'position')
+  const positionValue = valueAtFrame(positionTrack, frame)
   const headingTrack = trackFor(tracks, base.id, 'heading')
   const rotationTrack = trackFor(tracks, base.id, 'rotation')
   const position: ActorVector3 = positionValue && Array.isArray(positionValue) ? [...positionValue] as ActorVector3 : [...base.position] as ActorVector3
   const rotation = evaluateRotation(base.rotation, rotationTrack, frame)
+  const scaleTrack = trackFor(tracks, base.id, 'scale')
+  const scaleValue = valueAtFrame(scaleTrack, frame)
   const headingValue = headingTrack ? valueAtFrame(headingTrack, frame) : undefined
   if (headingValue !== undefined && !Array.isArray(headingValue)) {
     const headingKeyframes = [...headingTrack!.keyframes].sort((a, b) => a.frame - b.frame)
@@ -64,7 +88,8 @@ function evaluateEntity(base: { id: string; position: ActorVector3; rotation: Ac
   }
   const focalTrack = trackFor(tracks, base.id, 'focalLengthMm')
   const focalValue = focalTrack ? valueAtFrame(focalTrack, frame) : undefined
-  const result: EvaluatedEntityState = { position, rotation }
+  const result: EvaluatedEntityState = { position, rotation, authoredProperties: authoredPropertiesFor(tracks, base.id) }
+  if (base.scale || (scaleValue && Array.isArray(scaleValue))) result.scale = scaleValue && Array.isArray(scaleValue) ? [...scaleValue] as ActorVector3 : [...(base.scale ?? [1, 1, 1])] as ActorVector3
   if (focalValue !== undefined && !Array.isArray(focalValue)) result.focalLengthMm = Number(focalValue)
   else if (focalLengthMm !== undefined) result.focalLengthMm = focalLengthMm
   const openValue = valueAtFrame(trackFor(tracks, base.id, 'openAngle'), frame)
@@ -86,6 +111,7 @@ function evaluateSun(base: SunDocument, tracks: readonly TimelineTrack[], frame:
     elevation: valueFor('elevation', base.elevation),
     intensity: valueFor('intensity', base.intensity),
     color: typeof colorValue === 'string' ? colorValue : base.color,
+    authoredProperties: authoredPropertiesFor(tracks, base.id),
   }
 }
 

@@ -7,6 +7,10 @@ import { centeredCrop, deliveryAspectForCamera, desqueezedCaptureAspect, dimensi
 import { preferredExportFormat } from '../export/formatSupport'
 import { selectWebmMimeType, supportedWebmMimeTypes } from '../export/mediaRecorder'
 import { frameToTimelinePercent, upsertTimelineKeyframe } from '../timeline/timelineMath'
+import { buildMasterRenderPlan, resolveMasterRenderFrame } from '../export/masterRenderPlan'
+import { createProjectDocument } from '../core/projectDocument'
+import { createShotDocument } from '../core/shotDocument'
+import { createMusicClip } from '../core/masterSequence'
 
 describe('V2.6 video export logic', () => {
   it('creates an inclusive integer Mark In to Mark Out frame range', () => {
@@ -113,6 +117,50 @@ describe('V2.6 video export logic', () => {
     const timeline = upsertTimelineKeyframe(createEmptySceneDocument().timeline, actor.id, 'Actor', 'position', 0, [0, 0, 0])
     const document = { ...createEmptySceneDocument(), actors: [actor], timeline: upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 24, [4, 0, 0]) }
     expect(evaluateExportFrame(document, 12)[actor.id].position).toEqual([2, 0, 0])
+  })
+
+  it('builds a deterministic Master plan with exclusive range and hard-cut scene boundaries', () => {
+    const cameraOne = createCameraDocument('camera-01', 'Camera 01', [0, 2, 4], cameraRotationLookingAt([0, 2, 4], [0, 1, 0]), CAMERA_DATABASE[0].id, CAMERA_DATABASE[0].captureModes[0].id)
+    const cameraTwo = createCameraDocument('camera-01', 'Camera 01', [2, 2, 4], cameraRotationLookingAt([2, 2, 4], [0, 1, 0]), CAMERA_DATABASE[0].id, CAMERA_DATABASE[0].captureModes[0].id)
+    const sceneOne = { ...createEmptySceneDocument(), metadata: { ...createEmptySceneDocument().metadata, id: 'scene-01', name: 'Scene 01' }, cameras: [cameraOne], activeCameraId: cameraOne.id }
+    const sceneTwo = { ...createEmptySceneDocument(), metadata: { ...createEmptySceneDocument().metadata, id: 'scene-02', name: 'Scene 02' }, cameras: [cameraTwo], activeCameraId: cameraTwo.id }
+    const project = createProjectDocument('project-01', 'Project', sceneOne)
+    const shots = [
+      createShotDocument({ id: 'shot-01', name: 'Shot 01', sceneId: sceneOne.metadata.id, cameraId: cameraOne.id, startFrame: 0, endFrame: 2, order: 0, notes: '', thumbnail: null }),
+      createShotDocument({ id: 'shot-02', name: 'Shot 02', sceneId: sceneTwo.metadata.id, cameraId: cameraTwo.id, startFrame: 10, endFrame: 13, order: 1, notes: '', thumbnail: null }),
+    ]
+    const fullProject = {
+      ...project,
+      scenes: [{ id: sceneOne.metadata.id, name: sceneOne.metadata.name, scene: sceneOne }, { id: sceneTwo.metadata.id, name: sceneTwo.metadata.name, scene: sceneTwo }],
+      shots,
+      masterSequence: { clips: [{ id: 'clip-01', shotId: 'shot-01', sourceStartFrame: 0, sourceEndFrame: 2, order: 0 }, { id: 'clip-02', shotId: 'shot-02', sourceStartFrame: 10, sourceEndFrame: 13, order: 1 }], musicClip: null, markInFrame: null, markOutFrame: null },
+    }
+    const plan = buildMasterRenderPlan(fullProject, { width: 1920, deliveryAspectRatio: '16:9', includeMusic: false })
+    expect(plan).toMatchObject({ startFrame: 0, endFrameExclusive: 5, frameCount: 5, clipsUsed: [{ clipId: 'clip-01', startFrame: 0, endFrame: 2 }, { clipId: 'clip-02', startFrame: 2, endFrame: 5 }] })
+    expect(resolveMasterRenderFrame(fullProject, 2)).toMatchObject({ sceneId: sceneTwo.metadata.id, sourceFrame: 10, cameraId: cameraTwo.id })
+    expect(resolveMasterRenderFrame(fullProject, 0).evaluatedEntities).toBeDefined()
+    expect(resolveMasterRenderFrame(fullProject, plan.endFrameExclusive - 1).sourceFrame).toBe(12)
+  })
+
+  it('rejects Master clips with source frames outside their Shot', () => {
+    const camera = createCameraDocument('camera-01', 'Camera 01', [0, 2, 4], cameraRotationLookingAt([0, 2, 4], [0, 1, 0]), CAMERA_DATABASE[0].id, CAMERA_DATABASE[0].captureModes[0].id)
+    const scene = { ...createEmptySceneDocument(), cameras: [camera], activeCameraId: camera.id }
+    const project = createProjectDocument('project-invalid-master', 'Project', scene)
+    const shot = createShotDocument({ id: 'shot-01', name: 'Shot 01', sceneId: scene.metadata.id, cameraId: camera.id, startFrame: 0, endFrame: 10, order: 0, notes: '', thumbnail: null })
+    const invalid = { ...project, shots: [shot], masterSequence: { clips: [{ id: 'clip-01', shotId: shot.id, sourceStartFrame: 0, sourceEndFrame: 11, order: 0 }], musicClip: null, markInFrame: null, markOutFrame: null } }
+    expect(() => buildMasterRenderPlan(invalid, { width: 1920, deliveryAspectRatio: '16:9', includeMusic: false })).toThrow(/invalid source range/i)
+  })
+
+  it('keeps Master export marks and music overlap in Master/video coordinates', () => {
+    const camera = createCameraDocument('camera-01', 'Camera 01', [0, 2, 4], cameraRotationLookingAt([0, 2, 4], [0, 1, 0]), CAMERA_DATABASE[0].id, CAMERA_DATABASE[0].captureModes[0].id)
+    const scene = { ...createEmptySceneDocument(), cameras: [camera], activeCameraId: camera.id }
+    const project = createProjectDocument('project-02', 'Project', scene)
+    const shot = createShotDocument({ id: 'shot-01', name: 'Shot 01', sceneId: scene.metadata.id, cameraId: camera.id, startFrame: 0, endFrame: 120, order: 0, notes: '', thumbnail: null })
+    const fullProject = { ...project, shots: [shot], masterSequence: { clips: [{ id: 'clip-01', shotId: shot.id, sourceStartFrame: 0, sourceEndFrame: 120, order: 0 }], musicClip: { ...createMusicClip({ name: 'song.wav', type: 'audio/wav', size: 12 }, 190), startMasterFrame: 0 }, markInFrame: 24, markOutFrame: 48 } }
+    const plan = buildMasterRenderPlan(fullProject, { width: 1920, deliveryAspectRatio: '16:9', includeMusic: true })
+    expect(plan.range).toEqual({ startFrame: 24, endFrame: 48 })
+    expect(plan.frameCount).toBe(24)
+    expect(plan.musicOverlap).toMatchObject({ sourceStartSeconds: 1, sourceEndSeconds: 2 })
   })
 
   it('prefers VP9, then VP8, then generic WebM when supported', () => {

@@ -83,7 +83,14 @@ export function desqueezedCaptureAspect(document: SceneDocument, cameraId: strin
 }
 
 export function formatExportDuration(markIn: number, markOut: number, rate: RationalFrameRate): string {
-  const seconds = Math.max(0, exportDurationSeconds(markIn, markOut, rate))
+  return formatDurationSeconds(Math.max(0, exportDurationSeconds(markIn, markOut, rate)), rate)
+}
+
+export function formatExportDurationExclusive(frameCount: number, rate: RationalFrameRate): string {
+  return formatDurationSeconds(Math.max(0, frameCount) * rationalFrameDuration(rate), rate)
+}
+
+function formatDurationSeconds(seconds: number, rate: RationalFrameRate): string {
   const wholeSeconds = Math.floor(seconds)
   const minutes = Math.floor(wholeSeconds / 60)
   const remainder = wholeSeconds % 60

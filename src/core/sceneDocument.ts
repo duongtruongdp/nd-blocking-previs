@@ -22,9 +22,11 @@ export type ActorJointName =
 
 export type ActorPose = Record<ActorJointName, ActorVector3>
 export type ActorPosePreset = 'standing' | 'relaxed' | 'walking' | 'sitting' | 'kneeling' | 'crouching' | 'lying' | 'reaching' | 'arms-crossed' | 'hands-on-hips'
+export type ActorVisualStyle = 'mannequin' | 'character'
+export type ActorBodyVariant = 'neutral' | 'male' | 'female'
 
 export type ActorAppearance = {
-  bodyVariant: 'neutral'
+  bodyVariant: ActorBodyVariant
   primaryColor: string
 }
 
@@ -66,7 +68,7 @@ export type FrameGuide = {
 }
 
 export type TimelineEntityType = 'Actor' | 'Prop' | 'Wall' | 'Opening' | 'Sun' | 'Camera'
-export type TimelineProperty = 'position' | 'heading' | 'rotation' | 'focalLengthMm' | 'openAngle' | 'azimuth' | 'elevation' | 'intensity' | 'color'
+export type TimelineProperty = 'position' | 'heading' | 'rotation' | 'scale' | 'focalLengthMm' | 'openAngle' | 'azimuth' | 'elevation' | 'intensity' | 'color'
 export type TimelineInterpolation = 'linear' | 'hold'
 export type TimelineEasingMode = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut'
 export type TimelineEasing = { easeIn?: boolean; easeOut?: boolean }
@@ -93,6 +95,9 @@ export type TimelineTrack = {
 export type TimelineDocument = {
   currentFrame: number
   startFrame: number
+  /** Canonical total Timeline length in integer project frames. */
+  durationFrames: number
+  /** Derived compatibility field retained for older runtime call sites/files. */
   endFrame: number
   markIn: number
   markOut: number
@@ -114,6 +119,18 @@ export type CameraDocument = {
   /** Editor-only color for distinguishing camera proxies in Blocking View. */
   proxyColor: string
   frameGuides: FrameGuide[]
+  /** Optional same-scene blocking target; absent in older files. */
+  targetEntityId?: string | null
+  /** Optional editor-only target lock; absent in older files. */
+  lockTarget?: boolean
+  /** Optional composition aids; absent in older files means disabled/default. */
+  targetAimPoint?: 'center' | 'chest' | 'head' | 'eyes'
+  compositionCenter?: boolean
+  compositionThirds?: boolean
+  compositionSafeAreas?: boolean
+  compositionFrameGuideEnabled?: boolean
+  compositionFrameGuideAspect?: number
+  compositionHeadroom?: boolean
   cameraSnapshot?: CameraPhysicalSnapshot
 }
 
@@ -182,6 +199,8 @@ export type ActorDocument = {
   pose: ActorPose
   /** Optional for backwards compatibility with older scenes; absent means Standing. */
   posePreset?: ActorPosePreset
+  /** Optional for backwards compatibility; absent in legacy files means Character. */
+  visualStyle?: ActorVisualStyle
 }
 
 export type SceneDocument = {
@@ -238,6 +257,7 @@ export function createActorDocument(id: string, name: string, position: ActorVec
     appearance: { bodyVariant: 'neutral', primaryColor: '#7f72c9' },
     pose: createStandingActorPose(),
     posePreset: 'standing',
+    visualStyle: 'mannequin',
   }
 }
 
@@ -255,6 +275,15 @@ export function createCameraDocument(id: string, name: string, position: ActorVe
     deliveryAspectRatio: '16:9',
     proxyColor: '#4e5665',
     frameGuides: [],
+    targetEntityId: null,
+    lockTarget: false,
+    targetAimPoint: 'center',
+    compositionCenter: false,
+    compositionThirds: false,
+    compositionSafeAreas: false,
+    compositionFrameGuideEnabled: false,
+    compositionFrameGuideAspect: 2.39,
+    compositionHeadroom: false,
   }
 }
 
@@ -308,6 +337,7 @@ export function createEmptySceneDocument(): SceneDocument {
     timeline: {
       currentFrame: 0,
       startFrame: 0,
+      durationFrames: 120,
       endFrame: 120,
       markIn: 0,
       markOut: 120,

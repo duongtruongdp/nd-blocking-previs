@@ -1,6 +1,12 @@
 import type { SceneDocument } from './sceneDocument'
+import type { ShotDocument } from './shotDocument'
+import { createMasterSequenceDocument, type MasterSequenceDocument } from './masterSequence'
+import { createDefaultShotListSettings, type ShotListSettings } from './shotListSettings'
 
-export type ProjectSettings = Record<string, never>
+export type ProjectSettings = {
+  shotList?: ShotListSettings
+  [key: string]: unknown
+}
 
 export type ProjectSceneEntry = {
   id: string
@@ -15,6 +21,9 @@ export type ProjectDocument = {
   updatedAt: string
   scenes: ProjectSceneEntry[]
   activeSceneId: string
+  shots: ShotDocument[]
+  activeShotId: string | null
+  masterSequence: MasterSequenceDocument
   settings: ProjectSettings
 }
 
@@ -26,7 +35,10 @@ export function createProjectDocument(id: string, name: string, scene: SceneDocu
     updatedAt: now,
     scenes: [{ id: scene.metadata.id, name: scene.metadata.name, scene: clone(scene) }],
     activeSceneId: scene.metadata.id,
-    settings: {},
+    shots: [],
+    activeShotId: null,
+    masterSequence: createMasterSequenceDocument(),
+    settings: { shotList: createDefaultShotListSettings() },
   }
 }
 

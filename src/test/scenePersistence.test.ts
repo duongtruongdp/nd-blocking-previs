@@ -57,6 +57,17 @@ describe('V2.8 .ndscene persistence', () => {
     try { migrateSceneFile({ ...current, version: CURRENT_NDSCENE_VERSION + 1 }) } catch (error) { expect((error as SceneFileError).code).toBe('unsupported-newer-version') }
   })
 
+  it('derives durationFrames for legacy timelines without changing their key range', () => {
+    const scene = createEmptySceneDocument()
+    const legacy = JSON.parse(JSON.stringify(scene)) as { timeline: Record<string, unknown> }
+    delete legacy.timeline.durationFrames
+    legacy.timeline.endFrame = 120
+    legacy.timeline.markOut = 96
+    const loaded = parseSceneFile(JSON.stringify({ format: 'ndscene', version: 1, scene: legacy }))
+    expect(loaded.timeline.durationFrames).toBe(120)
+    expect(loaded.timeline.endFrame).toBe(120)
+  })
+
   it('rejects invalid JSON, wrong envelopes, duplicate IDs, bad references, bad guides, and bad keyframes', () => {
     const scene = createEmptySceneDocument()
     expect(() => parseSceneFile('{')).toThrowError(SceneFileError)
@@ -84,6 +95,18 @@ describe('V2.8 .ndscene persistence', () => {
     const loaded = parseSceneFile(serializeScene({ ...scene, actors: [actor] }, '2026-10-07T00:00:00.000Z'))
 
     expect(loaded.actors[0].posePreset).toBe('sitting')
+  })
+
+  it('round-trips mannequin style and keeps legacy Actors on Character', () => {
+    const scene = createEmptySceneDocument()
+    const actor = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
+    const loaded = parseSceneFile(serializeScene({ ...scene, actors: [actor] }, '2026-10-07T00:00:00.000Z'))
+    expect(loaded.actors[0].visualStyle).toBe('mannequin')
+
+    const legacyActor = { ...actor }
+    delete legacyActor.visualStyle
+    const legacy = parseSceneFile(JSON.stringify({ format: 'ndscene', version: 1, scene: { ...scene, actors: [legacyActor] } }))
+    expect(legacy.actors[0].visualStyle).toBe('character')
   })
 
   it('defaults legacy Actors without pose data to Standing', () => {

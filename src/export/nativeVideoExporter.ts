@@ -42,7 +42,7 @@ export async function exportNativeVideo(request: VideoExportRequest, destination
       request.onProgress?.({ completedFrames: index + 1, totalFrames: frames.length, currentFrame: frame, phase: 'rendering' })
     }
     throwIfAborted(request.signal)
-    await runtime.runFfmpeg(buildNativeFfmpegArgs({ inputPattern: paths.inputPattern, outputPath: paths.partialAbsolutePath, width: dimensions.width, height: dimensions.height, frameRate: request.settings.frameRate, quality: request.settings.quality, encoder: nativeEncoder() }), request.signal, (line) => {
+    await runtime.runFfmpeg(buildNativeFfmpegArgs({ inputPattern: paths.inputPattern, outputPath: paths.partialAbsolutePath, width: dimensions.width, height: dimensions.height, frameRate: request.settings.frameRate, quality: request.settings.quality, encoder: nativeEncoder(), totalDurationSeconds: frames.length * request.settings.frameRate.denominator / request.settings.frameRate.numerator }), request.signal, (line) => {
       const frame = encodedFrameFromProgress(line, request.settings.frameRate, frames.length)
       if (frame !== null) request.onProgress?.({ completedFrames: frame, totalFrames: frames.length, currentFrame: request.settings.markIn + Math.max(0, frame - 1), phase: 'encoding' })
     })

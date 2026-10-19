@@ -9,8 +9,27 @@ const BODY_LIGHT = '#70798a'
 const GLASS_COLOR = '#172b3c'
 const SELECTION_COLOR = '#f0b866'
 const FOV_GUIDE_DISTANCE = 3
-const FOV_GUIDE_ORIGIN_Z = -1.04
+// The guide begins just beyond the compact front frame. This is a visual
+// reference adjustment only; the production camera remains at the optical
+// rig origin and its projection is unchanged.
+const FOV_GUIDE_ORIGIN_Z = -0.32
 const FOV_GUIDE_COLOR_FALLBACK = '#2c6fb7'
+
+/**
+ * The Stage camera is a symbolic filmmaking prop. Its local geometry is
+ * authored in meters, then isolated under this visual-only group so the
+ * optical rig and serialized CameraDocument never inherit display scale.
+ */
+export const CAMERA_PROXY_SCALE = 0.275
+export const CAMERA_PROXY_FORWARD_AXIS = [0, 0, -1] as const
+
+/**
+ * Center of the main housing (Body + Rear Battery), expressed from the
+ * historical optical origin. Lens, matte-box, frustum, and other helpers are
+ * deliberately excluded. The runtime derives this from the actual housing
+ * meshes and uses this value as the document ↔ body-pivot conversion offset.
+ */
+export const CAMERA_BODY_PIVOT_LOCAL = [0, 0, 0.27 * CAMERA_PROXY_SCALE] as const
 
 function fovGuideColor(): string {
   if (typeof document === 'undefined') return FOV_GUIDE_COLOR_FALLBACK
@@ -23,6 +42,8 @@ function material(color: string, roughness = 0.64, metalness = 0.18): THREE.Mesh
 
 export class ProceduralCameraRuntime {
   readonly root = new THREE.Group()
+  readonly proxyRoot = new THREE.Group()
+  readonly opticalRig = new THREE.Group()
   readonly productionCamera = new THREE.PerspectiveCamera(45, 16 / 9, 0.05, 500)
   readonly selectableMeshes: THREE.Mesh[] = []
   readonly fovGuide = new THREE.Group()
@@ -33,26 +54,41 @@ export class ProceduralCameraRuntime {
   private readonly fovGuideFrameMaterial = new THREE.LineBasicMaterial({ color: fovGuideColor(), transparent: true, opacity: 0.96, depthTest: false })
   private readonly fovGuideAxisMaterial = new THREE.LineBasicMaterial({ color: fovGuideColor(), transparent: true, opacity: 0.52, depthTest: false })
   private fovGuideGeometries: THREE.BufferGeometry[] = []
+  /** Body-center → optical-origin offset in body-local coordinates. */
+  private readonly opticalOffsetLocal = new THREE.Vector3()
   private disposed = false
 
   constructor(document: CameraDocument) {
-    this.root.name = 'CameraRoot'
+    // The StageEntity root is the actual visible body pivot. CameraDocument
+    // position remains the optical origin and is converted at this boundary.
+    this.root.name = 'CameraBodyPivot'
     this.productionCamera.name = `${document.name} Capture Camera`
-    this.root.add(this.productionCamera)
+    this.proxyRoot.name = 'CameraVisualProxy'
+    this.proxyRoot.scale.setScalar(CAMERA_PROXY_SCALE)
+    this.root.add(this.proxyRoot)
+    this.opticalRig.name = 'CameraOpticalRig'
+    this.opticalRig.userData.stageSelectable = false
+    this.root.add(this.opticalRig)
+    this.opticalRig.add(this.productionCamera)
     this.fovGuide.name = 'CameraFovGuide'
     this.fovGuide.userData.cameraFrustum = true
     this.fovGuide.userData.stageSelectable = false
     this.fovGuide.visible = false
-    this.root.add(this.fovGuide)
+    this.opticalRig.add(this.fovGuide)
     this.resources.push(this.fovGuideRayMaterial, this.fovGuideFrameMaterial, this.fovGuideAxisMaterial)
     this.buildProxy(document.id, document.name)
     this.applyDocument(document)
   }
 
   applyDocument(document: CameraDocument): void {
-    this.root.name = document.name
-    this.root.position.set(...document.position)
-    this.root.rotation.set(...document.rotation)
+    this.applyDocumentSettings(document)
+    this.applyDocumentPose(document.position, document.rotation)
+  }
+
+  /** Update capture settings without taking ownership of the rendered pose. */
+  applyDocumentSettings(document: CameraDocument): void {
+    this.root.name = 'CameraBodyPivot'
+    this.root.userData.cameraName = document.name
     this.proxyMaterials.forEach((surface) => surface.color.set(document.proxyColor || BODY_COLOR))
     const projection = cameraProjectionForDocument(document)
     if (projection) {
@@ -61,13 +97,42 @@ export class ProceduralCameraRuntime {
     }
     this.productionCamera.updateProjectionMatrix()
     this.updateFovGuide()
+  }
+
+  /**
+   * Convert an optical CameraDocument pose to the true body-pivot hierarchy.
+   * This is absolute math: no previous pose, frame, or compensation state is
+   * consulted, so timeline and phone evaluation cannot accumulate drift.
+   */
+  applyDocumentPose(position: [number, number, number], rotation: [number, number, number]): void {
+    const opticalPosition = new THREE.Vector3(...position)
+    const bodyRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(...rotation, 'XYZ'))
+    this.root.quaternion.copy(bodyRotation)
+    this.root.position.copy(opticalPosition).add(this.opticalOffsetLocal.clone().applyQuaternion(bodyRotation).multiplyScalar(-1))
     this.root.updateMatrixWorld(true)
   }
 
-  /** Apply a temporary phone-orientation rotation without changing the saved Camera document. */
-  applyLiveRotation(rotation: [number, number, number]): void {
-    this.root.rotation.set(...rotation)
+  /** The actual Stage transform pivot: the root of the visible housing. */
+  getTransformPivot(): THREE.Vector3 {
     this.root.updateMatrixWorld(true)
+    return this.root.getWorldPosition(new THREE.Vector3())
+  }
+
+  /**
+   * Convert the true runtime body-pivot pose back to persisted optical pose.
+   * The returned position is the production CaptureCamera origin, not the
+   * proxy body center.
+   */
+  getDocumentTransform(): Pick<import('../stage-engine').StageTransform, 'position' | 'rotation'> {
+    this.root.updateMatrixWorld(true)
+    const bodyPosition = this.root.getWorldPosition(new THREE.Vector3())
+    const bodyRotation = this.root.getWorldQuaternion(new THREE.Quaternion())
+    const opticalPosition = bodyPosition.clone().add(this.opticalOffsetLocal.clone().applyQuaternion(bodyRotation))
+    const euler = new THREE.Euler().setFromQuaternion(bodyRotation, 'XYZ')
+    return {
+      position: [opticalPosition.x, opticalPosition.y, opticalPosition.z],
+      rotation: [euler.x, euler.y, euler.z],
+    }
   }
 
   setSelected(selected: boolean): void {
@@ -122,18 +187,20 @@ export class ProceduralCameraRuntime {
   }
 
   private buildProxy(entityId: string, name: string): void {
-    const addBox = (label: string, size: [number, number, number], position: [number, number, number], color: string, selectable = true, tintWithProxy = true) => {
+    const bodyMeshes: THREE.Mesh[] = []
+    const addBox = (label: string, size: [number, number, number], position: [number, number, number], color: string, selectable = true, tintWithProxy = true, includeInBodyPivot = false) => {
       const geometry = new THREE.BoxGeometry(...size)
       const surface = material(color)
       const mesh = new THREE.Mesh(geometry, surface)
       mesh.name = `${name} ${label}`
       mesh.position.set(...position)
       mesh.userData.entityId = ''
-      this.root.add(mesh)
+      this.proxyRoot.add(mesh)
       this.resources.push(geometry, surface)
       this.selectionMaterials.push(surface)
       if (tintWithProxy) this.proxyMaterials.push(surface)
       if (selectable) this.selectableMeshes.push(mesh)
+      if (includeInBodyPivot) bodyMeshes.push(mesh)
       return mesh
     }
     const addCylinder = (label: string, radius: number, depth: number, position: [number, number, number], color: string, radialSegments = 16, tintWithProxy = true) => {
@@ -144,7 +211,7 @@ export class ProceduralCameraRuntime {
       mesh.position.set(...position)
       mesh.rotation.x = Math.PI / 2
       mesh.userData.entityId = ''
-      this.root.add(mesh)
+      this.proxyRoot.add(mesh)
       this.resources.push(geometry, surface)
       this.selectionMaterials.push(surface)
       if (tintWithProxy) this.proxyMaterials.push(surface)
@@ -158,7 +225,7 @@ export class ProceduralCameraRuntime {
       mesh.name = `${name} ${label}`
       mesh.position.set(...position)
       mesh.userData.entityId = ''
-      this.root.add(mesh)
+      this.proxyRoot.add(mesh)
       this.resources.push(geometry, surface)
       this.selectionMaterials.push(surface)
       if (tintWithProxy) this.proxyMaterials.push(surface)
@@ -166,8 +233,8 @@ export class ProceduralCameraRuntime {
       return mesh
     }
 
-    addBox('Body', [0.86, 0.58, 0.92], [0, 0, 0.14], BODY_COLOR)
-    addBox('Rear Battery', [0.78, 0.54, 0.28], [0, 0.01, 0.72], BODY_LIGHT)
+    addBox('Body', [0.86, 0.58, 0.92], [0, 0, 0.14], BODY_COLOR, true, true, true)
+    addBox('Rear Battery', [0.78, 0.54, 0.28], [0, 0.01, 0.72], BODY_LIGHT, true, true, true)
     addBox('Base Plate', [0.78, 0.10, 0.82], [0, -0.34, 0.14], BODY_DARK)
     addBox('Top Deck', [0.62, 0.08, 0.48], [0, 0.34, 0.23], BODY_DARK)
 
@@ -193,6 +260,16 @@ export class ProceduralCameraRuntime {
     addSphere('Side Button A', 0.045, [0.49, -0.10, 0.12], BODY_LIGHT)
     addSphere('Side Button B', 0.045, [0.49, -0.18, 0.12], BODY_LIGHT)
     addSphere('Side Button C', 0.045, [0.49, -0.26, 0.12], BODY_LIGHT)
+
+    this.proxyRoot.updateMatrixWorld(true)
+    const bodyBounds = new THREE.Box3()
+    bodyMeshes.forEach((mesh) => bodyBounds.expandByObject(mesh))
+    const bodyCenterFromOptical = bodyBounds.getCenter(new THREE.Vector3())
+    // Re-center the visible housing under the actual StageEntity root. The
+    // optical rig remains a child at the exact inverse local offset.
+    this.proxyRoot.position.copy(bodyCenterFromOptical).multiplyScalar(-1)
+    this.opticalOffsetLocal.copy(bodyCenterFromOptical).multiplyScalar(-1)
+    this.opticalRig.position.copy(this.opticalOffsetLocal)
 
     this.selectableMeshes.forEach((mesh) => { mesh.userData.entityId = entityId })
   }

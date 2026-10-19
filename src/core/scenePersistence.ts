@@ -124,9 +124,14 @@ export function normalizeSceneDocument(value: unknown): SceneDocument {
     const appearance = isRecord(actor.appearance) ? actor.appearance : {}
     return {
       ...actor,
-      appearance: { ...appearance, primaryColor: typeof appearance.primaryColor === 'string' ? appearance.primaryColor : '#7f72c9' },
+      appearance: {
+        ...appearance,
+        bodyVariant: appearance.bodyVariant === 'male' || appearance.bodyVariant === 'female' ? appearance.bodyVariant : 'neutral',
+        primaryColor: typeof appearance.primaryColor === 'string' ? appearance.primaryColor : '#7f72c9',
+      },
       pose: isActorPose(actor.pose) ? actor.pose : createStandingActorPose(),
       posePreset: normalizeActorPosePreset(actor.posePreset),
+      visualStyle: actor.visualStyle === 'mannequin' ? 'mannequin' : 'character',
     }
   }) : []
   const props = Array.isArray(value.props) ? value.props.map((prop) => {
@@ -141,16 +146,60 @@ export function normalizeSceneDocument(value: unknown): SceneDocument {
     const openAngle = normalized.openingType === 'window' ? Math.min(90, Math.max(0, rawAngle)) : rawAngle
     return { ...normalized, hingeSide: normalized.hingeSide === 'right' ? 'right' : 'left', openAngle }
   }) : []
-  const cameras = Array.isArray(value.cameras) ? value.cameras.map((camera) => isRecord(camera) ? { ...camera, proxyColor: typeof camera.proxyColor === 'string' ? camera.proxyColor : '#4e5665' } : camera) : []
+  const cameras = Array.isArray(value.cameras) ? value.cameras.map((camera) => isRecord(camera) ? {
+    ...camera,
+    proxyColor: typeof camera.proxyColor === 'string' ? camera.proxyColor : '#4e5665',
+    targetEntityId: typeof camera.targetEntityId === 'string' ? camera.targetEntityId : null,
+    lockTarget: camera.lockTarget === true,
+    targetAimPoint: ['center', 'chest', 'head', 'eyes'].includes(String(camera.targetAimPoint)) ? camera.targetAimPoint : 'center',
+    compositionCenter: camera.compositionCenter === true,
+    compositionThirds: camera.compositionThirds === true,
+    compositionSafeAreas: camera.compositionSafeAreas === true,
+    compositionFrameGuideEnabled: camera.compositionFrameGuideEnabled === true,
+    compositionFrameGuideAspect: typeof camera.compositionFrameGuideAspect === 'number' && Number.isFinite(camera.compositionFrameGuideAspect) && camera.compositionFrameGuideAspect > 0 ? camera.compositionFrameGuideAspect : 2.39,
+    compositionHeadroom: camera.compositionHeadroom === true,
+  } : camera) : []
+  const timeline = normalizeTimelineDocument(isRecord(value.timeline) ? value.timeline : {})
+  const validEntityIds = new Set([...actors, ...props, ...walls, ...openings, ...cameras].flatMap((entity) => isRecord(entity) && typeof entity.id === 'string' ? [entity.id] : []))
+  const safeCameras = cameras.map((camera) => isRecord(camera) ? {
+    ...camera,
+    targetEntityId: typeof camera.targetEntityId === 'string' && camera.targetEntityId !== camera.id && validEntityIds.has(camera.targetEntityId) ? camera.targetEntityId : null,
+    lockTarget: typeof camera.targetEntityId === 'string' && camera.targetEntityId !== camera.id && validEntityIds.has(camera.targetEntityId) && camera.lockTarget === true,
+  } : camera)
   return {
     ...value,
     actors,
     props,
     walls,
     openings,
-    cameras,
+    cameras: safeCameras,
     lights: Array.isArray(value.lights) ? value.lights : [],
+    timeline,
   } as SceneDocument
+}
+
+function normalizeTimelineDocument(value: Record<string, unknown>): SceneDocument['timeline'] {
+  const startFrame = Number.isInteger(value.startFrame) ? Number(value.startFrame) : 0
+  const existingEnd = Number.isInteger(value.endFrame) ? Number(value.endFrame) : startFrame + 120
+  const markIn = Number.isInteger(value.markIn) ? Number(value.markIn) : startFrame
+  const markOut = Number.isInteger(value.markOut) ? Number(value.markOut) : existingEnd
+  const tracks = Array.isArray(value.tracks) ? value.tracks : []
+  const furthestKey = tracks.reduce((furthest, track) => {
+    if (!isRecord(track) || !Array.isArray(track.keyframes)) return furthest
+    return Math.max(furthest, ...track.keyframes.map((keyframe) => isRecord(keyframe) && Number.isInteger(keyframe.frame) ? Number(keyframe.frame) : startFrame))
+  }, startFrame)
+  const configuredDuration = Number.isInteger(value.durationFrames) && Number(value.durationFrames) > 0 ? Number(value.durationFrames) : 0
+  const durationFrames = Math.max(1, configuredDuration || existingEnd - startFrame, markOut - startFrame, furthestKey - startFrame)
+  return {
+    currentFrame: Number.isInteger(value.currentFrame) ? Number(value.currentFrame) : startFrame,
+    startFrame,
+    durationFrames,
+    endFrame: startFrame + durationFrames,
+    markIn,
+    markOut,
+    frameRate: positiveRational(value.frameRate) ? value.frameRate as SceneDocument['timeline']['frameRate'] : { numerator: 24, denominator: 1 },
+    tracks: tracks as SceneDocument['timeline']['tracks'],
+  }
 }
 
 export function sceneFilename(name: string): string {
@@ -177,7 +226,7 @@ function migrateGuide(value: unknown): unknown {
 }
 
 function validateActor(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value) || !stringField(value.id) || !stringField(value.name) || !vector3(value.position) || !vector3(value.rotation) || !vector3(value.scale) || !isRecord(value.appearance) || value.appearance.bodyVariant !== 'neutral' || !stringField(value.appearance.primaryColor) || !isActorPose(value.pose) || (value.posePreset !== undefined && !isActorPosePreset(value.posePreset))) {
+  if (!isRecord(value) || !stringField(value.id) || !stringField(value.name) || !vector3(value.position) || !vector3(value.rotation) || !vector3(value.scale) || !isRecord(value.appearance) || !['neutral', 'male', 'female'].includes(String(value.appearance.bodyVariant)) || !stringField(value.appearance.primaryColor) || !isActorPose(value.pose) || (value.posePreset !== undefined && !isActorPosePreset(value.posePreset)) || (value.visualStyle !== undefined && !['mannequin', 'character'].includes(String(value.visualStyle)))) {
     errors.push(`${path} is not a valid Actor.`)
     return
   }
@@ -201,7 +250,7 @@ function validateSun(value: unknown, path: string, errors: string[]): void {
 }
 
 function validateCamera(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value) || !stringField(value.id) || !stringField(value.name) || !vector3(value.position) || !vector3(value.rotation) || !stringField(value.cameraDefinitionId) || !stringField(value.captureModeId) || !finiteNumber(value.focalLengthMm) || !['Spherical', 'Anamorphic'].includes(String(value.lensType)) || ![1, 1.3, 1.33, 1.5, 1.6, 1.8, 2].includes(Number(value.anamorphicSqueeze)) || !['sensor', '16:9', '1.85', '2.00', '2.39'].includes(String(value.deliveryAspectRatio)) || (value.proxyColor !== undefined && (!stringField(value.proxyColor) || !/^#[0-9a-f]{6}$/i.test(value.proxyColor))) || !Array.isArray(value.frameGuides)) {
+  if (!isRecord(value) || !stringField(value.id) || !stringField(value.name) || !vector3(value.position) || !vector3(value.rotation) || !stringField(value.cameraDefinitionId) || !stringField(value.captureModeId) || !finiteNumber(value.focalLengthMm) || !['Spherical', 'Anamorphic'].includes(String(value.lensType)) || ![1, 1.3, 1.33, 1.5, 1.6, 1.8, 2].includes(Number(value.anamorphicSqueeze)) || !['sensor', '16:9', '1.85', '2.00', '2.39'].includes(String(value.deliveryAspectRatio)) || (value.proxyColor !== undefined && (!stringField(value.proxyColor) || !/^#[0-9a-f]{6}$/i.test(value.proxyColor))) || (value.targetEntityId !== undefined && value.targetEntityId !== null && !stringField(value.targetEntityId)) || (value.lockTarget !== undefined && typeof value.lockTarget !== 'boolean') || (value.targetAimPoint !== undefined && !['center', 'chest', 'head', 'eyes'].includes(String(value.targetAimPoint))) || (value.compositionFrameGuideAspect !== undefined && (!finiteNumber(value.compositionFrameGuideAspect) || Number(value.compositionFrameGuideAspect) <= 0)) || !Array.isArray(value.frameGuides)) {
     errors.push(`${path} is not a valid Camera.`)
     return
   }
@@ -220,7 +269,7 @@ function validateSnapshot(value: unknown, path: string, errors: string[]): void 
 }
 
 function validateTimeline(value: Record<string, unknown>, ids: Set<string>, actorIds: Set<string>, propIds: Set<string>, wallIds: Set<string>, openingIds: Set<string>, sunIds: Set<string>, cameraIds: Set<string>, errors: string[]): void {
-  if (!positiveRational(value.frameRate) || !integerFields(value, ['currentFrame', 'startFrame', 'endFrame', 'markIn', 'markOut']) || !Array.isArray(value.tracks)) {
+  if (!positiveRational(value.frameRate) || !integerFields(value, ['currentFrame', 'startFrame', 'durationFrames', 'endFrame', 'markIn', 'markOut']) || Number(value.durationFrames) < 1 || !Array.isArray(value.tracks)) {
     errors.push('Timeline data is invalid.')
     return
   }

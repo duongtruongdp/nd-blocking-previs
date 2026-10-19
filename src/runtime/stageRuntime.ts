@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { ActorDocument, PropDocument } from '../core/sceneDocument'
-import { ProceduralActorRuntime } from './actor/proceduralActor'
+import { createActorRuntime, type ActorRuntime } from './actor/actorRuntime'
 import { V2TestEntities, createV2TestGeometry } from '../scene/testEntities'
 import {
   applyV2NavigationState,
@@ -85,7 +85,7 @@ export class V2StageRuntime {
   private readonly options: V2StageRuntimeOptions
   private readonly raycaster = new THREE.Raycaster()
   private readonly entities = new Map<string, V2RuntimeEntity>()
-  private readonly actorRuntimes = new Map<string, ProceduralActorRuntime>()
+  private readonly actorRuntimes = new Map<string, ActorRuntime>()
   private readonly selectable: THREE.Group[] = []
   private readonly selectableMeshes: THREE.Mesh[] = []
   private readonly stageResourceDisposers = new Set<() => void>()
@@ -173,12 +173,20 @@ export class V2StageRuntime {
       this.actorRuntimes.delete(id)
     })
     actors.forEach((actor) => {
-      const existing = this.actorRuntimes.get(actor.id)
+      let existing = this.actorRuntimes.get(actor.id)
+      if (existing && existing.visualStyle !== (actor.visualStyle === 'mannequin' ? 'mannequin' : 'character')) {
+        const entity = this.entities.get(actor.id)
+        entity?.root.removeFromParent()
+        entity?.dispose()
+        this.entities.delete(actor.id)
+        this.actorRuntimes.delete(actor.id)
+        existing = undefined
+      }
       if (existing) {
         existing.applyDocument(actor)
         return
       }
-      const runtime = new ProceduralActorRuntime(actor)
+      const runtime = createActorRuntime(actor)
       this.actorRuntimes.set(actor.id, runtime)
       this.scene.add(runtime.root)
       this.entities.set(actor.id, {

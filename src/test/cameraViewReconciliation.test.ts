@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cameraViewEntityCollections, staleRuntimeEntityIds } from '../runtime/cameraViewReconciliation'
+import { cameraViewEntityCollections, sceneScopeChanged, staleRuntimeEntityIds } from '../runtime/cameraViewReconciliation'
 
 describe('Camera View runtime reconciliation bookkeeping', () => {
   it('removes a deleted Prop from the authoritative scenic ID set', () => {
@@ -24,5 +24,11 @@ describe('Camera View runtime reconciliation bookkeeping', () => {
     expect(staleRuntimeEntityIds(before.actorIds, after.actorIds)).toEqual([])
     expect(staleRuntimeEntityIds(before.scenicIds, after.scenicIds)).toEqual([])
     expect(staleRuntimeEntityIds(after.scenicIds, before.scenicIds)).toEqual(['wall-01'])
+  })
+
+  it('treats scene identity as the ownership boundary even when entity IDs repeat', () => {
+    expect(sceneScopeChanged(null, 'scene-01')).toBe(false)
+    expect(sceneScopeChanged('scene-01', 'scene-01')).toBe(false)
+    expect(sceneScopeChanged('scene-01', 'scene-02')).toBe(true)
   })
 })

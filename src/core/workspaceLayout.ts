@@ -1,5 +1,5 @@
 export const TIMELINE_HEIGHT_MIN = 140
-export const TIMELINE_HEIGHT_DEFAULT = 240
+export const TIMELINE_HEIGHT_DEFAULT = 190
 export const STAGE_HEIGHT_MIN = 240
 
 type TimelineHeightBounds = {

@@ -22,6 +22,33 @@ function projectWithScenes() {
 }
 
 describe('Master preview context', () => {
+  it('keeps each Shot camera authoritative when Shots share one Scene', () => {
+    const empty = createEmptySceneDocument()
+    const cameraA = createCameraDocument('camera-a', 'Camera A', [0, 1, 4], [0, 0, 0], 'arri-alexa-mini-lf', 'open-gate-4-5k')
+    const cameraB = createCameraDocument('camera-b', 'Camera B', [0, 1, 4], [0, 0, 0], 'arri-alexa-mini-lf', 'open-gate-4-5k')
+    const sharedScene = { ...empty, metadata: { ...empty.metadata, id: 'scene-shared', name: 'Scene Shared' }, cameras: [cameraA, cameraB], activeCameraId: cameraB.id }
+    const shotA = createShotDocument({ id: 'shot-a', name: 'Shot A', sceneId: sharedScene.metadata.id, cameraId: cameraA.id, startFrame: 0, endFrame: 10, order: 0, notes: '', thumbnail: null })
+    const shotB = createShotDocument({ id: 'shot-b', name: 'Shot B', sceneId: sharedScene.metadata.id, cameraId: cameraB.id, startFrame: 0, endFrame: 10, order: 1, notes: '', thumbnail: null })
+    const base = createProjectDocument('project-shared', 'Shared Camera Project', sharedScene)
+    const project = { ...base, scenes: [{ id: sharedScene.metadata.id, name: sharedScene.metadata.name, scene: sharedScene }], shots: [shotA, shotB], masterSequence: { ...createMasterSequenceDocument(), clips: [{ id: 'clip-a', shotId: shotA.id, sourceStartFrame: 0, sourceEndFrame: 10, order: 0 }, { id: 'clip-b', shotId: shotB.id, sourceStartFrame: 0, sourceEndFrame: 10, order: 1 }] } }
+
+    expect(resolveMasterPreviewContext(project, 0)).toMatchObject({ status: 'resolved', shotId: shotA.id, cameraId: cameraA.id })
+    expect(resolveMasterPreviewContext(project, 10)).toMatchObject({ status: 'resolved', shotId: shotB.id, cameraId: cameraB.id })
+
+    const changedActiveCamera = { ...project, scenes: [{ ...project.scenes[0], scene: { ...sharedScene, activeCameraId: cameraA.id } }] }
+    expect(resolveMasterPreviewContext(changedActiveCamera, 0)).toMatchObject({ shotId: shotA.id, cameraId: cameraA.id })
+    expect(resolveMasterPreviewContext(changedActiveCamera, 10)).toMatchObject({ shotId: shotB.id, cameraId: cameraB.id })
+  })
+
+  it('resolves a TECCO-shaped legacy Shot with a null camera from its Scene active camera', () => {
+    const scene = { ...createEmptySceneDocument(), metadata: { ...createEmptySceneDocument().metadata, id: 'scene-tecco', name: 'Scene 01' }, cameras: [createCameraDocument('camera-02', '50mm', [0, 1, 4], [0, 0, 0], 'arri-alexa-mini-lf', 'open-gate-4-5k')], activeCameraId: 'camera-02' }
+    const projectBase = createProjectDocument('tecco-fixture', 'TECCO Fixture', scene)
+    const legacyShot = createShotDocument({ id: 'shot-tecco', name: 'Shot 02', sceneId: scene.metadata.id, cameraId: null, startFrame: 0, endFrame: 48, order: 0, notes: '', thumbnail: null })
+    const project = { ...projectBase, scenes: [{ id: scene.metadata.id, name: scene.metadata.name, scene }], shots: [legacyShot], masterSequence: { ...createMasterSequenceDocument(), clips: [{ id: 'master-tecco', shotId: legacyShot.id, sourceStartFrame: 0, sourceEndFrame: 48, order: 0 }] } }
+
+    expect(resolveMasterPreviewContext(project, 12)).toMatchObject({ status: 'resolved', sceneId: 'scene-tecco', cameraId: 'camera-02', sourceFrame: 12 })
+  })
+
   it('resolves source Scene and Camera across an exact clip boundary', () => {
     const project = projectWithScenes()
     expect(resolveMasterPreviewContext(project, 2)).toMatchObject({ masterFrame: 2, clipId: 'clip-a', sceneId: 'scene-a', cameraId: 'camera-a', sourceFrame: 12, status: 'resolved' })

@@ -88,7 +88,7 @@ export function validateSceneDocument(value: unknown): string[] {
   if (!isRecord(value)) return ['Scene data is missing.']
   if (value.schemaVersion !== 'ndscene-v2') errors.push('Scene schema version is not supported.')
   if (!isRecord(value.metadata) || !stringField(value.metadata.id) || !stringField(value.metadata.name) || !stringField(value.metadata.createdAt) || !stringField(value.metadata.updatedAt)) errors.push('Scene metadata is incomplete.')
-  if (!isRecord(value.stage) || !stringField(value.stage.name) || !Array.isArray(value.actors) || !Array.isArray(value.props) || !Array.isArray(value.walls) || !Array.isArray(value.openings) || !Array.isArray(value.cameras) || !Array.isArray(value.lights) || !isRecord(value.timeline)) errors.push('Scene collections or Stage metadata are incomplete.')
+  if (!isRecord(value.stage) || !stringField(value.stage.name) || !Array.isArray(value.actors) || !Array.isArray(value.props) || !Array.isArray(value.walls) || !Array.isArray(value.openings) || !Array.isArray(value.cameras) || !Array.isArray(value.lights) || (value.groups !== undefined && !Array.isArray(value.groups)) || !isRecord(value.timeline)) errors.push('Scene collections or Stage metadata are incomplete.')
   if (errors.length > 0) return errors
 
   const actors = value.actors as unknown[]
@@ -97,6 +97,7 @@ export function validateSceneDocument(value: unknown): string[] {
   const openings = value.openings as unknown[]
   const cameras = value.cameras as unknown[]
   const lights = value.lights as unknown[]
+  const groups = Array.isArray(value.groups) ? value.groups as unknown[] : []
   const ids = [...actors, ...props, ...walls, ...openings, ...cameras, ...lights].map((entity) => isRecord(entity) ? entity.id : null)
   if (ids.some((id) => !stringField(id))) errors.push('Every scene entity needs a stable ID.')
   const validIds = ids.filter((id): id is string => typeof id === 'string')
@@ -107,8 +108,15 @@ export function validateSceneDocument(value: unknown): string[] {
   openings.forEach((opening, index) => validateOpening(opening, `openings[${index}]`, errors))
   cameras.forEach((camera, index) => validateCamera(camera, `cameras[${index}]`, errors))
   lights.forEach((light, index) => validateSun(light, `lights[${index}]`, errors))
+  groups.forEach((group, index) => validateGroup(group, `groups[${index}]`, new Set(validIds), errors))
+  const groupIds = groups.map((group) => isRecord(group) ? group.id : null)
+  if (groupIds.some((id) => !stringField(id)) || new Set(groupIds.filter((id): id is string => typeof id === 'string')).size !== groupIds.length) errors.push('Scene group IDs must be unique.')
+  const validGroupIds = groupIds.filter((id): id is string => typeof id === 'string')
+  if (validGroupIds.some((id) => validIds.includes(id))) errors.push('Scene group IDs must not collide with entity IDs.')
+  const childGroupIds = groups.flatMap((group) => isRecord(group) && Array.isArray(group.childIds) ? group.childIds.filter((id): id is string => typeof id === 'string') : [])
+  if (new Set(childGroupIds).size !== childGroupIds.length) errors.push('An entity may belong to only one Scene group.')
   if (value.activeCameraId !== null && (!stringField(value.activeCameraId) || !cameras.some((camera) => isRecord(camera) && camera.id === value.activeCameraId))) errors.push('Active Camera does not resolve to a Camera in the scene.')
-  validateTimeline(value.timeline as Record<string, unknown>, new Set(validIds), new Set(actors.flatMap((actor) => isRecord(actor) && typeof actor.id === 'string' ? [actor.id] : [])), new Set(props.flatMap((prop) => isRecord(prop) && typeof prop.id === 'string' ? [prop.id] : [])), new Set(walls.flatMap((wall) => isRecord(wall) && typeof wall.id === 'string' ? [wall.id] : [])), new Set(openings.flatMap((opening) => isRecord(opening) && typeof opening.id === 'string' ? [opening.id] : [])), new Set(lights.flatMap((light) => isRecord(light) && typeof light.id === 'string' ? [light.id] : [])), new Set(cameras.flatMap((camera) => isRecord(camera) && typeof camera.id === 'string' ? [camera.id] : [])), errors)
+  validateTimeline(value.timeline as Record<string, unknown>, new Set([...validIds, ...groupIds.filter((id): id is string => typeof id === 'string')]), new Set(actors.flatMap((actor) => isRecord(actor) && typeof actor.id === 'string' ? [actor.id] : [])), new Set(props.flatMap((prop) => isRecord(prop) && typeof prop.id === 'string' ? [prop.id] : [])), new Set(walls.flatMap((wall) => isRecord(wall) && typeof wall.id === 'string' ? [wall.id] : [])), new Set(openings.flatMap((opening) => isRecord(opening) && typeof opening.id === 'string' ? [opening.id] : [])), new Set(lights.flatMap((light) => isRecord(light) && typeof light.id === 'string' ? [light.id] : [])), new Set(cameras.flatMap((camera) => isRecord(camera) && typeof camera.id === 'string' ? [camera.id] : [])), new Set(groupIds.filter((id): id is string => typeof id === 'string')), errors)
   return errors
 }
 
@@ -174,6 +182,7 @@ export function normalizeSceneDocument(value: unknown): SceneDocument {
     openings,
     cameras: safeCameras,
     lights: Array.isArray(value.lights) ? value.lights : [],
+    groups: Array.isArray(value.groups) ? value.groups.map((group) => normalizeGroup(group)).filter((group): group is NonNullable<typeof group> => group !== null) : [],
     timeline,
   } as SceneDocument
 }
@@ -182,7 +191,11 @@ function normalizeTimelineDocument(value: Record<string, unknown>): SceneDocumen
   const startFrame = Number.isInteger(value.startFrame) ? Number(value.startFrame) : 0
   const existingEnd = Number.isInteger(value.endFrame) ? Number(value.endFrame) : startFrame + 120
   const markIn = Number.isInteger(value.markIn) ? Number(value.markIn) : startFrame
-  const markOut = Number.isInteger(value.markOut) ? Number(value.markOut) : existingEnd
+  // Early project files used zero as an "unset" Mark Out value. Preserve a
+  // real positive mark, but restore that legacy sentinel to the document end
+  // so playback does not immediately resolve to a zero-length range.
+  const configuredMarkOut = Number.isInteger(value.markOut) ? Number(value.markOut) : existingEnd
+  const markOut = configuredMarkOut === 0 && existingEnd > startFrame ? existingEnd : configuredMarkOut
   const tracks = Array.isArray(value.tracks) ? value.tracks : []
   const furthestKey = tracks.reduce((furthest, track) => {
     if (!isRecord(track) || !Array.isArray(track.keyframes)) return furthest
@@ -268,27 +281,39 @@ function validateSnapshot(value: unknown, path: string, errors: string[]): void 
   if (!isRecord(value) || !stringField(value.manufacturer) || !stringField(value.model) || !stringField(value.captureModeName) || !positiveNumber(value.activeWidthMm) || !positiveNumber(value.activeHeightMm) || !positiveInteger(value.recordingWidthPx) || !positiveInteger(value.recordingHeightPx) || !stringField(value.sensorFormatLabel) || !positiveInteger(value.databaseVersionAtSave)) errors.push(`${path} is not a valid Camera physical snapshot.`)
 }
 
-function validateTimeline(value: Record<string, unknown>, ids: Set<string>, actorIds: Set<string>, propIds: Set<string>, wallIds: Set<string>, openingIds: Set<string>, sunIds: Set<string>, cameraIds: Set<string>, errors: string[]): void {
+function validateGroup(value: unknown, path: string, entityIds: Set<string>, errors: string[]): void {
+  if (!isRecord(value) || !stringField(value.id) || !stringField(value.name) || !vector3(value.position) || !vector3(value.rotation) || !vector3(value.pivot) || !Array.isArray(value.childIds) || value.childIds.some((id) => !stringField(id) || !entityIds.has(id)) || (Array.isArray(value.childIds) && new Set(value.childIds).size !== value.childIds.length)) errors.push(`${path} is not a valid Group.`)
+}
+
+function normalizeGroup(value: unknown): { id: string; name: string; position: [number, number, number]; rotation: [number, number, number]; pivot: [number, number, number]; childIds: string[] } | null {
+  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.name !== 'string') return null
+  const vector = (input: unknown): [number, number, number] => vector3(input) ? [...input] as [number, number, number] : [0, 0, 0]
+  const childIds = Array.isArray(value.childIds) ? value.childIds.filter((id): id is string => typeof id === 'string') : []
+  return { id: value.id, name: value.name.trim() || 'Group', position: vector(value.position), rotation: vector(value.rotation), pivot: vector(value.pivot), childIds: [...new Set(childIds)] }
+}
+
+function validateTimeline(value: Record<string, unknown>, ids: Set<string>, actorIds: Set<string>, propIds: Set<string>, wallIds: Set<string>, openingIds: Set<string>, sunIds: Set<string>, cameraIds: Set<string>, groupIds: Set<string>, errors: string[]): void {
   if (!positiveRational(value.frameRate) || !integerFields(value, ['currentFrame', 'startFrame', 'durationFrames', 'endFrame', 'markIn', 'markOut']) || Number(value.durationFrames) < 1 || !Array.isArray(value.tracks)) {
     errors.push('Timeline data is invalid.')
     return
   }
   const trackIds = (value.tracks as unknown[]).map((track) => isRecord(track) ? track.id : null)
   if (trackIds.some((id) => !stringField(id)) || new Set(trackIds.filter((id): id is string => typeof id === 'string')).size !== trackIds.length) errors.push('Timeline track IDs must be unique.')
-  ;(value.tracks as unknown[]).forEach((track, index) => validateTrack(track, `timeline.tracks[${index}]`, ids, actorIds, propIds, wallIds, openingIds, sunIds, cameraIds, errors))
+  ;(value.tracks as unknown[]).forEach((track, index) => validateTrack(track, `timeline.tracks[${index}]`, ids, actorIds, propIds, wallIds, openingIds, sunIds, cameraIds, groupIds, errors))
 }
 
-function validateTrack(value: unknown, path: string, ids: Set<string>, actorIds: Set<string>, propIds: Set<string>, wallIds: Set<string>, openingIds: Set<string>, sunIds: Set<string>, cameraIds: Set<string>, errors: string[]): void {
-  if (!isRecord(value) || !stringField(value.id) || !stringField(value.entityId) || !ids.has(value.entityId) || !['Actor', 'Prop', 'Wall', 'Opening', 'Sun', 'Camera'].includes(String(value.entityType)) || !['position', 'heading', 'rotation', 'focalLengthMm', 'openAngle', 'azimuth', 'elevation', 'intensity', 'color'].includes(String(value.property)) || !Array.isArray(value.keyframes)) {
+function validateTrack(value: unknown, path: string, ids: Set<string>, actorIds: Set<string>, propIds: Set<string>, wallIds: Set<string>, openingIds: Set<string>, sunIds: Set<string>, cameraIds: Set<string>, groupIds: Set<string>, errors: string[]): void {
+  if (!isRecord(value) || !stringField(value.id) || !stringField(value.entityId) || !ids.has(value.entityId) || !['Actor', 'Prop', 'Wall', 'Opening', 'Sun', 'Camera', 'Group'].includes(String(value.entityType)) || !['position', 'heading', 'rotation', 'scale', 'focalLengthMm', 'openAngle', 'azimuth', 'elevation', 'intensity', 'color'].includes(String(value.property)) || !Array.isArray(value.keyframes)) {
     errors.push(`${path} is not a valid Timeline track.`)
     return
   }
-  if ((value.entityType === 'Actor' && !actorIds.has(value.entityId)) || (value.entityType === 'Prop' && !propIds.has(value.entityId)) || (value.entityType === 'Wall' && !wallIds.has(value.entityId)) || (value.entityType === 'Opening' && !openingIds.has(value.entityId)) || (value.entityType === 'Sun' && !sunIds.has(value.entityId)) || (value.entityType === 'Camera' && !cameraIds.has(value.entityId))) errors.push(`${path} references the wrong entity type.`)
+  if ((value.entityType === 'Actor' && !actorIds.has(value.entityId)) || (value.entityType === 'Prop' && !propIds.has(value.entityId)) || (value.entityType === 'Wall' && !wallIds.has(value.entityId)) || (value.entityType === 'Opening' && !openingIds.has(value.entityId)) || (value.entityType === 'Sun' && !sunIds.has(value.entityId)) || (value.entityType === 'Camera' && !cameraIds.has(value.entityId)) || (value.entityType === 'Group' && !groupIds.has(value.entityId))) errors.push(`${path} references the wrong entity type.`)
   const invalidProperty = value.entityType === 'Actor' ? ['focalLengthMm', 'openAngle', 'azimuth', 'elevation', 'intensity', 'color'].includes(String(value.property))
     : value.entityType === 'Prop' || value.entityType === 'Wall' ? ['heading', 'focalLengthMm', 'openAngle', 'azimuth', 'elevation', 'intensity', 'color'].includes(String(value.property))
       : value.entityType === 'Opening' ? ['heading', 'focalLengthMm', 'position', 'azimuth', 'elevation', 'intensity', 'color'].includes(String(value.property))
         : value.entityType === 'Sun' ? !['azimuth', 'elevation', 'intensity', 'color'].includes(String(value.property))
-          : value.entityType === 'Camera' ? ['heading', 'openAngle', 'azimuth', 'elevation', 'intensity', 'color'].includes(String(value.property)) : false
+        : value.entityType === 'Camera' ? ['heading', 'openAngle', 'azimuth', 'elevation', 'intensity', 'color', 'scale'].includes(String(value.property))
+          : value.entityType === 'Group' ? !['position', 'rotation'].includes(String(value.property)) : false
   if (invalidProperty) errors.push(`${path} uses an invalid property for its entity type.`)
   const keyframeIds = (value.keyframes as unknown[]).map((keyframe) => isRecord(keyframe) ? keyframe.id : null)
   if (keyframeIds.some((id) => !stringField(id)) || new Set(keyframeIds.filter((id): id is string => typeof id === 'string')).size !== keyframeIds.length) errors.push(`${path} keyframe IDs must be unique.`)

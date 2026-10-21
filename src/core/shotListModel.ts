@@ -5,6 +5,7 @@ import { shotDurationFrames } from './shotDocument'
 import { evaluateTimeline } from '../timeline/timelineEvaluator'
 import { frameToTimecode } from '../timeline/timelineMath'
 import { normalizeShotListSettings, type ShotListSettings } from './shotListSettings'
+import { resolveShotCamera } from './shotCameraResolver'
 
 export type ShotListCardModel = {
   shot: ShotDocument
@@ -27,7 +28,7 @@ export function buildShotListCards(project: ProjectDocument): ShotListCardModel[
   const clips = project.masterSequence.clips
   return project.shots.map((shot, orderIndex) => {
     const scene = project.scenes.find((entry) => entry.id === shot.sceneId) ?? null
-    const camera = scene?.scene.cameras.find((candidate) => candidate.id === shot.cameraId) ?? null
+    const camera = resolveShotCamera(project, shot).camera
     const representativeFrame = shot.thumbnailFrame ?? shot.startFrame
     const evaluatedCamera = scene && camera ? evaluateTimeline(scene.scene, representativeFrame)[camera.id] : undefined
     const lensMillimeters = camera ? Math.max(0, evaluatedCamera?.focalLengthMm ?? camera.focalLengthMm) : null

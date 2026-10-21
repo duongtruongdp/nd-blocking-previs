@@ -17,7 +17,8 @@ wss://live.example.com/live
 127.0.0.1:8787  ND Live Relay (one Node process)
 ```
 
-The frontend origin and relay origin may differ. The relay's `LIVE_ALLOWED_ORIGINS`
+The official production relay for this project is
+`wss://live.duongtruongdp.net/live`. The frontend origin and relay origin may differ. The relay's `LIVE_ALLOWED_ORIGINS`
 contains browser origins such as `https://app.example.com`; it does not contain
 the relay URL and it does not include a WordPress pathname. An app at
 `https://app.example.com/previs/` still sends the origin
@@ -174,7 +175,7 @@ curl -i http://127.0.0.1:8787/ready
 Expected body shape is similar to:
 
 ```json
-{"ok":true,"ready":true,"service":"nd-blocking-live-review-relay","protocol":1,"websocketPath":"/live","rooms":0}
+{"ok":true,"ready":true,"service":"nd-blocking-live-review-relay","protocol":2,"websocketPath":"/live","rooms":0}
 ```
 
 After nginx and TLS:
@@ -196,18 +197,25 @@ room-full, and Host-disconnected states remain protocol/status errors.
 Build the normal web app with the public relay URL:
 
 ```bash
-VITE_LIVE_RELAY_URL=wss://live.example.com/live npm run build
+VITE_LIVE_RELAY_URL=wss://live.duongtruongdp.net/live npm run build
 ```
+
+Web and Desktop production builds use this official relay when
+`VITE_LIVE_RELAY_URL` is omitted. An explicit valid `wss://.../live` value
+remains available for self-hosted deployments; an invalid explicit value fails
+closed.
 
 Deploy the generated frontend through the existing static/WordPress workflow.
-An invite URL is based on the frontend origin, for example:
+Production and packaged Desktop invites use the canonical public frontend
+destination:
 
 ```text
-https://app.example.com/previs/?live=<session-id>
+https://blocking.duongtruongdp.net/?live=<session-id>
 ```
 
-It must not point viewers at `live.example.com`. Production HTTPS pages require
-`wss://`; the app fails closed rather than falling back to `ws://` or localhost.
+It must not point viewers at `live.duongtruongdp.net`. Production HTTPS pages
+require `wss://`; the app fails closed rather than falling back to `ws://` or
+localhost. The Host token is not included in the invite URL.
 
 ## Remote acceptance sequence
 
@@ -218,7 +226,7 @@ Network B/cellular, not two tabs or devices on one LAN.
 1. Start the relay and confirm `/health` and `/ready` over HTTPS.
 2. Build and deploy the frontend with the public WSS URL.
 3. On Network A, open the app and start Live Review.
-4. Copy the app-origin invite link.
+4. Copy the canonical public invite link.
 5. On Network B, open the link and join as Viewer.
 6. Verify scene/shot/camera changes, Actor and Camera moves, timeline seek and
    playback, Master playback/cuts, Shot List, and Present mode.

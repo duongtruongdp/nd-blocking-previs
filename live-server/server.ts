@@ -2,15 +2,16 @@ import { createServer, type IncomingMessage } from 'node:http'
 import { WebSocketServer, WebSocket, type RawData } from 'ws'
 import { acceptLiveReviewProject, addLiveReviewParticipant, appendLiveReviewChat, clearLiveReviewEphemeralState, connectedLiveReviewParticipants, createLiveReviewRoom, isLiveReviewRoomExpired, publicLiveReviewLeases, publicLiveReviewParticipants, rememberLiveReviewOperation, setLiveReviewState, type LiveReviewRoom, type LiveReviewRoomParticipant } from './sessionStore.js'
 import { clientIp, liveRelayConfig, originAllowed } from './config.js'
-import { isLiveReviewChatText, isLiveReviewCollaborativeTransform, isLiveReviewLeaseTarget, isLiveReviewPointer, isLiveReviewProject, isLiveReviewShotPatch, isLiveReviewState, isLiveReviewTimelineCommit, isLiveReviewTransform, isLiveReviewTransformPreview, LIVE_REVIEW_PROTOCOL_VERSION, liveReviewMessageVersion, normalizeLiveReviewDisplayName, parseLiveReviewMessage, randomLiveReviewId, serializeLiveReviewMessage, type LiveReviewClientMessage, type LiveReviewEditRejection, type LiveReviewEditResult, type LiveReviewLease, type LiveReviewLeaseTargetType, type LiveReviewParticipant, type LiveReviewServerMessage } from '../src/liveReview/protocol.js'
+import { isLiveReviewChatText, isLiveReviewCollaborativeTransform, isLiveReviewLeaseTarget, isLiveReviewPlanningCommit, isLiveReviewPointer, isLiveReviewProject, isLiveReviewShotPatch, isLiveReviewState, isLiveReviewTimelineCommit, isLiveReviewTransform, isLiveReviewTransformPreview, LIVE_REVIEW_PROTOCOL_VERSION, liveReviewMessageVersion, normalizeLiveReviewDisplayName, parseLiveReviewMessage, randomLiveReviewId, serializeLiveReviewMessage, type LiveReviewClientMessage, type LiveReviewEditRejection, type LiveReviewEditResult, type LiveReviewLease, type LiveReviewLeaseTargetType, type LiveReviewParticipant, type LiveReviewServerMessage } from '../src/liveReview/protocol.js'
 
 type Peer = { socket: WebSocket; room: LiveReviewRoom; role: 'host' | 'viewer'; ip: string; participantId: string }
-type SocketMeta = { ip: string; messageTimes: number[]; transformTimes: number[]; pointerTimes: number[]; chatTimes: number[]; invalidTimes: number[]; alive: boolean; closed: boolean }
+type SocketMeta = { diagnosticId: string; firstMessageLogged: boolean; ip: string; messageTimes: number[]; transformTimes: number[]; pointerTimes: number[]; chatTimes: number[]; invalidTimes: number[]; alive: boolean; closed: boolean }
 
 export const config = liveRelayConfig()
 const rooms = new Map<string, LiveReviewRoom>()
 const peers = new Map<WebSocket, Peer>()
 const socketMeta = new Map<WebSocket, SocketMeta>()
+const pendingDiagnosticIds = new WeakMap<IncomingMessage, string>()
 const activeConnectionsByIp = new Map<string, number>()
 const sessionCreatesByIp = new Map<string, number[]>()
 let shuttingDown = false
@@ -39,7 +40,7 @@ httpServer.on('upgrade', (request, socket, head) => {
   if (!originAllowed(request.headers.origin, config)) {
     socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
     socket.destroy()
-    console.warn(`[live-review] rejected browser origin ${request.headers.origin ? 'provided' : 'missing'}`)
+    console.warn(`[live-review] rejected origin: ${request.headers.origin ?? '<missing>'}`)
     return
   }
   const ip = clientIp(request)
@@ -49,17 +50,27 @@ httpServer.on('upgrade', (request, socket, head) => {
     console.warn('[live-review] rejected connection rate limit')
     return
   }
+  const diagnosticId = randomLiveReviewId(5)
+  pendingDiagnosticIds.set(request, diagnosticId)
+  console.info(`[live-review] ws ${diagnosticId} upgrade accepted origin=${request.headers.origin ?? '<missing>'}`)
   wss.handleUpgrade(request, socket, head, (webSocket) => wss.emit('connection', webSocket, request))
 })
 
 wss.on('connection', (socket, request: IncomingMessage) => {
   const ip = clientIp(request)
-  socketMeta.set(socket, { ip, messageTimes: [], transformTimes: [], pointerTimes: [], chatTimes: [], invalidTimes: [], alive: true, closed: false })
+  const diagnosticId = pendingDiagnosticIds.get(request) ?? randomLiveReviewId(5)
+  pendingDiagnosticIds.delete(request)
+  socketMeta.set(socket, { diagnosticId, firstMessageLogged: false, ip, messageTimes: [], transformTimes: [], pointerTimes: [], chatTimes: [], invalidTimes: [], alive: true, closed: false })
   activeConnectionsByIp.set(ip, (activeConnectionsByIp.get(ip) ?? 0) + 1)
+  console.info(`[live-review] ws ${diagnosticId} open`)
   socket.on('pong', () => { const meta = socketMeta.get(socket); if (meta) meta.alive = true })
   socket.on('message', (raw) => handleMessage(socket, raw))
-  socket.on('close', () => handleClose(socket))
-  socket.on('error', () => handleClose(socket))
+  socket.on('close', (code) => handleClose(socket, code))
+  socket.on('error', () => {
+    const meta = socketMeta.get(socket)
+    if (meta && !meta.closed) console.warn(`[live-review] ws ${meta.diagnosticId} error=socket_error`)
+    handleClose(socket)
+  })
 })
 
 const cleanupTimer = setInterval(() => {
@@ -99,8 +110,12 @@ function handleMessage(socket: WebSocket, raw: RawData): void {
   if (!meta || !allowMessage(meta)) return reject(socket, 'rate_limited', 'Live Review message rate limit exceeded.')
   const rawText = raw.toString()
   const version = liveReviewMessageVersion(rawText, config.maxMessageBytes)
-  if (version !== null && version !== LIVE_REVIEW_PROTOCOL_VERSION) return reject(socket, 'protocol_incompatible', `Live Review protocol version ${version} is incompatible with relay version ${LIVE_REVIEW_PROTOCOL_VERSION}.`)
   const message = parseLiveReviewMessage(rawText, config.maxMessageBytes)
+  if (!meta.firstMessageLogged) {
+    meta.firstMessageLogged = true
+    console.info(`[live-review] ws ${meta.diagnosticId} first-message bytes=${Buffer.byteLength(rawText, 'utf8')} type=${message && 'type' in message ? message.type : 'invalid'}${version === null ? '' : ` v=${version}`}`)
+  }
+  if (version !== null && version !== LIVE_REVIEW_PROTOCOL_VERSION) return reject(socket, 'protocol_incompatible', `Live Review protocol version ${version} is incompatible with relay version ${LIVE_REVIEW_PROTOCOL_VERSION}.`)
   if (!message || !isKnownClientMessage(message)) {
     if (!allowInvalidMessage(meta)) return reject(socket, 'invalid_message', 'Too many invalid Live Review messages.')
     return reject(socket, 'invalid_message', 'The Live Review message is invalid.')
@@ -108,7 +123,10 @@ function handleMessage(socket: WebSocket, raw: RawData): void {
   if ((message.type === 'host_transform' || message.type === 'editor_transform_preview' || message.type === 'editor_transform_commit' || message.type === 'editor_timeline_commit') && !allowTransform(meta)) return reject(socket, 'rate_limited', 'Live Review transform rate limit exceeded.')
   const peer = peers.get(socket)
   if (!peer) {
-    if (message.type === 'create_session') createSession(socket, meta.ip, message.displayName, message.participantId)
+    if (message.type === 'create_session') {
+      console.info(`[live-review] ws ${meta.diagnosticId} create-session received`)
+      createSession(socket, meta.ip, message.displayName, message.participantId)
+    }
     else if (message.type === 'join_session') joinSession(socket, message.session, message.token, message.participantId, message.participantToken, message.displayName)
     else reject(socket, 'not_authenticated', 'Join a Live Review session first.')
     return
@@ -208,6 +226,23 @@ function handleMessage(socket: WebSocket, raw: RawData): void {
     send(host.socket, { v: LIVE_REVIEW_PROTOCOL_VERSION, type: 'edit_shot_request', patch: message.patch, participantId: peer.participantId, displayName: participant.displayName })
     return
   }
+  if (message.type === 'editor_planning_commit') {
+    const participant = peer.room.participants.get(peer.participantId)
+    const commit = message.commit
+    if (!participant || (participant.role !== 'editor' && participant.role !== 'host') || !peer.room.hostConnected || !isLiveReviewPlanningCommit(commit)) return sendEditResult(socket, { operationId: commit.operationId, accepted: false, reason: peer.room.hostConnected ? 'invalid_payload' : 'host_unavailable', projectRevision: peer.room.revision })
+    if (!rememberLiveReviewOperation(peer.room, commit.operationId)) return sendEditResult(socket, { operationId: commit.operationId, accepted: false, reason: 'duplicate_operation', projectRevision: peer.room.revision })
+    const targetType: LiveReviewLeaseTargetType = commit.operation === 'shot_update' ? 'Shot' : commit.operation === 'master_clip_update' ? 'MasterClip' : commit.operation.startsWith('shot_') ? 'ShotOrder' : 'MasterOrder'
+    const targetId = commit.operation === 'shot_update' ? commit.shotId : commit.operation === 'master_clip_update' ? commit.clipId : 'project'
+    const lease = leaseForParticipant(peer.room, commit.leaseId, peer.participantId)
+    if (!lease || lease.targetKey !== targetKey(targetType, targetId)) return sendEditResult(socket, { operationId: commit.operationId, accepted: false, reason: 'lease_expired', projectRevision: peer.room.revision })
+    if (commit.baseProjectRevision !== peer.room.revision) return finishLeaseWithResult(peer.room, lease, socket, { operationId: commit.operationId, accepted: false, reason: 'stale_revision', projectRevision: peer.room.revision })
+    const host = [...peers.values()].find((candidate) => candidate.room === peer.room && candidate.role === 'host')
+    if (!host) return finishLeaseWithResult(peer.room, lease, socket, { operationId: commit.operationId, accepted: false, reason: 'host_unavailable', projectRevision: peer.room.revision })
+    lease.expiresAt = Date.now() + config.editLeaseMs
+    peer.room.operationLeases.set(commit.operationId, lease.targetKey)
+    send(host.socket, { v: LIVE_REVIEW_PROTOCOL_VERSION, type: 'edit_planning_request', commit, participantId: peer.participantId, displayName: participant.displayName })
+    return
+  }
   if (message.type === 'editor_timeline_commit') {
     const participant = peer.room.participants.get(peer.participantId)
     const commit = message.commit
@@ -288,7 +323,8 @@ function createSession(socket: WebSocket, ip: string, displayName?: string, requ
   const participant = createParticipant('host', normalizeLiveReviewDisplayName(displayName, 'Host'), requestedParticipantId)
   addLiveReviewParticipant(room, participant)
   peers.set(socket, { socket, room, role: 'host', ip, participantId: participant.participantId })
-  console.info(`[live-review] session created ${shortSession(room.session)}`)
+  const diagnosticId = socketMeta.get(socket)?.diagnosticId ?? '<unknown>'
+  console.info(`[live-review] ws ${diagnosticId} session-created`)
   send(socket, { v: LIVE_REVIEW_PROTOCOL_VERSION, type: 'session_created', session: room.session, token: room.token, expiresAt: room.expiresAt, participantId: participant.participantId, participantToken: participant.participantToken, participants: publicLiveReviewParticipants(room), chatHistory: room.chat, pointer: room.pointer, leases: publicLiveReviewLeases(room), hostConnected: room.hostConnected })
 }
 
@@ -314,18 +350,19 @@ function joinSession(socket: WebSocket, session: string, token?: string, request
   if (isHost) { room.hostConnected = true; room.hostGraceUntil = null }
   else room.viewerCount = connectedLiveReviewParticipants(room).filter((entry) => entry.role === 'viewer').length
   peers.set(socket, { socket, room, role: isHost ? 'host' : 'viewer', ip: socketMeta.get(socket)?.ip ?? 'unknown', participantId: participant.participantId })
-  console.info(`[live-review] ${isHost ? 'Host reconnected' : 'Viewer joined'} ${shortSession(room.session)}`)
+  console.info(`[live-review] ${isHost ? 'Host reconnected' : 'Viewer joined'}`)
   if (room.project && room.state) send(socket, { v: LIVE_REVIEW_PROTOCOL_VERSION, type: 'session_snapshot', project: room.project, state: room.state, revision: room.revision, projectRevision: room.revision, hostConnected: room.hostConnected, participantId: participant.participantId, participantToken: participant.participantToken, participants: publicLiveReviewParticipants(room), chatHistory: room.chat, pointer: room.pointer, leases: publicLiveReviewLeases(room) })
   broadcastParticipantUpdate(room, participant, 'joined')
   if (isHost) broadcast(room, { v: LIVE_REVIEW_PROTOCOL_VERSION, type: 'host_editing_paused', paused: false })
   broadcastPresence(room)
 }
 
-function handleClose(socket: WebSocket): void {
+function handleClose(socket: WebSocket, code?: number): void {
   const meta = socketMeta.get(socket)
   if (meta?.closed) return
   if (meta) {
     meta.closed = true
+    console.info(`[live-review] ws ${meta.diagnosticId} close code=${code ?? '<error>'}`)
     const active = Math.max(0, (activeConnectionsByIp.get(meta.ip) ?? 1) - 1)
     if (active === 0) activeConnectionsByIp.delete(meta.ip)
     else activeConnectionsByIp.set(meta.ip, active)
@@ -343,11 +380,11 @@ function handleClose(socket: WebSocket): void {
     broadcast(peer.room, { v: LIVE_REVIEW_PROTOCOL_VERSION, type: 'host_editing_paused', paused: true })
     markParticipantDisconnected(peer.room, peer.participantId, peer.room.hostGraceUntil)
     broadcast(peer.room, { v: LIVE_REVIEW_PROTOCOL_VERSION, type: 'host_disconnected', graceUntil: peer.room.hostGraceUntil })
-    console.info(`[live-review] Host disconnected ${shortSession(peer.room.session)}`)
+    console.info('[live-review] Host disconnected')
   } else {
     peer.room.viewerCount = Math.max(0, peer.room.viewerCount - 1)
     markParticipantDisconnected(peer.room, peer.participantId, Date.now() + config.hostReconnectGraceMs)
-    console.info(`[live-review] Viewer left ${shortSession(peer.room.session)}`)
+    console.info('[live-review] Viewer left')
   }
   broadcastPresence(peer.room)
 }
@@ -358,7 +395,7 @@ function endRoom(room: LiveReviewRoom, reason: string): void {
   for (const [socket, peer] of peers) if (peer.room === room) { peers.delete(socket); socket.close(1000, 'session-ended') }
   rooms.delete(room.session)
   clearLiveReviewEphemeralState(room)
-  console.info(`[live-review] room expired ${shortSession(room.session)}`)
+  console.info('[live-review] room expired')
 }
 
 function broadcastPresence(room: LiveReviewRoom): void {
@@ -400,6 +437,9 @@ function pruneParticipants(room: LiveReviewRoom, now: number): void {
 }
 
 function targetKey(targetType: LiveReviewLeaseTargetType, targetId: string): string {
+  if (targetType === 'ShotOrder') return `shot-order:${targetId}`
+  if (targetType === 'MasterClip') return `master-clip:${targetId}`
+  if (targetType === 'MasterOrder') return `master-sequence:${targetId}`
   return `${targetType.toLowerCase()}:${targetId}`
 }
 
@@ -478,7 +518,13 @@ function broadcast(room: LiveReviewRoom, message: LiveReviewServerMessage, excep
 }
 
 function send(socket: WebSocket, message: LiveReviewServerMessage): void {
-  if (socket.readyState === WebSocket.OPEN) socket.send(serializeLiveReviewMessage(message))
+  if (socket.readyState === WebSocket.OPEN) {
+    if (message.type === 'session_created' || message.type === 'session_snapshot') {
+      const meta = socketMeta.get(socket)
+      if (meta) console.info(`[live-review] ws ${meta.diagnosticId} response-sent type=${message.type}`)
+    }
+    socket.send(serializeLiveReviewMessage(message))
+  }
 }
 
 function reject(socket: WebSocket, code: string, message: string): void {
@@ -528,10 +574,9 @@ function allowInvalidMessage(meta: SocketMeta): boolean {
 }
 
 function isKnownClientMessage(value: LiveReviewClientMessage | LiveReviewServerMessage): value is LiveReviewClientMessage {
-  return ['create_session', 'join_session', 'participant_profile', 'host_project_snapshot', 'host_present_state', 'host_transform', 'host_pointer', 'chat_send', 'participant_role_update', 'lease_request', 'lease_renew', 'lease_release', 'lease_take_control', 'editor_transform_preview', 'editor_transform_commit', 'editor_shot_patch', 'editor_timeline_commit', 'host_edit_result', 'request_snapshot', 'end_session', 'leave_session', 'ping'].includes(value.type)
+  return ['create_session', 'join_session', 'participant_profile', 'host_project_snapshot', 'host_present_state', 'host_transform', 'host_pointer', 'chat_send', 'participant_role_update', 'lease_request', 'lease_renew', 'lease_release', 'lease_take_control', 'editor_transform_preview', 'editor_transform_commit', 'editor_shot_patch', 'editor_planning_commit', 'editor_timeline_commit', 'host_edit_result', 'request_snapshot', 'end_session', 'leave_session', 'ping'].includes(value.type)
 }
 
-function shortSession(session: string): string { return session.slice(0, 10) }
 
 function shutdown(signal: string): void {
   if (shuttingDown) return

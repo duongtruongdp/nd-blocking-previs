@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cameraViewEntityCollections, sceneScopeChanged, staleRuntimeEntityIds } from '../runtime/cameraViewReconciliation'
+import { cameraViewEntityCollections, cameraViewRenderableEntityIds, sceneScopeChanged, staleRuntimeEntityIds } from '../runtime/cameraViewReconciliation'
 
 describe('Camera View runtime reconciliation bookkeeping', () => {
   it('removes a deleted Prop from the authoritative scenic ID set', () => {
@@ -30,5 +30,13 @@ describe('Camera View runtime reconciliation bookkeeping', () => {
     expect(sceneScopeChanged(null, 'scene-01')).toBe(false)
     expect(sceneScopeChanged('scene-01', 'scene-01')).toBe(false)
     expect(sceneScopeChanged('scene-01', 'scene-02')).toBe(true)
+  })
+
+  it('defines Camera View existence from current evaluated semantic IDs, including camera deletion', () => {
+    const before = cameraViewRenderableEntityIds([{ id: 'actor-01' }], [{ id: 'prop-01' }], { id: 'camera-01' })
+    const after = cameraViewRenderableEntityIds([], [], null)
+    expect(staleRuntimeEntityIds(before.actorIds, after.actorIds)).toEqual(['actor-01'])
+    expect(staleRuntimeEntityIds(before.scenicIds, after.scenicIds)).toEqual(['prop-01'])
+    expect(after.cameraId).toBeNull()
   })
 })

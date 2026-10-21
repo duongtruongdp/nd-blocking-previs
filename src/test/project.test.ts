@@ -62,6 +62,17 @@ describe('V2.9 ProjectDocument and .ndblock persistence', () => {
     expect(original.actors[0].position[0]).toBe(1)
   })
 
+  it('duplicates persistent Groups and remaps their children and Group tracks', () => {
+    const original = populatedScene()
+    const group = { id: 'group-01', name: 'Group 01', position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number], pivot: [1, 0, 0] as [number, number, number], childIds: [original.actors[0].id] }
+    original.groups = [group]
+    original.timeline = upsertTimelineKeyframe(original.timeline, group.id, 'Group', 'position', 12, [1, 0, 0])
+    const duplicate = cloneSceneWithIdentity(original, 'scene-02', 'Scene 02 Copy', 'copy-02')
+    expect(duplicate.groups[0].id).toBe('group-01-copy-02')
+    expect(duplicate.groups[0].childIds).toEqual(['actor-01-copy-02'])
+    expect(duplicate.timeline.tracks.find((track) => track.entityType === 'Group')?.entityId).toBe('group-01-copy-02')
+  })
+
   it('round-trips an Actor pose preset through the portable Project format', () => {
     const scene = populatedScene()
     scene.actors[0].posePreset = 'reaching'

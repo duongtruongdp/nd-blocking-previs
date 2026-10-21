@@ -123,5 +123,6 @@ export function evaluateTimeline(document: SceneDocument, frame: number): Record
   document.openings.forEach((opening: OpeningDocument) => { evaluated[opening.id] = evaluateEntity(opening, document.timeline.tracks, frame, undefined, opening.openAngle) })
   document.lights.forEach((sun: SunDocument) => { evaluated[sun.id] = evaluateSun(sun, document.timeline.tracks, frame) })
   document.cameras.forEach((camera: CameraDocument) => { evaluated[camera.id] = evaluateEntity(camera, document.timeline.tracks, frame, camera.focalLengthMm) })
+  document.groups.forEach((group) => { evaluated[group.id] = evaluateEntity(group, document.timeline.tracks, frame) })
   return evaluated
 }

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
-import type { ActorDocument, ActorVector3, CameraDocument, OpeningDocument, PropDocument, SceneDocument, SunDocument, WallDocument } from '../core/sceneDocument'
+import * as THREE from 'three'
+import type { ActorDocument, ActorVector3, CameraDocument, OpeningDocument, PropDocument, SceneDocument, SceneGroup, SunDocument, WallDocument } from '../core/sceneDocument'
+import { evaluateGroupTransforms } from '../core/groupMath'
 import { cameraDisplayAspect, cameraProjectionForDocument, letterboxRect } from '../runtime/cameraMath'
 import { deliveryAspectValue, fitAspectInsideSource, insetFrameGuideRect } from '../runtime/frameGuideMath'
 import type { FrameGuide } from '../core/sceneDocument'
@@ -43,11 +45,13 @@ type V2StageProps = {
   openings: readonly OpeningDocument[]
   lights: readonly SunDocument[]
   cameras: readonly CameraDocument[]
+  groups: readonly SceneGroup[]
   activeCameraId: string | null
   selectedEntityId: string | null
   selectedEntityIds: readonly string[]
   tool: StageTool
   onSelectionChange: (selection: StageSelection) => void
+  onMarqueeChange?: (rect: { left: number; top: number; width: number; height: number; additive: boolean } | null) => void
   onBeginEntityRename: (entityId: string) => void
   onToolChange: (tool: StageTool) => void
   onTransformStart: (change: StageTransform) => void
@@ -156,7 +160,7 @@ function syncCameras(engine: StageEngine, sceneId: string, cameras: readonly Cam
   })
 }
 
-function syncScenic(engine: StageEngine, sceneId: string, definitions: readonly ScenicDefinition[], runtimes: Map<string, ScenicVisual>, selectedEntityIds: readonly string[]): void {
+function syncScenic(engine: StageEngine, sceneId: string, definitions: readonly ScenicDefinition[], runtimes: Map<string, ScenicVisual>): void {
   const ids = new Set(definitions.map((definition) => definition.id))
   Array.from(runtimes.entries()).forEach(([id]) => {
     if (!ids.has(id)) {
@@ -183,20 +187,55 @@ function syncScenic(engine: StageEngine, sceneId: string, definitions: readonly 
     const scalable = definition.type === 'Prop' && ['cube', 'sphere', 'cylinder'].includes(definition.propType ?? definition.shape)
     engine.addEntity({ id: definition.id, sceneId, type: definition.type, name: definition.name, root: visual.root, setSelected: visual.setSelected, setSnapPreview: visual.setSnapPreview, dispose: visual.dispose, transformable: true, groupTransformable: definition.type !== 'Opening' || !definition.wallId, scalable })
   })
-  engine.setSelected(selectedEntityIds)
+}
+
+function syncGroupEntities(engine: StageEngine, sceneId: string, groups: readonly SceneGroup[], roots: Map<string, THREE.Group>): void {
+  const ids = new Set(groups.map((group) => group.id))
+  Array.from(roots.keys()).forEach((groupId) => {
+    if (!ids.has(groupId)) {
+      engine.removeEntity(groupId)
+      roots.delete(groupId)
+    }
+  })
+  groups.forEach((group) => {
+    let root = roots.get(group.id)
+    if (!root) {
+      root = new THREE.Group()
+      root.visible = false
+      root.userData.stageGroup = true
+      roots.set(group.id, root)
+      engine.addEntity({
+        id: group.id,
+        sceneId,
+        type: 'Prop',
+        name: group.name,
+        root,
+        getTransformPivot: () => new THREE.Vector3(...group.pivot).add(root!.position),
+        getTransformSnapshot: () => ({ position: [root!.position.x, root!.position.y, root!.position.z], rotation: [root!.rotation.x, root!.rotation.y, root!.rotation.z] }),
+        applyTransform: (transform) => { root!.position.set(...transform.position); root!.rotation.set(...transform.rotation) },
+        transformable: true,
+        groupTransformable: true,
+      })
+    }
+    root.position.set(...group.position)
+    root.rotation.set(...group.rotation)
+  })
 }
 
 function deliveryAspect(camera: CameraDocument): number {
   return deliveryAspectValue(camera.deliveryAspectRatio, cameraDisplayAspect(camera))
 }
 
-export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, walls, openings, lights, cameras, activeCameraId, selectedEntityId, selectedEntityIds, tool, onSelectionChange, onBeginEntityRename, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onTransformBatchStart, onTransformBatchEnd, onTransformBatchPreview, canTransformEntity, canTransformGroup, onTransformPermissionRequest, onCaptureFrameReady, cameraPreview, onCameraPreviewChange, onOpenCameraView, wallDrawing, wallDrawState, onWallDrawCommit, onWallDrawState, onWallDrawExit, snapPreviewWallId, evaluatedEntities, sceneRevision, isPlaying, transformingEntityId, suspendedTimelineEntityIds, suspendedTimelineProperties, runtimeSceneRef, timeline, isScrubbing, lastTransformDebug, selectedFrameGuideId, selectedTimelineKeyframes, cameraPathVisible, onCameraPathKeyframeSelect, selectedCameraPathSegment, onCameraPathSegmentSelect, onCameraPathPointMoveStart, onCameraPathPointMovePreview, onCameraPathPointMoveEnd, thumbnailCaptureRef, phoneCameraLiveApplyRef, phoneCameraLive, shortcutBindings, masterPreview, readOnly = false, livePointer = null, livePointerActive = false, onLivePointerMove }: V2StageProps) {
+export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, walls, openings, lights, cameras, groups, activeCameraId, selectedEntityId, selectedEntityIds, tool, onSelectionChange, onMarqueeChange, onBeginEntityRename, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onTransformBatchStart, onTransformBatchEnd, onTransformBatchPreview, canTransformEntity, canTransformGroup, onTransformPermissionRequest, onCaptureFrameReady, cameraPreview, onCameraPreviewChange, onOpenCameraView, wallDrawing, wallDrawState, onWallDrawCommit, onWallDrawState, onWallDrawExit, snapPreviewWallId, evaluatedEntities, sceneRevision, isPlaying, transformingEntityId, suspendedTimelineEntityIds, suspendedTimelineProperties, runtimeSceneRef, timeline, isScrubbing, lastTransformDebug, selectedFrameGuideId, selectedTimelineKeyframes, cameraPathVisible, onCameraPathKeyframeSelect, selectedCameraPathSegment, onCameraPathSegmentSelect, onCameraPathPointMoveStart, onCameraPathPointMovePreview, onCameraPathPointMoveEnd, thumbnailCaptureRef, phoneCameraLiveApplyRef, phoneCameraLive, shortcutBindings, masterPreview, readOnly = false, livePointer = null, livePointerActive = false, onLivePointerMove }: V2StageProps) {
   const stageRef = useRef<HTMLDivElement>(null)
   const engineRef = useRef<StageEngine | null>(null)
   const cameraViewRef = useRef<CameraViewRuntime | null>(null)
   const actorRuntimesRef = useRef(new Map<string, ActorRuntime>())
   const cameraRuntimesRef = useRef(new Map<string, ProceduralCameraRuntime>())
   const scenicRuntimesRef = useRef(new Map<string, ScenicVisual>())
+  const groupRootsRef = useRef(new Map<string, THREE.Group>())
+  const groupPreviewRef = useRef<{ groups: readonly SceneGroup[]; actors: readonly ActorDocument[]; props: readonly PropDocument[]; walls: readonly WallDocument[]; cameras: readonly CameraDocument[] }>({ groups: [], actors: [], props: [], walls: [], cameras: [] })
+  const applyGroupPreviewRef = useRef<(groupId: string) => void>(() => {})
   const baseCameraPosesRef = useRef(new Map<string, CameraPose>())
   const phoneLiveLayerRef = useRef<PhoneCameraLiveLayer | null>(null)
   const lastPhoneCameraIdRef = useRef<string | null>(null)
@@ -218,7 +257,7 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
   const timelineRef = useRef(timeline)
   const isPlayingRef = useRef(isPlaying)
   const wallDrawingRef = useRef<WallDrawingController | null>(null)
-  const initialStageRef = useRef({ activeSceneId, sceneScopeId, actors, props, walls, openings, lights, cameras, selectedEntityId, selectedEntityIds, tool })
+  const initialStageRef = useRef({ activeSceneId, sceneScopeId, actors, props, walls, openings, lights, cameras, groups, selectedEntityId, selectedEntityIds, tool })
   const stageSceneScopeRef = useRef(sceneScopeId)
   const initialShortcutBindingsRef = useRef(shortcutBindings)
   const initialToolRef = useRef(tool)
@@ -227,6 +266,7 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
   const [includeCaptureGuides, setIncludeCaptureGuides] = useState(false)
   const [captureError, setCaptureError] = useState<string | null>(null)
   const [graphicsContextMessage, setGraphicsContextMessage] = useState<string | null>(null)
+  const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number; additive: boolean } | null>(null)
   const [stageContextMenu, setStageContextMenu] = useState<{ entityId: string; x: number; y: number } | null>(null)
   const [stageViewSelection, setStageViewSelection] = useState<StageViewSelection>('perspective')
   const [stageViewOrientation, setStageViewOrientation] = useState<StageViewOrientation>([0, 0, 0, 1])
@@ -249,11 +289,12 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
   const masterPreviewData = useMemo(() => {
     const scene = masterPreview?.scene ?? null
     const evaluation = masterPreview?.evaluatedEntities ?? (scene && masterPreview?.sourceFrame !== null && masterPreview?.sourceFrame !== undefined ? evaluateTimeline(scene, masterPreview.sourceFrame) : null)
-    const previewCameras = scene && evaluation ? scene.cameras.map((camera) => cameraDocumentWithTimelineEvaluation(camera, evaluation[camera.id])) : []
+    const evaluatedGroups = scene && evaluation ? scene.groups.map((group) => evaluation[group.id] ? { ...group, position: [...evaluation[group.id].position] as ActorVector3, rotation: [...evaluation[group.id].rotation] as ActorVector3 } : group) : []
+    const previewCameras = scene && evaluation ? evaluateGroupTransforms(scene.cameras.map((camera) => cameraDocumentWithTimelineEvaluation(camera, evaluation[camera.id])), evaluatedGroups) : []
     return {
-      actors: scene && evaluation ? scene.actors.map((actor) => ({ ...actor, ...(evaluation[actor.id] ?? {}) })) : [],
-      props: scene && evaluation ? scene.props.map((prop) => ({ ...prop, ...(evaluation[prop.id] ?? {}) })) : [],
-      walls: scene && evaluation ? scene.walls.map((wall) => ({ ...wall, ...(evaluation[wall.id] ?? {}) })) : [],
+      actors: scene && evaluation ? evaluateGroupTransforms(scene.actors.map((actor) => ({ ...actor, ...(evaluation[actor.id] ?? {}) })), evaluatedGroups) : [],
+      props: scene && evaluation ? evaluateGroupTransforms(scene.props.map((prop) => ({ ...prop, ...(evaluation[prop.id] ?? {}) })), evaluatedGroups) : [],
+      walls: scene && evaluation ? evaluateGroupTransforms(scene.walls.map((wall) => ({ ...wall, ...(evaluation[wall.id] ?? {}) })), evaluatedGroups) : [],
       openings: scene && evaluation ? scene.openings.map((opening) => ({ ...opening, ...(evaluation[opening.id] ?? {}), openAngle: evaluation[opening.id]?.openAngle ?? opening.openAngle })) : [],
       lights: scene && evaluation ? scene.lights.map((light) => ({ ...light, ...(evaluation[light.id] ?? {}), azimuth: evaluation[light.id]?.azimuth ?? light.azimuth, elevation: evaluation[light.id]?.elevation ?? light.elevation, intensity: evaluation[light.id]?.intensity ?? light.intensity, color: evaluation[light.id]?.color ?? light.color })) : [],
       camera: masterPreview?.cameraId ? previewCameras.find((camera) => camera.id === masterPreview.cameraId) ?? null : null,
@@ -309,13 +350,23 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
       if (!fallback || !runtime) return
       const runtimeScene = runtimeSceneRef.current
       const runtimeCamera = runtimeScene.cameras.find((camera) => camera.id === cameraId)
-      const runtimeEvaluated = runtimeCamera ? evaluateTimeline(runtimeScene, runtimeScene.timeline.currentFrame)[cameraId] : undefined
+      const runtimeEvaluation = runtimeCamera ? evaluateTimeline(runtimeScene, runtimeScene.timeline.currentFrame) : null
+      const runtimeEvaluated = runtimeEvaluation?.[cameraId]
       const suspended = suspendedTimelinePropertiesRef.current[cameraId]
       const canApplyPosition = !(suspended?.has('position') ?? false)
       const canApplyRotation = !(suspended?.has('rotation') ?? false)
       const base: CameraPose = {
         position: canApplyPosition && runtimeEvaluated && timelinePropertyIsAuthored(runtimeEvaluated, 'position') ? [...runtimeEvaluated.position] : [...fallback.position],
         rotation: canApplyRotation && runtimeEvaluated && timelinePropertyIsAuthored(runtimeEvaluated, 'rotation') ? [...runtimeEvaluated.rotation] : [...fallback.rotation],
+      }
+      const evaluatedGroups = runtimeScene.groups.map((group) => {
+        const evaluatedGroup = runtimeEvaluation?.[group.id]
+        return evaluatedGroup ? { ...group, position: [...evaluatedGroup.position] as ActorVector3, rotation: [...evaluatedGroup.rotation] as ActorVector3 } : group
+      })
+      const groupedCamera = runtimeCamera ? evaluateGroupTransforms([{ ...runtimeCamera, position: [...base.position], rotation: [...base.rotation] }], evaluatedGroups)[0] : null
+      if (groupedCamera) {
+        base.position = [...groupedCamera.position]
+        base.rotation = [...groupedCamera.rotation]
       }
       const layer = phoneLiveLayerRef.current?.cameraId === cameraId ? phoneLiveLayerRef.current : null
       const baseSignature = `${base.position.join(',')}|${base.rotation.join(',')}`
@@ -443,8 +494,9 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
     const engine = new StageEngine(stageElement, {
       onToolChanged: (nextTool) => callbacksRef.current.onToolChange(phoneCameraLiveRef.current && (nextTool === 'move' || nextTool === 'rotate') ? 'select' : nextTool),
       onTransformStart: (change) => callbacksRef.current.onTransformStart(change),
-      onTransformEnd: (change) => callbacksRef.current.onTransformEnd(change),
+      onTransformEnd: (change) => { applyGroupPreviewRef.current(change.entityId); callbacksRef.current.onTransformEnd(change) },
       onTransformPreview: (change) => {
+        applyGroupPreviewRef.current(change.entityId)
         cameraViewRef.current?.previewTransform(change)
         callbacksRef.current.onTransformPreview(change)
       },
@@ -462,6 +514,11 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
       onContextMenu: (entityId, point) => setStageContextMenu(entityId ? { entityId, x: point.clientX, y: point.clientY } : null),
       onViewChanged: setStageViewSelection,
       onViewOrientationChanged: setStageViewOrientation,
+      onMarqueeChange: (rect) => {
+        const bounds = stageElement.getBoundingClientRect()
+        setMarqueeRect(rect ? { ...rect, left: rect.left - bounds.left, top: rect.top - bounds.top } : null)
+        onMarqueeChange?.(rect)
+      },
       onCameraPathKeyframeSelect: (keyframe) => callbacksRef.current.onCameraPathKeyframeSelect(keyframe),
       onCameraPathSegmentSelect: (segment) => callbacksRef.current.onCameraPathSegmentSelect(segment),
       onCameraPathPointMoveStart: (keyframe, position) => callbacksRef.current.onCameraPathPointMoveStart(keyframe, position),
@@ -493,7 +550,8 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
     syncActors(engine, initial.activeSceneId, initial.actors, actorRuntimes)
     syncCameras(engine, initial.activeSceneId, initial.cameras, cameraRuntimes)
     engine.setProps([])
-    syncScenic(engine, initial.activeSceneId, [...initial.props, ...initial.walls, ...initial.openings.map((opening) => resolveOpeningAgainstWalls(opening, initial.walls)), ...initial.lights], scenicRuntimes, initial.selectedEntityIds)
+    syncScenic(engine, initial.activeSceneId, [...initial.props, ...initial.walls, ...initial.openings.map((opening) => resolveOpeningAgainstWalls(opening, initial.walls)), ...initial.lights], scenicRuntimes)
+    syncGroupEntities(engine, initial.activeSceneId, initial.groups, groupRootsRef.current)
     engine.setTool(initialToolRef.current)
     engine.setSelected(initial.selectedEntityIds)
     engineRef.current = engine
@@ -526,6 +584,9 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
       actorRuntimes.clear()
       cameraRuntimes.clear()
       scenicRuntimes.clear()
+      groupRootsRef.current.clear()
+      groupPreviewRef.current = { groups: [], actors: [], props: [], walls: [], cameras: [] }
+      applyGroupPreviewRef.current = () => {}
     }
   }, [phoneCameraLiveApplyRef, thumbnailCaptureRef])
 
@@ -726,6 +787,7 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
     const evaluatedOpenings = openings.map((opening) => shouldApplyTimelineEvaluation(opening.id, transformingEntityId, suspendedTimelineEntityIds) && evaluatedEntities[opening.id] ? { ...opening, ...evaluatedEntities[opening.id], openAngle: evaluatedEntities[opening.id].openAngle ?? opening.openAngle } : opening)
     const resolvedOpenings = evaluatedOpenings.map((opening) => resolveOpeningAgainstWalls(opening, evaluatedWalls))
     const evaluatedLights = lights.map((light) => shouldApplyTimelineEvaluation(light.id, transformingEntityId, suspendedTimelineEntityIds) && evaluatedEntities[light.id] ? { ...light, ...evaluatedEntities[light.id], azimuth: evaluatedEntities[light.id].azimuth ?? light.azimuth, elevation: evaluatedEntities[light.id].elevation ?? light.elevation, intensity: evaluatedEntities[light.id].intensity ?? light.intensity, color: evaluatedEntities[light.id].color ?? light.color } : light)
+    const evaluatedGroups = groups.map((group) => shouldApplyTimelineEvaluation(group.id, transformingEntityId, suspendedTimelineEntityIds) && evaluatedEntities[group.id] ? { ...group, position: [...evaluatedEntities[group.id].position] as ActorVector3, rotation: [...evaluatedEntities[group.id].rotation] as ActorVector3 } : group)
     const evaluatedCameras = cameras.map((camera) => {
       if (!shouldApplyTimelineEvaluation(camera.id, transformingEntityId, suspendedTimelineEntityIds)) return camera
       const evaluated = evaluatedEntities[camera.id]
@@ -739,12 +801,39 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
         ...(!canApplyRotation || !timelinePropertyIsAuthored(evaluated, 'rotation') ? { rotation: [...basePose.rotation] as ActorVector3 } : {}),
       } : evaluatedCamera
     })
-    const activeCamera = evaluatedCameras.find((camera) => camera.id === activeCameraId) ?? null
-    if (engineRef.current) syncScenic(engineRef.current, activeSceneId, [...evaluatedProps, ...evaluatedWalls, ...resolvedOpenings, ...evaluatedLights], scenicRuntimesRef.current, selectedEntityIds)
+    const groupedActors = evaluateGroupTransforms(evaluatedActors, evaluatedGroups)
+    const groupedProps = evaluateGroupTransforms(evaluatedProps, evaluatedGroups)
+    const groupedWalls = evaluateGroupTransforms(evaluatedWalls, evaluatedGroups)
+    const groupedCameras = evaluateGroupTransforms(evaluatedCameras, evaluatedGroups)
+    const activeCamera = groupedCameras.find((camera) => camera.id === activeCameraId) ?? null
+    groupPreviewRef.current = { groups: evaluatedGroups, actors: evaluatedActors, props: evaluatedProps, walls: evaluatedWalls, cameras: evaluatedCameras }
+    applyGroupPreviewRef.current = (groupId) => {
+      const groupRoot = groupRootsRef.current.get(groupId)
+      const group = groupPreviewRef.current.groups.find((candidate) => candidate.id === groupId)
+      if (!groupRoot || !group) return
+      const previewGroup = { ...group, position: [groupRoot.position.x, groupRoot.position.y, groupRoot.position.z] as ActorVector3, rotation: [groupRoot.rotation.x, groupRoot.rotation.y, groupRoot.rotation.z] as ActorVector3 }
+      const childIds = new Set(group.childIds)
+      const children = [
+        ...groupPreviewRef.current.actors,
+        ...groupPreviewRef.current.props,
+        ...groupPreviewRef.current.walls,
+        ...groupPreviewRef.current.cameras,
+      ].filter((entity) => childIds.has(entity.id))
+      children.forEach((child) => {
+        const transformed = evaluateGroupTransforms([child], [previewGroup])[0]
+        engineRef.current?.setEntityTransform(child.id, { position: transformed.position, rotation: transformed.rotation, ...('scale' in transformed && transformed.scale ? { scale: transformed.scale } : {}) })
+      })
+    }
+    if (engineRef.current) {
+      syncCameras(engineRef.current, activeSceneId, groupedCameras, cameraRuntimesRef.current)
+      syncScenic(engineRef.current, activeSceneId, [...groupedProps, ...groupedWalls, ...resolvedOpenings, ...evaluatedLights], scenicRuntimesRef.current)
+      syncGroupEntities(engineRef.current, activeSceneId, evaluatedGroups, groupRootsRef.current)
+      engineRef.current.setSelected(selectedEntityIds)
+    }
     const masterMode = masterPreview !== null
-    const previewActors = masterMode ? masterPreviewActors : evaluatedActors
-    const previewProps = masterMode ? masterPreviewProps : evaluatedProps
-    const previewWalls = masterMode ? masterPreviewWalls : evaluatedWalls
+    const previewActors = masterMode ? masterPreviewActors : groupedActors
+    const previewProps = masterMode ? masterPreviewProps : groupedProps
+    const previewWalls = masterMode ? masterPreviewWalls : groupedWalls
     const previewOpenings = masterMode ? masterPreviewOpenings : evaluatedOpenings
     const previewLights = masterMode ? masterPreviewLights : evaluatedLights
     const previewCamera = masterMode ? masterPreviewCamera : activeCamera
@@ -757,12 +846,14 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
       openings: previewOpenings,
       lights: previewLights,
       camera: previewCamera,
-      render: false,
+      // Render from the reconciled semantic set immediately so a deleted
+      // entity cannot remain as stale pixels in Camera Preview.
+      render: true,
     })
     cameraViewRef.current?.setPreviewAspect(previewCamera ? deliveryAspect(previewCamera) : 16 / 9)
     cameraViewRef.current?.setDisplayMode(view === 'camera' && previewCamera ? 'full' : cameraPreview && previewCamera ? 'preview' : 'hidden')
     if (!masterMode) scheduleCameraComposition(activeCamera ? [activeCamera.id] : [])
-  }, [view, cameraPreview, activeSceneId, sceneScopeId, actors, props, walls, openings, lights, cameras, activeCameraId, selectedEntityIds, evaluatedEntities, suspendedTimelineEntityIds, suspendedTimelineProperties, transformingEntityId, sceneRevision, masterPreview, masterPreviewActors, masterPreviewProps, masterPreviewWalls, masterPreviewOpenings, masterPreviewLights, masterPreviewCamera])
+  }, [view, cameraPreview, activeSceneId, sceneScopeId, actors, props, walls, openings, lights, cameras, groups, activeCameraId, selectedEntityIds, evaluatedEntities, suspendedTimelineEntityIds, suspendedTimelineProperties, transformingEntityId, sceneRevision, masterPreview, masterPreviewActors, masterPreviewProps, masterPreviewWalls, masterPreviewOpenings, masterPreviewLights, masterPreviewCamera])
 
   const activeCameraBase = cameras.find((camera) => camera.id === activeCameraId) ?? null
   const activeCamera = activeCameraBase && shouldApplyTimelineEvaluation(activeCameraBase.id, transformingEntityId, suspendedTimelineEntityIds) && evaluatedEntities[activeCameraBase.id]
@@ -829,6 +920,7 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
   return (
     <section className="v2-stage-panel" aria-label="Stage">
       <div className={`v2-stage-viewport v2-view-${view}`} ref={stageRef} onPointerMove={(event) => emitLivePointer(event, true)} onPointerLeave={(event) => emitLivePointer(event, false)}>
+        {marqueeRect ? <div className={`v2-stage-marquee${marqueeRect.additive ? ' is-additive' : ''}`} style={{ left: `${marqueeRect.left}px`, top: `${marqueeRect.top}px`, width: `${marqueeRect.width}px`, height: `${marqueeRect.height}px` }} aria-hidden="true" /> : null}
         {graphicsContextMessage ? <div className="v2-runtime-notice" role="alert"><strong>Graphics unavailable</strong><span>{graphicsContextMessage}</span><button className="v2-button v2-button-primary" onClick={() => window.location.reload()} type="button">Reload App</button></div> : null}
         {view === 'blocking' ? <div className="v2-stage-header">
           <button className={`v2-camera-preview-toggle${cameraPreview ? ' is-active' : ''}`} onClick={() => onCameraPreviewChange(!cameraPreview)} type="button">{cameraPreview ? 'Hide Camera Preview' : 'Camera Preview'}</button>

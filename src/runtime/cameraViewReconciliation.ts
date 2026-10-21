@@ -11,6 +11,12 @@ export type CameraViewEntityCollections = {
   scenicIds: Iterable<string>
 }
 
+export type CameraViewRenderableEntityIds = {
+  actorIds: string[]
+  scenicIds: string[]
+  cameraId: string | null
+}
+
 /** Scene IDs are the runtime ownership boundary; entity IDs are scene-local. */
 export function sceneScopeChanged(previousSceneId: string | null, nextSceneId: string): boolean {
   return previousSceneId !== null && previousSceneId !== nextSceneId
@@ -28,5 +34,21 @@ export function cameraViewEntityCollections(
   return {
     actorIds: actors.map((actor) => actor.id),
     scenicIds: scenic.map((definition) => definition.id),
+  }
+}
+
+/**
+ * Defines the complete semantic-ID boundary for the isolated Camera View.
+ * Cached Three.js objects must be reconciled against these current IDs.
+ */
+export function cameraViewRenderableEntityIds(
+  actors: readonly { id: string }[],
+  scenic: readonly { id: string }[],
+  camera: { id: string } | null,
+): CameraViewRenderableEntityIds {
+  return {
+    actorIds: actors.map((actor) => actor.id),
+    scenicIds: scenic.map((definition) => definition.id),
+    cameraId: camera?.id ?? null,
   }
 }

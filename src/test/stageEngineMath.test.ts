@@ -19,15 +19,15 @@ describe('StageEngine math boundary', () => {
     expect(stageLocalAxis(rotation, 'z').y).toBeCloseTo(-1)
   })
 
-  it('keeps Camera Rotate world-aligned while preserving local Move policy', () => {
+  it('uses the camera local basis for single-camera Move and Rotate', () => {
     const yawed: [number, number, number] = [0, Math.PI / 4, 0]
     expect(stageTransformSpace('camera', 'move', 1)).toBe('local')
-    expect(stageTransformSpace('camera', 'rotate', 1)).toBe('world')
+    expect(stageTransformSpace('camera', 'rotate', 1)).toBe('local')
     expect(stageTransformSpace('default', 'rotate', 1)).toBe('local')
     expect(stageTransformSpace('camera', 'rotate', 2)).toBe('world')
-    expect(stageTransformAxis('camera', 'rotate', yawed, 'x', 1).toArray()).toEqual([1, 0, 0])
+    expect(stageTransformAxis('camera', 'rotate', yawed, 'x', 1).z).toBeCloseTo(-Math.SQRT1_2)
     expect(stageTransformAxis('camera', 'rotate', yawed, 'y', 1).toArray()).toEqual([0, 1, 0])
-    expect(stageTransformAxis('camera', 'rotate', yawed, 'z', 1).toArray()).toEqual([0, 0, 1])
+    expect(stageTransformAxis('camera', 'rotate', yawed, 'z', 1).x).toBeCloseTo(Math.SQRT1_2)
     expect(stageTransformAxis('camera', 'rotate', yawed, 'x', 2).angleTo(stageRotationAxis(yawed, 'x'))).toBeLessThan(1e-10)
     expect(stageTransformAxis('camera', 'move', yawed, 'x', 1).x).toBeCloseTo(Math.SQRT1_2)
     expect(stageWorldAxis('y').toArray()).toEqual([0, 1, 0])
@@ -42,6 +42,63 @@ describe('StageEngine math boundary', () => {
     const xAxis = stageWorldAxis('x')
     const worldX = stageApplyRotation(start, xAxis, Math.PI / 2, 'world')
     expect(stageApplyRotation(start, xAxis, Math.PI / 2, 'local').angleTo(worldX)).toBeGreaterThan(0.1)
+  })
+
+  it('applies local X from identity around the expected axis', () => {
+    const start = new THREE.Quaternion()
+    const result = stageApplyRotation(start, stageWorldAxis('x'), THREE.MathUtils.degToRad(30), 'local')
+    const expected = new THREE.Quaternion().setFromAxisAngle(stageWorldAxis('x'), THREE.MathUtils.degToRad(30))
+    expect(result.angleTo(expected)).toBeLessThan(1e-10)
+  })
+
+  it('applies local X around a pre-yawed camera axis, not world X', () => {
+    const start = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI / 4, 0, 'XYZ'))
+    const localAxis = stageWorldAxis('x')
+    const delta = new THREE.Quaternion().setFromAxisAngle(localAxis, THREE.MathUtils.degToRad(30))
+    const result = stageApplyRotation(start, localAxis, THREE.MathUtils.degToRad(30), 'local')
+    const expected = start.clone().multiply(delta).normalize()
+    const worldResult = new THREE.Quaternion().setFromAxisAngle(stageWorldAxis('x'), THREE.MathUtils.degToRad(30)).multiply(start.clone()).normalize()
+    expect(result.angleTo(expected)).toBeLessThan(1e-10)
+    expect(result.angleTo(worldResult)).toBeGreaterThan(0.1)
+    const rotatedLocalX = stageLocalAxis([0, Math.PI / 4, 0], 'x')
+    expect(rotatedLocalX.angleTo(new THREE.Vector3(1, 0, 0))).toBeGreaterThan(0.1)
+  })
+
+  it('applies compound local Y and local Z deltas in the camera basis', () => {
+    const start = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.32, -0.48, 0.27, 'XYZ'))
+    const localY = stageWorldAxis('y')
+    const localZ = stageWorldAxis('z')
+    const yDelta = 0.41
+    const zDelta = -0.23
+    const yResult = stageApplyRotation(start, localY, yDelta, 'local')
+    const zResult = stageApplyRotation(start, localZ, zDelta, 'local')
+    expect(yResult.angleTo(start.clone().multiply(new THREE.Quaternion().setFromAxisAngle(localY, yDelta)).normalize())).toBeLessThan(1e-10)
+    expect(zResult.angleTo(start.clone().multiply(new THREE.Quaternion().setFromAxisAngle(localZ, zDelta)).normalize())).toBeLessThan(1e-10)
+  })
+
+  it('keeps a local roll rigid and preserves the transform position', () => {
+    const start = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.35, 0.6, -0.2, 'XYZ'))
+    const root = new THREE.Object3D()
+    root.position.set(2.4, 1.1, -3.2)
+    root.scale.set(1.3, 0.8, 2.1)
+    const position = root.position.clone()
+    const scale = root.scale.clone()
+    const result = stageApplyRotation(start, stageWorldAxis('z'), Math.PI / 6, 'local')
+    root.quaternion.copy(result)
+    expect(result.length()).toBeCloseTo(1)
+    expect(root.position.toArray()).toEqual(position.toArray())
+    expect(root.scale.toArray()).toEqual(scale.toArray())
+  })
+
+  it('evaluates the same drag delta non-cumulatively from the captured start', () => {
+    const start = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.2, 0.7, 0.18, 'XYZ'))
+    const axis = stageWorldAxis('y')
+    const delta = 0.63
+    const expected = stageApplyRotation(start, axis, delta, 'local')
+    const firstPointerMove = stageApplyRotation(start, axis, delta, 'local')
+    const repeatedEvaluation = stageApplyRotation(start, axis, delta, 'local')
+    expect(firstPointerMove.angleTo(expected)).toBeLessThan(1e-10)
+    expect(repeatedEvaluation.angleTo(expected)).toBeLessThan(1e-10)
   })
 
   it('maps pointer coordinates using the live canvas rectangle', () => {

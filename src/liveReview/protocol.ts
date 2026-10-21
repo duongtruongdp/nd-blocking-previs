@@ -21,7 +21,7 @@ export type LiveReviewParticipant = {
 
 export type LiveReviewCollaborativeEntityType = 'Actor' | 'Prop' | 'Camera'
 export type LiveReviewTransformMode = 'move' | 'rotate' | 'scale'
-export type LiveReviewLeaseTargetType = LiveReviewCollaborativeEntityType | 'Shot' | 'Timeline'
+export type LiveReviewLeaseTargetType = LiveReviewCollaborativeEntityType | 'Shot' | 'ShotOrder' | 'MasterClip' | 'MasterOrder' | 'Timeline'
 export type LiveReviewTimelineEntityType = LiveReviewCollaborativeEntityType
 export type LiveReviewTimelineProperty = 'position' | 'rotation' | 'scale'
 export type LiveReviewTimelineOperation = 'add' | 'move' | 'delete' | 'update'
@@ -70,6 +70,27 @@ export type LiveReviewShotPatch = {
   value: string | null
   baseProjectRevision: number
 }
+
+export type LiveReviewShotUpdateField = LiveReviewShotField | 'startFrame' | 'endFrame' | 'cameraId'
+export type LiveReviewShotUpdatePatch = Partial<Record<LiveReviewShotUpdateField, string | number | null>>
+export type LiveReviewPlanningCommit =
+  | { operation: 'shot_create'; operationId: string; leaseId: string; sceneId: string; cameraId: string; baseProjectRevision: number }
+  | { operation: 'shot_update'; operationId: string; leaseId: string; shotId: string; patch: LiveReviewShotUpdatePatch; baseProjectRevision: number }
+  | { operation: 'shot_reorder'; operationId: string; leaseId: string; shotId: string; targetIndex: number; baseProjectRevision: number }
+  | { operation: 'master_clip_add'; operationId: string; leaseId: string; shotId: string; targetIndex: number; baseProjectRevision: number }
+  | { operation: 'master_clip_update'; operationId: string; leaseId: string; clipId: string; sourceStartFrame: number; sourceEndFrame: number; baseProjectRevision: number }
+  | { operation: 'master_clip_duplicate'; operationId: string; leaseId: string; clipId: string; baseProjectRevision: number }
+  | { operation: 'master_clip_remove'; operationId: string; leaseId: string; clipId: string; baseProjectRevision: number }
+  | { operation: 'master_reorder'; operationId: string; leaseId: string; clipId: string; targetIndex: number; baseProjectRevision: number }
+export type LiveReviewPlanningDraft =
+  | Omit<Extract<LiveReviewPlanningCommit, { operation: 'shot_create' }>, 'operationId' | 'leaseId' | 'baseProjectRevision'>
+  | Omit<Extract<LiveReviewPlanningCommit, { operation: 'shot_update' }>, 'operationId' | 'leaseId' | 'baseProjectRevision'>
+  | Omit<Extract<LiveReviewPlanningCommit, { operation: 'shot_reorder' }>, 'operationId' | 'leaseId' | 'baseProjectRevision'>
+  | Omit<Extract<LiveReviewPlanningCommit, { operation: 'master_clip_add' }>, 'operationId' | 'leaseId' | 'baseProjectRevision'>
+  | Omit<Extract<LiveReviewPlanningCommit, { operation: 'master_clip_update' }>, 'operationId' | 'leaseId' | 'baseProjectRevision'>
+  | Omit<Extract<LiveReviewPlanningCommit, { operation: 'master_clip_duplicate' }>, 'operationId' | 'leaseId' | 'baseProjectRevision'>
+  | Omit<Extract<LiveReviewPlanningCommit, { operation: 'master_clip_remove' }>, 'operationId' | 'leaseId' | 'baseProjectRevision'>
+  | Omit<Extract<LiveReviewPlanningCommit, { operation: 'master_reorder' }>, 'operationId' | 'leaseId' | 'baseProjectRevision'>
 
 export type LiveReviewTimelineCommit = {
   operationId: string
@@ -121,6 +142,7 @@ export type LiveReviewProject = {
   activeShotId: string | null
   scenes: Array<{ id: string; name: string; scene: { activeCameraId?: string | null; timeline?: { currentFrame?: number }; [key: string]: unknown } }>
   shots: unknown[]
+  masterSequence?: unknown
 }
 
 export type LiveReviewState = {
@@ -171,6 +193,7 @@ export type LiveReviewClientMessage =
   | { v: 2; type: 'editor_transform_preview'; preview: Omit<LiveReviewTransformPreview, 'participantId' | 'displayName'> }
   | { v: 2; type: 'editor_transform_commit'; commit: LiveReviewTransformCommit }
   | { v: 2; type: 'editor_shot_patch'; patch: LiveReviewShotPatch }
+  | { v: 2; type: 'editor_planning_commit'; commit: LiveReviewPlanningCommit }
   | { v: 2; type: 'editor_timeline_commit'; commit: LiveReviewTimelineCommit }
   | { v: 2; type: 'host_edit_result'; result: LiveReviewEditResult }
   | { v: 2; type: 'request_snapshot' }
@@ -187,6 +210,7 @@ export type LiveReviewServerMessage =
   | { v: 2; type: 'transform_preview'; preview: LiveReviewTransformPreview }
   | { v: 2; type: 'edit_transform_request'; commit: LiveReviewTransformCommit; participantId: string; displayName: string }
   | { v: 2; type: 'edit_shot_request'; patch: LiveReviewShotPatch; participantId: string; displayName: string }
+  | { v: 2; type: 'edit_planning_request'; commit: LiveReviewPlanningCommit; participantId: string; displayName: string }
   | { v: 2; type: 'edit_timeline_request'; commit: LiveReviewTimelineCommit; participantId: string; displayName: string }
   | { v: 2; type: 'edit_result'; result: LiveReviewEditResult }
   | { v: 2; type: 'presence_snapshot'; participants: LiveReviewParticipant[]; hostConnected: boolean }
@@ -292,6 +316,22 @@ export function isLiveReviewShotPatch(value: unknown): value is LiveReviewShotPa
   return isOneOf(value.field, ['name', 'notes', 'shotSize', 'angle', 'movement', 'equipment']) && (value.value === null || typeof value.value === 'string')
 }
 
+export function isLiveReviewPlanningCommit(value: unknown): value is LiveReviewPlanningCommit {
+  if (!isRecord(value) || !boundedId(value.operationId) || !boundedId(value.leaseId) || !integerAtLeastZero(value.baseProjectRevision) || typeof value.operation !== 'string') return false
+  if (value.operation === 'shot_create') return boundedId(value.sceneId) && boundedId(value.cameraId)
+  if (value.operation === 'shot_update') {
+    if (!boundedId(value.shotId) || !isRecord(value.patch) || Object.keys(value.patch).length === 0) return false
+    const fields = ['name', 'notes', 'shotSize', 'angle', 'movement', 'equipment', 'startFrame', 'endFrame', 'cameraId']
+    return Object.keys(value.patch).every((field) => fields.includes(field)) && Object.values(value.patch).every((entry) => entry === null || typeof entry === 'string' || (typeof entry === 'number' && Number.isFinite(entry)))
+  }
+  if (value.operation === 'shot_reorder') return boundedId(value.shotId) && integerAtLeastZero(value.targetIndex)
+  if (value.operation === 'master_clip_add') return boundedId(value.shotId) && integerAtLeastZero(value.targetIndex)
+  if (value.operation === 'master_clip_update') return boundedId(value.clipId) && integerAtLeastZero(value.sourceStartFrame) && integerAtLeastZero(value.sourceEndFrame) && value.sourceEndFrame > value.sourceStartFrame
+  if (value.operation === 'master_clip_duplicate' || value.operation === 'master_clip_remove') return boundedId(value.clipId)
+  if (value.operation === 'master_reorder') return boundedId(value.clipId) && integerAtLeastZero(value.targetIndex)
+  return false
+}
+
 export function isLiveReviewTimelineCommit(value: unknown): value is LiveReviewTimelineCommit {
   if (!isRecord(value) || !boundedId(value.operationId) || !boundedId(value.leaseId) || !boundedId(value.sceneId) || !boundedId(value.entityId) || !integerAtLeastZero(value.baseProjectRevision)) return false
   if (!isOneOf(value.entityType, ['Actor', 'Prop', 'Camera']) || !isOneOf(value.property, ['position', 'rotation', 'scale']) || !isOneOf(value.operation, ['add', 'move', 'delete', 'update'])) return false
@@ -306,7 +346,7 @@ export function isLiveReviewTimelineCommit(value: unknown): value is LiveReviewT
 }
 
 export function isLiveReviewLeaseTarget(value: unknown): value is { targetType: LiveReviewLeaseTargetType; targetId: string; targetLabel: string } {
-  return isRecord(value) && isOneOf(value.targetType, ['Actor', 'Prop', 'Camera', 'Shot', 'Timeline']) && typeof value.targetId === 'string' && typeof value.targetLabel === 'string' && value.targetId.length > 0 && value.targetId.length <= 256 && value.targetLabel.length <= 128
+  return isRecord(value) && isOneOf(value.targetType, ['Actor', 'Prop', 'Camera', 'Shot', 'ShotOrder', 'MasterClip', 'MasterOrder', 'Timeline']) && typeof value.targetId === 'string' && typeof value.targetLabel === 'string' && value.targetId.length > 0 && value.targetId.length <= 256 && value.targetLabel.length <= 128
 }
 
 export function isLiveReviewProject(value: unknown): value is LiveReviewProject {

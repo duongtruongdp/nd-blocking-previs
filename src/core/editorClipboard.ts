@@ -59,6 +59,7 @@ export function pasteEditorClipboard(document: SceneDocument, clipboard: EditorC
     actors: clipboard.entityType === 'Actor' ? [...document.actors, entity as ActorDocument] : document.actors,
     props: clipboard.entityType === 'Prop' ? [...document.props, entity as PropDocument] : document.props,
     openings: clipboard.entityType === 'Opening' ? [...document.openings, entity as OpeningDocument] : document.openings,
+    groups: document.groups,
   }
   return { document: nextDocument, entity }
 }

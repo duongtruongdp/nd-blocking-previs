@@ -1503,3 +1503,26 @@ Follow Host/Free Look buffering, a Host-only normalized presenter pointer, and
 bounded ephemeral room chat. These are protocol-level features shared by Web
 and Desktop clients; they do not add persistent project fields or an Editor
 role. See `docs/M5A2_LIVE_PRESENCE_REVIEW_TOOLS.md`.
+
+## M5C Scene integrity, object editing, and grouping
+
+M5C keeps the canonical SceneDocument → evaluated Timeline → runtime/preview
+flow intact while closing scene-editing gaps. Scene and object names remain
+stable, human-readable labels; duplication uses numbered names instead of
+`Copy` chains. Entity Inspector Position/Rotation fields edit the same
+document-facing transform path used by Stage tools, with Camera and ordinary
+scene entities sharing the same history and Timeline ownership rules.
+
+Camera View reconciliation is ID-based and removes stale runtime actor/scenic
+records before applying the current evaluated scene. Deleting a Camera leaves
+dependent Shot camera IDs intact so the Master resolver exposes an explicit
+Missing Camera state rather than losing the reference or showing a ghost.
+
+Groups are flat, serializable records with a stored world pivot, child IDs, and
+position/rotation deltas. Children keep canonical world transforms. Timeline
+evaluation resolves child values first and then composes group deltas around the
+pivot for Stage, Camera View, and Master Preview; ungrouping bakes the visible
+delta into children. Groups are intentionally lightweight and do not introduce
+IK, physics, or a second runtime scene graph. Ctrl/Cmd plus left-drag on empty
+Stage provides marquee selection while preserving the accepted plain left-drag
+orbit gesture.

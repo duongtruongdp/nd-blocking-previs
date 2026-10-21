@@ -3,10 +3,10 @@ import { createProjectDocument } from '../core/projectDocument'
 import { createEmptySceneDocument } from '../core/sceneDocument'
 import { parseProjectFile } from '../core/projectPersistence'
 import { createLiveReviewSnapshot } from '../liveReview/projectSnapshot'
-import { defaultLiveReviewState, isLiveReviewChatText, isLiveReviewCollaborativeTransform, isLiveReviewPointer, isLiveReviewProject, isLiveReviewShotPatch, isLiveReviewState, isLiveReviewTimelineCommit, LIVE_REVIEW_MAX_MESSAGE_BYTES, liveReviewMessageVersion, normalizeLiveReviewDisplayName, parseLiveReviewMessage, serializeLiveReviewMessage } from '../liveReview/protocol'
+import { defaultLiveReviewState, isLiveReviewChatText, isLiveReviewCollaborativeTransform, isLiveReviewPlanningCommit, isLiveReviewPointer, isLiveReviewProject, isLiveReviewShotPatch, isLiveReviewState, isLiveReviewTimelineCommit, LIVE_REVIEW_MAX_MESSAGE_BYTES, liveReviewMessageVersion, normalizeLiveReviewDisplayName, parseLiveReviewMessage, serializeLiveReviewMessage } from '../liveReview/protocol'
 import { acceptLiveReviewProject, addLiveReviewParticipant, appendLiveReviewChat, connectedLiveReviewParticipants, createLiveReviewRoom, isLiveReviewRoomExpired, publicLiveReviewParticipants, rememberLiveReviewOperation, setLiveReviewState } from '../../live-server/sessionStore'
 import { liveRelayConfig, originAllowed } from '../../live-server/config'
-import { buildLiveReviewInviteUrl, resolveLiveReviewRelayConfig } from '../liveReview/liveReviewConfig'
+import { buildLiveReviewInviteUrl, OFFICIAL_PRODUCTION_RELAY, parseLiveReviewInviteSession, PUBLIC_LIVE_REVIEW_INVITE_BASE, resolveLiveReviewInviteBaseUrl, resolveLiveReviewRelayConfig } from '../liveReview/liveReviewConfig'
 
 function project() {
   return createProjectDocument('project-live', 'Live Review', createEmptySceneDocument())
@@ -53,11 +53,15 @@ describe('Live Review foundation', () => {
     expect(isLiveReviewRoomExpired(room, room.expiresAt)).toBe(true)
   })
 
-  it('fails closed for an unconfigured production relay and accepts only secure configured production URLs', () => {
+  it('resolves development, official production, and explicit relay configurations safely', () => {
     expect(resolveLiveReviewRelayConfig({ mode: 'development' }).url).toBe('ws://localhost:8787/live')
-    expect(resolveLiveReviewRelayConfig({ mode: 'production' })).toMatchObject({ url: null, error: 'Live Review server is not configured.' })
+    expect(resolveLiveReviewRelayConfig({ mode: 'production' })).toMatchObject({ url: OFFICIAL_PRODUCTION_RELAY, configured: false, error: null })
     expect(resolveLiveReviewRelayConfig({ mode: 'production', configuredUrl: 'ws://relay.example/live' }).url).toBeNull()
     expect(resolveLiveReviewRelayConfig({ mode: 'production', configuredUrl: 'wss://relay.example/live' }).url).toBe('wss://relay.example/live')
+    expect(resolveLiveReviewRelayConfig({ mode: 'production', configuredUrl: 'wss://relay.example/not-live' }).error).toBe('Live Review server URL must use the /live path.')
+    expect(resolveLiveReviewRelayConfig({ mode: 'development', configuredUrl: 'ws://localhost:8787/live' }).url).toBe('ws://localhost:8787/live')
+    expect(resolveLiveReviewRelayConfig({ mode: 'production', configuredUrl: 'ws://localhost:8787/live' }).error).toBe('Production Live Review requires a wss:// relay.')
+    expect(resolveLiveReviewRelayConfig({ mode: 'production', configuredUrl: 'not a url' }).error).toBe('Live Review server configuration is invalid.')
   })
 
   it('keeps browser origin policy explicit and leaves the protocol path configurable', () => {
@@ -69,11 +73,42 @@ describe('Live Review foundation', () => {
     expect(config.maxMessageBytes).toBe(16 * 1024 * 1024)
   })
 
-  it('builds an app-origin invite without putting the Host token in the URL', () => {
-    const invite = buildLiveReviewInviteUrl('https://app.example.com/editor?tab=stage', 'session-123')
-    expect(invite).toBe('https://app.example.com/editor?tab=stage&live=session-123')
+  it('accepts the observed macOS Tauri origin only when explicitly allowlisted', () => {
+    const config = liveRelayConfig({ NODE_ENV: 'production', LIVE_ALLOWED_ORIGINS: 'https://blocking.duongtruongdp.net,tauri://localhost' })
+    expect(originAllowed('tauri://localhost', config)).toBe(true)
+    expect(originAllowed('tauri://other-app', config)).toBe(false)
+  })
+
+  it('parses comma-separated production origins with optional whitespace', () => {
+    const config = liveRelayConfig({ NODE_ENV: 'production', LIVE_ALLOWED_ORIGINS: 'https://blocking.duongtruongdp.net, tauri://localhost' })
+    expect(config.allowedOrigins).toEqual(['https://blocking.duongtruongdp.net', 'tauri://localhost'])
+    expect(originAllowed('https://blocking.duongtruongdp.net', config)).toBe(true)
+    expect(originAllowed('tauri://localhost', config)).toBe(true)
+    expect(originAllowed('tauri://other-app', config)).toBe(false)
+    expect(originAllowed('https://other.example.com', config)).toBe(false)
+  })
+
+  it('accepts hosting-provided PORT and HOST while retaining local defaults', () => {
+    expect(liveRelayConfig({}).port).toBe(8787)
+    expect(liveRelayConfig({ PORT: '49152', HOST: '0.0.0.0' })).toMatchObject({ port: 49152, host: '0.0.0.0' })
+    expect(liveRelayConfig({ PORT: 'not-a-port', HOST: '' })).toMatchObject({ port: 8787, host: '127.0.0.1' })
+  })
+
+  it('keeps relay selection independent from the shareable invite destination', () => {
+    expect(resolveLiveReviewInviteBaseUrl({ mode: 'production' })).toBe(PUBLIC_LIVE_REVIEW_INVITE_BASE)
+    expect(resolveLiveReviewInviteBaseUrl({ mode: 'development', pageOrigin: 'http://localhost:5174' })).toBe('http://localhost:5174/')
+    expect(resolveLiveReviewInviteBaseUrl({ mode: 'development', configuredUrl: 'https://blocking.duongtruongdp.net' })).toBe(PUBLIC_LIVE_REVIEW_INVITE_BASE + '/')
+    expect(resolveLiveReviewInviteBaseUrl({ mode: 'development', pageOrigin: 'tauri://localhost' })).toBe(PUBLIC_LIVE_REVIEW_INVITE_BASE)
+    expect(resolveLiveReviewInviteBaseUrl({ mode: 'production', configuredUrl: 'http://localhost:5174' })).toBe(PUBLIC_LIVE_REVIEW_INVITE_BASE)
+  })
+
+  it('builds the canonical public invite without putting the Host token in the URL', () => {
+    const invite = buildLiveReviewInviteUrl('session-123', PUBLIC_LIVE_REVIEW_INVITE_BASE)
+    expect(invite).toBe('https://blocking.duongtruongdp.net/?live=session-123')
     expect(invite).not.toContain('token')
     expect(invite).not.toContain('secret')
+    expect(parseLiveReviewInviteSession(invite)).toBe('session-123')
+    expect(parseLiveReviewInviteSession('https://blocking.duongtruongdp.net/')).toBeNull()
   })
 
   it('preserves the 16 MiB wire-size guard', () => {
@@ -111,6 +146,15 @@ describe('Live Review foundation', () => {
     expect(isLiveReviewTimelineCommit({ ...add, entityType: 'Camera', property: 'scale' })).toBe(false)
     expect(isLiveReviewTimelineCommit({ ...move, targetFrame: 48.5 })).toBe(false)
     expect(isLiveReviewTimelineCommit({ ...add, operation: 'delete', frame: undefined })).toBe(false)
+  })
+
+  it('validates typed collaborative Shot and Master planning intents', () => {
+    expect(isLiveReviewPlanningCommit({ operation: 'shot_create', operationId: 'op', leaseId: 'lease', sceneId: 'scene-01', cameraId: 'camera-01', baseProjectRevision: 2 })).toBe(true)
+    expect(isLiveReviewPlanningCommit({ operation: 'shot_update', operationId: 'op', leaseId: 'lease', shotId: 'shot-01', patch: { name: 'Wide', startFrame: 4 }, baseProjectRevision: 2 })).toBe(true)
+    expect(isLiveReviewPlanningCommit({ operation: 'shot_update', operationId: 'op-camera', leaseId: 'lease', shotId: 'shot-01', patch: { cameraId: 'camera-02' }, baseProjectRevision: 2 })).toBe(true)
+    expect(isLiveReviewPlanningCommit({ operation: 'shot_update', operationId: 'op', leaseId: 'lease', shotId: 'shot-01', patch: { thumbnail: 'raw-image' }, baseProjectRevision: 2 })).toBe(false)
+    expect(isLiveReviewPlanningCommit({ operation: 'master_clip_update', operationId: 'op', leaseId: 'lease', clipId: 'clip-01', sourceStartFrame: 10, sourceEndFrame: 20, baseProjectRevision: 2 })).toBe(true)
+    expect(isLiveReviewPlanningCommit({ operation: 'master_clip_update', operationId: 'op', leaseId: 'lease', clipId: 'clip-01', sourceStartFrame: 20, sourceEndFrame: 20, baseProjectRevision: 2 })).toBe(false)
   })
 
   it('keeps editor leases target-scoped and disposable with the session', () => {

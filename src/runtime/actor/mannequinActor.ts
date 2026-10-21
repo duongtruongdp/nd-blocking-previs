@@ -202,7 +202,10 @@ export class MannequinActorRuntime {
     const chest = this.createJoint('ChestJoint', torso, new THREE.Vector3(0, m.abdomenLength, 0))
     this.createMesh('ChestVisual', createTorsoGeometry(m), chest, new THREE.Vector3(), this.bodyMaterial)
     const neck = this.createJoint('NeckJoint', chest, new THREE.Vector3(0, m.chestLength, 0))
-    this.createMesh('NeckVisual', createFacetedSegmentGeometry(m.neckLength, m.neckWidth, m.neckDepth, m.neckWidth * 0.92, m.neckDepth * 0.92, 6), neck, new THREE.Vector3(), this.jointMaterial)
+    // The neck joint is the chest-side base; build the visible neck upward so
+    // its top meets the head joint instead of leaving the head above a
+    // downward-facing segment.
+    this.createMesh('NeckVisual', createFacetedUpwardSegmentGeometry(m.neckLength, m.neckWidth * 0.92, m.neckDepth * 0.92, m.neckWidth, m.neckDepth, 6), neck, new THREE.Vector3(), this.jointMaterial)
     const head = this.createJoint('HeadJoint', neck, new THREE.Vector3(0, m.neckLength, 0), 'head')
     this.createMesh('HeadVisual', createHeadGeometry(m.headHeight, m.headWidth, m.headDepth), head, new THREE.Vector3(), this.bodyMaterial)
     this.createArm('Left', -1, chest, m)

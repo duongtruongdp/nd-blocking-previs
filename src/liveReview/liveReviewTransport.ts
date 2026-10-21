@@ -2,6 +2,7 @@ import { LIVE_REVIEW_MAX_MESSAGE_BYTES, LIVE_REVIEW_PROTOCOL_VERSION, parseLiveR
 import { liveReviewRelayConfig, liveReviewRelayUrl } from './liveReviewConfig'
 
 export type LiveReviewTransportStatus = 'idle' | 'connecting' | 'live' | 'reconnecting' | 'disconnected' | 'ended' | 'error'
+type LiveReviewDiagnosticStage = 'idle' | 'websocket_connecting' | 'websocket_open' | 'create_session_sent' | 'join_session_sent' | 'session_received' | 'session_create_timeout' | 'websocket_connection_failed' | 'websocket_closed_before_session' | 'protocol_error'
 
 export type LiveReviewTransportCallbacks = {
   onStatus?: (status: LiveReviewTransportStatus, message?: string) => void
@@ -23,12 +24,21 @@ export class LiveReviewTransport {
   private intentionallyClosed = false
   private heartbeatTimer: number | null = null
   private configurationError: string | null
+  private diagnosticStage: LiveReviewDiagnosticStage = 'idle'
+  private diagnosticAttemptId: string | null = null
 
   constructor(relayUrl: string | null | undefined = undefined, callbacks: LiveReviewTransportCallbacks = {}) {
     const config = relayUrl === undefined ? liveReviewRelayConfig() : { url: relayUrl, error: null }
     this.relayUrl = config.url
     this.configurationError = config.error
     this.callbacks = callbacks
+    if (import.meta.env.DEV) {
+      console.info('[live-review] relay configuration', {
+        url: this.relayUrl,
+        pageOrigin: typeof window === 'undefined' ? null : window.location.origin,
+        configurationError: this.configurationError,
+      })
+    }
   }
 
   get sessionId(): string | null { return this.session }
@@ -38,7 +48,8 @@ export class LiveReviewTransport {
   get canConnect(): boolean { return this.relayUrl !== null && this.configurationError === null }
   get configError(): string | null { return this.configurationError }
 
-  async createSession(displayName = 'Host'): Promise<Extract<LiveReviewServerMessage, { type: 'session_created' }>> {
+  async createSession(displayName = 'Host', diagnosticAttemptId?: string): Promise<Extract<LiveReviewServerMessage, { type: 'session_created' }>> {
+    this.diagnosticAttemptId = diagnosticAttemptId ?? null
     this.displayName = displayName
     this.role = 'host'
     this.intentionallyClosed = false
@@ -52,7 +63,8 @@ export class LiveReviewTransport {
     return response
   }
 
-  async joinSession(session: string, displayName = 'Guest'): Promise<Extract<LiveReviewServerMessage, { type: 'session_snapshot' }>> {
+  async joinSession(session: string, displayName = 'Guest', diagnosticAttemptId?: string): Promise<Extract<LiveReviewServerMessage, { type: 'session_snapshot' }>> {
+    this.diagnosticAttemptId = diagnosticAttemptId ?? null
     this.displayName = displayName
     this.role = 'viewer'
     this.session = session
@@ -75,7 +87,8 @@ export class LiveReviewTransport {
     return true
   }
 
-  close(): void {
+  close(reason = 'intentional-close'): void {
+    if (import.meta.env.DEV && this.diagnosticAttemptId) this.logDiagnostic(`cleanup reason=${reason}`)
     this.intentionallyClosed = true
     if (this.reconnectTimer !== null) window.clearTimeout(this.reconnectTimer)
     this.reconnectTimer = null
@@ -93,29 +106,50 @@ export class LiveReviewTransport {
       return Promise.reject(new Error(message))
     }
     if (this.socket?.readyState === WebSocket.OPEN) return Promise.resolve()
+    this.diagnosticStage = 'websocket_connecting'
+    this.logDiagnostic(`connecting ${sanitizeRelayEndpoint(relayUrl)}`)
     this.callbacks.onStatus?.(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting')
     return new Promise((resolve, reject) => {
       let socket: WebSocket
-      try { socket = new WebSocket(relayUrl) } catch { reject(new Error('The Live Review relay URL is invalid.')); return }
+      try { socket = new WebSocket(relayUrl) } catch (error) {
+        if (import.meta.env.DEV) console.error('[live-review] WebSocket construction failed', { url: relayUrl, error })
+        reject(new Error('The Live Review relay URL is invalid.'))
+        return
+      }
       this.socket = socket
       socket.addEventListener('open', () => {
         this.reconnectAttempts = 0
         this.startHeartbeat()
+        this.diagnosticStage = 'websocket_open'
+        this.logDiagnostic('websocket open')
         this.callbacks.onStatus?.('live')
         resolve()
       }, { once: true })
       socket.addEventListener('message', (event) => {
         const message = parseLiveReviewMessage(typeof event.data === 'string' ? event.data : null)
+        if (message) {
+          this.diagnosticStage = message.type === 'session_created' || message.type === 'session_snapshot' ? 'session_received' : this.diagnosticStage
+          this.logDiagnostic(`message received type=${message.type}`)
+        } else {
+          this.diagnosticStage = 'protocol_error'
+          this.logDiagnostic('protocol error')
+        }
         if (message && isServerMessage(message)) {
           if (message.type === 'error') this.callbacks.onStatus?.('error', message.message)
           this.callbacks.onMessage?.(message)
         }
       })
-      socket.addEventListener('error', () => {
+      socket.addEventListener('error', (event) => {
+        this.diagnosticStage = this.diagnosticStage === 'websocket_open' ? 'protocol_error' : 'websocket_connection_failed'
+        if (import.meta.env.DEV) console.error('[live-review] WebSocket error before open', { url: relayUrl, origin: typeof window === 'undefined' ? null : window.location.origin, event })
+        this.logDiagnostic(`websocket error stage=${this.diagnosticStage}`)
         this.callbacks.onStatus?.('error', 'The Live Review relay connection failed.')
         reject(new Error('The Live Review relay connection failed.'))
       }, { once: true })
-      socket.addEventListener('close', () => {
+      socket.addEventListener('close', (event) => {
+        if (this.session === null && this.diagnosticStage !== 'session_received') this.diagnosticStage = 'websocket_closed_before_session'
+        this.logDiagnostic(`websocket close code=${event.code}`)
+        if (import.meta.env.DEV) console.info('[live-review] WebSocket closed', { url: relayUrl, code: event.code, reason: event.reason, wasClean: event.wasClean })
         this.stopHeartbeat()
         if (this.socket === socket) this.socket = null
         if (!this.intentionallyClosed && this.session && this.role) this.scheduleReconnect()
@@ -126,7 +160,12 @@ export class LiveReviewTransport {
 
   private request(type: 'create_session' | 'join_session', fields: { session?: string; token?: string; participantId?: string; participantToken?: string; displayName?: string } = {}): Promise<LiveReviewServerMessage> {
     return new Promise((resolve, reject) => {
-      const timeout = window.setTimeout(() => { this.callbacks.onMessage = previous; reject(new Error('The Live Review relay did not respond.')) }, 8000)
+      const timeout = window.setTimeout(() => {
+        this.diagnosticStage = 'session_create_timeout'
+        this.logDiagnostic(`session timeout stage=${this.diagnosticStage}`)
+        this.callbacks.onMessage = previous
+        reject(new Error('The Live Review relay did not respond.'))
+      }, 8000)
       const previous = this.callbacks.onMessage
       this.callbacks.onMessage = (message) => {
         if (message.type === 'session_created' || message.type === 'session_snapshot' || message.type === 'error') {
@@ -141,12 +180,18 @@ export class LiveReviewTransport {
         }
         previous?.(message)
       }
+      this.diagnosticStage = type === 'create_session' ? 'create_session_sent' : 'join_session_sent'
+      this.logDiagnostic(`${type.replace('_', '-')} sent`)
       if (!this.send({ type, ...fields } as Omit<LiveReviewClientMessage, 'v'>)) {
         window.clearTimeout(timeout)
         this.callbacks.onMessage = previous
         reject(new Error('The Live Review relay is not connected.'))
       }
     })
+  }
+
+  private logDiagnostic(message: string): void {
+    if (import.meta.env.DEV) console.info(`[live-review] ${this.diagnosticAttemptId ? `attempt ${this.diagnosticAttemptId} ` : ''}${message}`)
   }
 
   private scheduleReconnect(): void {
@@ -191,6 +236,15 @@ export class LiveReviewTransport {
   private stopHeartbeat(): void {
     if (this.heartbeatTimer !== null) window.clearInterval(this.heartbeatTimer)
     this.heartbeatTimer = null
+  }
+}
+
+function sanitizeRelayEndpoint(value: string): string {
+  try {
+    const url = new URL(value)
+    return `${url.protocol}//${url.host}${url.pathname}`
+  } catch {
+    return '<invalid-relay>'
   }
 }
 

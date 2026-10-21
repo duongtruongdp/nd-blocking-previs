@@ -4,6 +4,7 @@ import type { MasterSequenceDocument } from '../core/masterSequence'
 import { masterClipDurationFrames, musicClipDurationSeconds } from '../core/masterSequence'
 import type { ShotDocument } from '../core/shotDocument'
 import { frameToTimecode, timecodeToFrame } from '../timeline/timelineMath'
+import { resolveShotCamera } from '../core/shotCameraResolver'
 
 export type MasterInspectorSelection = { kind: 'clip' | 'music'; id: string } | null
 
@@ -28,7 +29,7 @@ export function V2MasterInspector({ sequence, shots, scenes, selection, rate, on
   if (!clip) return <aside className="v2-panel v2-details-panel v2-master-inspector" aria-label="Master Inspector"><div className="v2-master-inspector-empty"><strong>Missing Master Clip.</strong></div></aside>
   const shot = shots.find((candidate) => candidate.id === clip.shotId) ?? null
   const scene = shot ? scenes.find((entry) => entry.id === shot.sceneId) ?? null : null
-  const camera = shot && scene ? scene.scene.cameras.find((candidate) => candidate.id === shot.cameraId) : null
+  const camera = shot ? resolveShotCamera({ scenes }, shot).camera : null
   return <aside className="v2-panel v2-details-panel v2-master-inspector" aria-label="Master Clip Inspector">
     <div className="v2-panel-heading"><div><span className="v2-eyebrow">Master Clip</span><h2>{shot?.name ?? 'Missing Shot'}</h2></div></div>
     <div className="v2-master-inspector-fields"><InspectorValue label="Shot" value={shot?.name ?? 'Missing Shot'} /><InspectorValue label="Scene" value={scene?.name ?? 'Missing Scene'} /><InspectorValue label="Camera" value={camera?.name ?? 'Missing Camera'} /><InspectorValue label="Duration" value={frameToTimecode(masterClipDurationFrames(clip), scene?.scene.timeline.frameRate ?? rate)} /></div>

@@ -68,6 +68,20 @@ describe('V2.8 .ndscene persistence', () => {
     expect(loaded.timeline.endFrame).toBe(120)
   })
 
+  it('restores legacy zero Mark Out sentinels to the timeline end', () => {
+    const scene = createEmptySceneDocument()
+    const legacy = JSON.parse(JSON.stringify(scene)) as { timeline: Record<string, unknown> }
+    legacy.timeline.durationFrames = 240
+    legacy.timeline.endFrame = 240
+    legacy.timeline.markIn = 0
+    legacy.timeline.markOut = 0
+
+    const loaded = parseSceneFile(JSON.stringify({ format: 'ndscene', version: 1, scene: legacy }))
+
+    expect(loaded.timeline.markOut).toBe(240)
+    expect(loaded.timeline.durationFrames).toBe(240)
+  })
+
   it('rejects invalid JSON, wrong envelopes, duplicate IDs, bad references, bad guides, and bad keyframes', () => {
     const scene = createEmptySceneDocument()
     expect(() => parseSceneFile('{')).toThrowError(SceneFileError)
@@ -107,6 +121,18 @@ describe('V2.8 .ndscene persistence', () => {
     delete legacyActor.visualStyle
     const legacy = parseSceneFile(JSON.stringify({ format: 'ndscene', version: 1, scene: { ...scene, actors: [legacyActor] } }))
     expect(legacy.actors[0].visualStyle).toBe('character')
+  })
+
+  it('round-trips persistent Groups and their Group timeline tracks', () => {
+    const scene = createEmptySceneDocument()
+    const actor = createActorDocument('actor-01', 'Actor 01', [1, 0, 0])
+    const group = { id: 'group-01', name: 'Group 01', position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number], pivot: [1, 0, 0] as [number, number, number], childIds: [actor.id] }
+    const timeline = upsertTimelineKeyframe(scene.timeline, group.id, 'Group', 'position', 0, [0, 0, 0])
+    const source = { ...scene, actors: [actor], groups: [group], timeline }
+    const loaded = parseSceneFile(serializeScene(source, '2026-10-07T00:00:00.000Z'))
+    expect(loaded.groups).toEqual([group])
+    expect(loaded.timeline.tracks).toHaveLength(1)
+    expect(loaded.timeline.tracks[0]).toMatchObject({ entityId: group.id, entityType: 'Group', property: 'position' })
   })
 
   it('defaults legacy Actors without pose data to Standing', () => {

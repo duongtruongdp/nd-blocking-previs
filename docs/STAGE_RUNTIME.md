@@ -146,6 +146,42 @@ space policy is changed.
 
 React mounts `SceneRuntime` through the `Stage` component and only owns the mount element and user-facing failure state. Three.js objects are not placed in React state.
 
+## M5C scene integrity and grouping
+
+Scene editing remains document-first. Scene rename, object rename, duplicate
+numbering, transform fields, selection, and persistence operate on stable
+SceneDocument IDs; runtime proxies are rebuilt or updated from the resulting
+document and are never the source of truth.
+
+Groups are flat, persistent SceneDocument records. A group stores a stable
+pivot plus position/rotation deltas, while child Actors, Props, Walls, and
+Cameras retain their canonical world transforms. Timeline evaluation resolves
+child tracks first and group tracks second; the group delta is then composed
+around the stored pivot. Ungrouping bakes that evaluated delta back into child
+world transforms and removes the group record/tracks, so save/load, undo/redo,
+Camera View, Master Preview, and Live Review continue to use serializable data.
+The group transform path is also applied to grouped filmmaking Cameras before
+their production pose is composed.
+
+On an empty Stage, Ctrl/Cmd plus left-drag provides a development/editor
+marquee selection gesture; ordinary left-drag remains the accepted orbit
+gesture. The marquee projects registered entity roots into the Stage viewport,
+excludes helpers, and uses Shift/Ctrl additive selection without creating a
+second selection model.
+
+Camera View reconciliation remains ID-based and evaluated: each reconciliation
+removes runtime actor/scenic IDs absent from the current scene before adding or
+updating visible records. Deleting a Camera does not rewrite dependent Shot
+references; Master Preview therefore reports a deterministic Missing Camera
+state instead of retaining a stale preview or silently changing project data.
+The production camera resolver follows the same stable-ID boundary: a Shot's
+non-null `cameraId` is authoritative, while legacy null Shot camera references
+may resolve only through the exact referenced Scene's `activeCameraId`. Names,
+the active Scene, and unrelated cameras are never used as fallbacks. Camera
+View renders after reconciliation from the current evaluated semantic-ID set,
+so deleting an entity removes both its runtime object and any stale pixels on
+the next render.
+
 ## V2.10E openable Windows
 
 Windows remain serializable `OpeningDocument` records with a backward-compatible
@@ -708,6 +744,19 @@ frame, and the local clip frame. M4B uses exclusive source ends (`[start,
 end)`) to match the existing Timeline duration convention and prevent a
 boundary frame from being counted twice. The Master rate is derived from the
 first referenced Scene; mixed Scene FPS is rejected when adding a new clip.
+
+Master preview uses the same Scene-scoped camera resolver as the Shot and
+Inspector surfaces. This preserves older `.ndblock` files whose Shot camera is
+null but whose exact Scene still has an `activeCameraId`, while preserving
+`Missing Camera` for a non-null ID that is absent from that Scene.
+
+Each valid non-null Shot camera ID remains authoritative even when multiple
+Shots share a Scene or the Scene's active camera changes. Master clips can be
+reordered by stable `MasterClip.id`; the contiguous order is recalculated
+without changing source trims, Shot metadata, camera assignments, or the
+independent Music clip. Local Master reorders use the project planning history
+as one undoable structural action, and collaborative reorders continue through
+the existing Host/editor planning operation.
 
 The current renderer/export path remains Scene-scoped in M4B: it evaluates the
 active Scene and Camera for an integer frame range and encodes those captures

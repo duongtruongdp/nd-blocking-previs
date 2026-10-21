@@ -25,7 +25,7 @@ export type StageOrbitState = {
   phi: number
 }
 
-export type StagePointerMode = 'idle' | 'orbit' | 'pan' | 'move' | 'gizmo'
+export type StagePointerMode = 'idle' | 'orbit' | 'pan' | 'move' | 'gizmo' | 'marquee'
 
 export const STAGE_SNAP_GRID_PRESETS = [0.01, 0.05, 0.1, 0.25, 0.5, 1] as const
 
@@ -163,13 +163,12 @@ export function stageGizmoSpaceForSelection(selectionCount: number): StageGizmoS
 }
 
 /**
- * Transform-space policy for the filmmaking gizmo. Camera rotation is the
- * deliberate exception: it rotates the camera around its body pivot using
- * world X/Y/Z, while Move retains the accepted single-object local policy.
+ * Transform-space policy for the filmmaking gizmo. A single Camera uses the
+ * same local object basis for Move and Rotate; multi-selection remains in
+ * world space so existing group behavior is unchanged.
  */
 export function stageTransformSpace(entityKind: StageTransformEntityKind, mode: StageTool, selectionCount: number): StageGizmoSpace {
   if (selectionCount > 1) return 'world'
-  if (entityKind === 'camera' && mode === 'rotate') return 'world'
   return stageGizmoSpaceForSelection(selectionCount)
 }
 
@@ -228,11 +227,15 @@ export function stageLocalAxis(rotation: [number, number, number], axis: StageAx
 export function stageTransformAxis(entityKind: StageTransformEntityKind, mode: StageTool, rotation: [number, number, number], axis: StageAxisName, selectionCount: number): THREE.Vector3 {
   const space = stageTransformSpace(entityKind, mode, selectionCount)
   if (space === 'local') return stageLocalAxis(rotation, axis)
-  if (entityKind === 'camera' && mode === 'rotate' && selectionCount === 1) return stageWorldAxis(axis)
   return mode === 'rotate' ? stageRotationAxis(rotation, axis) : stageWorldAxis(axis)
 }
 
-/** Apply one deterministic rotation delta in the selected transform space. */
+/**
+ * Apply one deterministic rotation delta in the selected transform space.
+ * `axis` is a canonical local axis for local space and a world-space axis for
+ * world space; callers measure the pointer with the corresponding world basis
+ * and pass the canonical local axis when composing a local quaternion.
+ */
 export function stageApplyRotation(start: THREE.Quaternion, axis: THREE.Vector3, angle: number, space: StageGizmoSpace): THREE.Quaternion {
   const delta = new THREE.Quaternion().setFromAxisAngle(axis, angle)
   return space === 'local'

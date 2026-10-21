@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { PropDocument } from '../core/sceneDocument'
 import { classifyWheelInput } from '../runtime/inputNormalization'
-import { constrainStageDeltaToAxis, dominantStageAxis, snapStagePosition, snapStageValue, stageApplyRotation, stageCameraSpaceDepth, stageIsometricAngles, stageLocalAxis, stageMovedBeyondThreshold, stageNdcFromEvent, stageOrbitAfterPointerDelta, stageOrbitAnglesFromDirection, stagePointerDeltaAlongAxis, stageProjectWorldAxisToScreen, stageRotationAxis, stageToolForKey, stageTransformAxis, stageTransformSpace, stageViewDirection, stageViewModeIsOrthographic, stageWorldAxis, stageWorldUnitsPerPixelAlongAxis, stageWorldUnitsPerPixelAtDepth, stageZoomDistance, type StageAxisName, type StageCanvasRect, type StageGizmoSpace, type StageIsometricCorner, type StagePointerMode, type StageTool, type StageViewMode, type StageViewSelection } from './stageEngineMath'
+import { constrainStageDeltaToAxis, dominantStageAxis, snapStagePosition, snapStageValue, stageApplyRotation, stageCameraSpaceDepth, stageIsometricAngles, stageLocalAxis, stageMovedBeyondThreshold, stageNdcFromEvent, stageOrbitAfterPointerDelta, stageOrbitAnglesFromDirection, stagePointerDeltaAlongAxis, stageProjectToClient, stageProjectWorldAxisToScreen, stageRotationAxis, stageToolForKey, stageTransformAxis, stageTransformSpace, stageViewDirection, stageViewModeIsOrthographic, stageWorldAxis, stageWorldUnitsPerPixelAlongAxis, stageWorldUnitsPerPixelAtDepth, stageZoomDistance, type StageAxisName, type StageCanvasRect, type StageGizmoSpace, type StageIsometricCorner, type StagePointerMode, type StageTool, type StageViewMode, type StageViewSelection } from './stageEngineMath'
 import { scaleFromPointer, type ScaleAxis } from './stageEngineScaleMath'
 import { distributeOffsets, snapAngle } from './arrangeMath'
 import { normalizeSelection, toggleSelection } from './selectionMath'
@@ -121,6 +121,7 @@ type StageDrag = {
   startPosition: THREE.Vector3 | null
   startScale: THREE.Vector3 | null
   startQuaternion: THREE.Quaternion | null
+  localRotationAxis: THREE.Vector3 | null
   startAngle: number | null
   verticalMove: boolean
   shiftActive: boolean
@@ -166,6 +167,9 @@ export type StageEngineOptions = {
   onContextMenu?: (entityId: string | null, point: { clientX: number; clientY: number }) => void
   onViewChanged?: (selection: StageViewSelection) => void
   onViewOrientationChanged?: (orientation: StageViewOrientation) => void
+  /** Ctrl/Cmd + left-drag on empty Stage space, preserving plain left-drag orbit. */
+  onMarqueeChange?: (rect: { left: number; top: number; width: number; height: number; additive: boolean } | null) => void
+  onMarqueeSelection?: (selection: StageSelection) => void
   onCameraPathKeyframeSelect?: (keyframe: CameraPathKeyframe) => void
   onCameraPathSegmentSelect?: (segment: CameraPathSegmentSelection) => void
   onCameraPathPointMoveStart?: (keyframe: CameraPathKeyframe, position: ActorVector3Like) => void
@@ -719,6 +723,7 @@ export class StageEngine {
       startPosition: null,
       startScale: null,
       startQuaternion: null,
+      localRotationAxis: null,
       startAngle: null,
       groupEntities: [],
       groupPivot: null,
@@ -739,7 +744,13 @@ export class StageEngine {
       permissionPending: false,
     }
 
-    if (event.button === 2 || event.button === 1 || (event.button === 0 && event.altKey && event.shiftKey)) {
+    const marqueeModifier = event.metaKey || event.ctrlKey
+    const marqueeHit = event.button === 0 && marqueeModifier ? this.pick(event) : null
+    if (event.button === 0 && marqueeModifier && !marqueeHit && !this.pickGizmo(event) && !this.pickCameraPathKeyframe(event) && !this.pickCameraPathSegment(event)) {
+      this.drag = { ...base, mode: 'marquee' }
+      this.pointerMode = 'marquee'
+      this.options.onMarqueeChange?.({ left: event.clientX, top: event.clientY, width: 0, height: 0, additive: event.shiftKey })
+    } else if (event.button === 2 || event.button === 1 || (event.button === 0 && event.altKey && event.shiftKey)) {
       this.drag = { ...base, mode: 'pan' }
       this.pointerMode = 'pan'
     } else {
@@ -822,6 +833,8 @@ export class StageEngine {
         this.orbit.phi = THREE.MathUtils.clamp(this.orbit.phi - deltaY * 0.006, 0.05, 3.1)
         this.applyViewCamera()
       }
+    } else if (drag.mode === 'marquee') {
+      this.options.onMarqueeChange?.(this.marqueeRect(drag, event))
     } else if (drag.mode === 'pan') {
       this.pan(deltaX, deltaY)
     } else if (drag.mode === 'move') {
@@ -856,6 +869,8 @@ export class StageEngine {
         // A Shift-click on an already selected object is a toggle, not a
         // zero-distance move. Unmodified clicks retain the current group.
         if (!drag.selectionChangedOnDown && event.shiftKey && hit && this.selectedIds.includes(hit.id)) this.select(hit.id, null, true)
+      } else if (drag.mode === 'marquee') {
+        if (drag.moved) this.finishMarquee(drag, event)
       } else if (drag.mode !== 'gizmo') {
         this.select(hit?.id ?? null, null, event.shiftKey)
       }
@@ -871,6 +886,36 @@ export class StageEngine {
     this.releasePointer(event.pointerId)
     event.preventDefault()
     this.emitDebug(true)
+  }
+
+  private marqueeRect(drag: StageDrag, event: PointerEvent): { left: number; top: number; width: number; height: number; additive: boolean } {
+    return {
+      left: Math.min(drag.startX, event.clientX),
+      top: Math.min(drag.startY, event.clientY),
+      width: Math.abs(event.clientX - drag.startX),
+      height: Math.abs(event.clientY - drag.startY),
+      additive: drag.shiftActive,
+    }
+  }
+
+  private finishMarquee(drag: StageDrag, event: PointerEvent): void {
+    const rect = this.marqueeRect(drag, event)
+    const canvasRect = this.getCanvasRect()
+    const minX = rect.left
+    const maxX = rect.left + rect.width
+    const minY = rect.top
+    const maxY = rect.top + rect.height
+    const hits = Array.from(this.entities.values()).filter((entity) => {
+      entity.root.updateMatrixWorld(true)
+      const anchor = entity.getTransformPivot?.() ?? entity.root.getWorldPosition(new THREE.Vector3())
+      const point = stageProjectToClient(anchor, this.editorCamera, canvasRect)
+      return point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY
+    }).map((entity) => entity.id)
+    const ids = rect.additive ? [...this.selectedIds, ...hits] : hits
+    const primaryId = hits[hits.length - 1] ?? (rect.additive ? this.selectedId : null)
+    this.select(ids, primaryId)
+    this.options.onMarqueeSelection?.(this.getSelection())
+    this.options.onMarqueeChange?.(null)
   }
 
   private readonly handlePointerCancel = (event: PointerEvent) => {
@@ -947,6 +992,7 @@ export class StageEngine {
     this.pointerMode = 'idle'
     this.options.onAxisLockChange?.(null)
     this.setHover(null)
+    this.options.onMarqueeChange?.(null)
   }
 
   private get selectedEntity(): StageEntity | null {
@@ -1251,6 +1297,7 @@ export class StageEngine {
       startPosition: entity.root.position.clone(),
       startScale: entity.root.scale.clone(),
       startQuaternion: entity.root.quaternion.clone(),
+      localRotationAxis: handle.mode === 'rotate' && handle.axis && gizmoSpace === 'local' ? stageWorldAxis(handle.axis) : null,
       startAngle: handle.mode === 'rotate' && axis ? this.ringAngle(event, origin, axis) : null,
       gizmoScale: this.gizmoScale(origin),
       screenAxis,
@@ -1343,7 +1390,7 @@ export class StageEngine {
         const startPosition = drag.startGroupPositions.get(entity.id) ?? entity.root.position
         const startQuaternion = drag.startGroupQuaternions.get(entity.id) ?? entity.root.quaternion
         entity.root.position.copy(startPosition).sub(pivot).applyQuaternion(rotation).add(pivot)
-        entity.root.quaternion.copy(stageApplyRotation(startQuaternion, drag.axis!, delta, drag.gizmoSpace))
+        entity.root.quaternion.copy(stageApplyRotation(startQuaternion, drag.localRotationAxis ?? drag.axis!, delta, drag.gizmoSpace))
       })
     } else {
       if (!drag.startPosition) return
@@ -1488,7 +1535,13 @@ export class StageEngine {
           const axis = entity.groupTransformable === false && entity.type !== 'Camera'
             ? stageRotationAxis([entity.root.rotation.x, entity.root.rotation.y, entity.root.rotation.z], handle.axis)
             : stageTransformAxis(entity.type === 'Camera' ? 'camera' : 'default', handle.mode, [entity.root.rotation.x, entity.root.rotation.y, entity.root.rotation.z], handle.axis, this.selectedEntities.length)
-          const ringQuaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), axis)
+          // Ring meshes are children of gizmoRoot. For a local Camera gizmo,
+          // keep each ring in the canonical local axis basis and let the root
+          // carry the camera orientation. This keeps the visual basis and the
+          // local quaternion composition in agreement instead of applying the
+          // camera orientation twice.
+          const ringAxis = entity.type === 'Camera' && gizmoSpace === 'local' ? stageWorldAxis(handle.axis) : axis
+          const ringQuaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), ringAxis)
           pick.quaternion.copy(ringQuaternion)
           handle.visible.forEach((mesh) => mesh.quaternion.copy(ringQuaternion))
         }

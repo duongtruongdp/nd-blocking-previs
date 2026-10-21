@@ -21,8 +21,23 @@ npm run desktop:build
 packages `dist/` as the local frontend. The browser build remains available
 with `npm run build:web` and does not depend on Tauri.
 
+The shared Live Review resolver is embedded at Vite build time for both Web and
+Tauri. A production desktop build uses the official relay
+`wss://live.duongtruongdp.net/live` by default. `VITE_LIVE_RELAY_URL` may
+override it with a valid `wss://.../live` deployment. Development continues to
+use `ws://localhost:8787/live` when no override is supplied.
+
 The application identifier is `net.duongtruongdp.blocking`. The default window
 is resizable and starts at 1280 × 800 with no custom titlebar.
+
+The packaged macOS WebView origin is `tauri://localhost`. Production Live
+Review relay deployments must include that exact origin in
+`LIVE_ALLOWED_ORIGINS` alongside the Web origin:
+`https://blocking.duongtruongdp.net,tauri://localhost`.
+
+The packaged Desktop Host invite is intentionally a browser-shareable public
+URL, not a `tauri://` URL:
+`https://blocking.duongtruongdp.net/?live=<session>`.
 
 For the current macOS Beta installation flow, see
 [`MACOS_BETA_INSTALL.md`](MACOS_BETA_INSTALL.md). The desktop Preferences

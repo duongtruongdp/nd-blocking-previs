@@ -46,6 +46,7 @@ export function cloneSceneWithIdentity(scene: SceneDocument, sceneId: string, sc
   const copied = clone(scene)
   const entityIds = [...copied.actors, ...copied.props, ...copied.walls, ...copied.openings, ...copied.lights, ...copied.cameras].map((entity) => entity.id)
   const entityIdMap = new Map(entityIds.map((id) => [id, remapId(id, suffix)]))
+  const groupIdMap = new Map(copied.groups.map((group) => [group.id, remapId(group.id, suffix)]))
   const guideIds = copied.cameras.flatMap((camera) => camera.frameGuides.map((guide) => guide.id))
   const guideIdMap = new Map(guideIds.map((id) => [id, remapId(id, suffix)]))
   const trackIds = copied.timeline.tracks.map((track) => track.id)
@@ -53,6 +54,7 @@ export function cloneSceneWithIdentity(scene: SceneDocument, sceneId: string, sc
   const keyframeIds = copied.timeline.tracks.flatMap((track) => track.keyframes.map((keyframe) => keyframe.id))
   const keyframeIdMap = new Map(keyframeIds.map((id) => [id, remapId(id, suffix)]))
   const remapEntityId = (id: string) => entityIdMap.get(id) ?? id
+  const remapSceneId = (id: string) => entityIdMap.get(id) ?? groupIdMap.get(id) ?? id
 
   return {
     ...copied,
@@ -67,13 +69,18 @@ export function cloneSceneWithIdentity(scene: SceneDocument, sceneId: string, sc
       id: remapEntityId(camera.id),
       frameGuides: camera.frameGuides.map((guide) => ({ ...guide, id: guideIdMap.get(guide.id) ?? guide.id })),
     })),
+    groups: copied.groups.map((group) => ({
+      ...group,
+      id: groupIdMap.get(group.id) ?? group.id,
+      childIds: group.childIds.map((childId) => remapEntityId(childId)),
+    })),
     activeCameraId: copied.activeCameraId ? remapEntityId(copied.activeCameraId) : null,
     timeline: {
       ...copied.timeline,
       tracks: copied.timeline.tracks.map((track) => ({
         ...track,
         id: trackIdMap.get(track.id) ?? track.id,
-        entityId: remapEntityId(track.entityId),
+        entityId: remapSceneId(track.entityId),
         keyframes: track.keyframes.map((keyframe) => ({ ...keyframe, id: keyframeIdMap.get(keyframe.id) ?? keyframe.id })),
       })),
     },

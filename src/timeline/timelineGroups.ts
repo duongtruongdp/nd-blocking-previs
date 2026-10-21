@@ -20,6 +20,7 @@ const defaultNameBases: Record<TimelineEntityType, readonly string[]> = {
   Opening: ['opening', 'door', 'window'],
   Sun: ['sun', 'light'],
   Camera: ['camera'],
+  Group: ['group'],
 }
 
 export function isDefaultTimelineEntityName(entity: TimelineEntityDescriptor): boolean {

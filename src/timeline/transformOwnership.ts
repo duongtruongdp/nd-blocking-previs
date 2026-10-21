@@ -1,4 +1,4 @@
-import type { ActorDocument, ActorVector3, CameraDocument, OpeningDocument, PropDocument, SceneDocument, SunDocument, TimelineEntityType, TimelineProperty, TimelineValue, WallDocument } from '../core/sceneDocument'
+import type { ActorDocument, ActorVector3, CameraDocument, OpeningDocument, PropDocument, SceneDocument, SceneGroup, SunDocument, TimelineEntityType, TimelineProperty, TimelineValue, WallDocument } from '../core/sceneDocument'
 import { applySceneEntityTransform } from '../core/sceneDocument'
 import { upsertTimelineKeyframe } from './timelineMath'
 
@@ -42,7 +42,7 @@ export function shouldApplyTimelinePropertyEvaluation(
   return !(suspendedProperties[entityId]?.has(property) ?? false)
 }
 
-export function captureTimelineValue(entity: ActorDocument | CameraDocument | PropDocument | OpeningDocument | WallDocument | SunDocument, property: TimelineProperty): TimelineValue | undefined {
+export function captureTimelineValue(entity: ActorDocument | CameraDocument | PropDocument | OpeningDocument | WallDocument | SunDocument | SceneGroup, property: TimelineProperty): TimelineValue | undefined {
   if (property === 'position') return 'position' in entity ? [...entity.position] as ActorVector3 : undefined
   if (property === 'rotation') return 'rotation' in entity ? [...entity.rotation] as ActorVector3 : undefined
   if (property === 'scale') return 'scale' in entity && entity.scale ? [...entity.scale] as ActorVector3 : undefined
@@ -62,6 +62,13 @@ export function commitTimelineTransform(document: SceneDocument, change: Timelin
   const wall = document.walls.find((item) => item.id === change.entityId)
   const opening = document.openings.find((item) => item.id === change.entityId)
   const camera = document.cameras.find((item) => item.id === change.entityId)
+  const group = document.groups.find((item) => item.id === change.entityId)
+  if (group) {
+    const hasAnimatedProperty = change.editedProperty !== undefined && document.timeline.tracks.some((track) => track.entityId === change.entityId && track.property === change.editedProperty && track.keyframes.length > 0)
+    const keyframeValue = change.editedProperty === 'position' ? [...change.position] as ActorVector3 : change.editedProperty === 'rotation' ? [...change.rotation] as ActorVector3 : undefined
+    const timeline = hasAnimatedProperty && keyframeValue && change.editedProperty ? upsertTimelineKeyframe(document.timeline, group.id, 'Group', change.editedProperty, document.timeline.currentFrame, keyframeValue) : document.timeline
+    return { document: { ...document, groups: document.groups.map((item) => item.id === group.id ? { ...item, position: [...change.position], rotation: [...change.rotation] } : item), timeline }, changedKeyframe: hasAnimatedProperty, suspendEvaluation: false }
+  }
   if (!actor && !prop && !wall && !opening && !camera) return { document: applySceneEntityTransform(document, change), changedKeyframe: false, suspendEvaluation: false }
 
   const entityType: TimelineEntityType = camera ? 'Camera' : wall ? 'Wall' : opening ? 'Opening' : prop ? 'Prop' : 'Actor'

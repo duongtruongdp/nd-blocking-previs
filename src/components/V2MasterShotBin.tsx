@@ -4,6 +4,7 @@ import { MASTER_SHOT_DRAG_TYPE } from '../core/masterSequence'
 import type { ShotDocument } from '../core/shotDocument'
 import { shotDurationFrames } from '../core/shotDocument'
 import { frameToTimecode } from '../timeline/timelineMath'
+import { resolveShotCamera } from '../core/shotCameraResolver'
 
 type V2MasterShotBinProps = {
   shots: readonly ShotDocument[]
@@ -24,7 +25,7 @@ export function V2MasterShotBin({ shots, scenes, activeShotId, onSelectShot, onA
     <div className="v2-master-bin-heading"><span>Shots</span><small>Drag into the timeline</small></div>
     {shots.length === 0 ? <p className="v2-master-bin-empty">Create Shots in Scene mode first.</p> : <div className="v2-master-bin-list">{shots.map((shot) => {
       const scene = scenes.find((entry) => entry.id === shot.sceneId)
-      const camera = scene?.scene.cameras.find((candidate) => candidate.id === shot.cameraId)
+      const camera = resolveShotCamera({ scenes }, shot).camera
       const selected = activeShotId === shot.id
       return <div className={`v2-master-bin-item${selected ? ' is-selected' : ''}`} key={shot.id} draggable onDragStart={(event) => beginDrag(event, shot.id)} onDoubleClick={() => onAddShot(shot.id)}>
         <button type="button" className="v2-master-bin-select" onClick={() => onSelectShot(shot.id)} title="Double-click to add to Master">

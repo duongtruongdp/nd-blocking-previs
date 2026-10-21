@@ -2,6 +2,7 @@ import type { ProjectDocument } from './projectDocument'
 import type { SceneDocument } from './sceneDocument'
 import { resolveMasterFrame, type ResolvedMasterFrame } from './masterSequence'
 import { evaluateTimeline, type EvaluatedEntityState } from '../timeline/timelineEvaluator'
+import { resolveShotCamera } from './shotCameraResolver'
 
 export type MasterPreviewStatus = 'empty' | 'resolved' | 'missing-shot' | 'missing-scene' | 'missing-camera'
 
@@ -27,11 +28,11 @@ export function resolveMasterPreviewContext(project: ProjectDocument, masterFram
   if (!resolved) return emptyPreview(masterFrame)
   const shot = project.shots.find((candidate) => candidate.id === resolved.shotId)
   if (!shot) return fromResolution(project.id, masterFrame, resolved, null, 'missing-shot')
-  const sceneEntry = project.scenes.find((candidate) => candidate.id === shot.sceneId)
+  const cameraResolution = resolveShotCamera(project, shot)
+  const sceneEntry = cameraResolution.sceneEntry
   if (!sceneEntry) return fromResolution(project.id, masterFrame, resolved, null, 'missing-scene')
-  const cameraId = shot.cameraId
-  if (!cameraId || !sceneEntry.scene.cameras.some((camera) => camera.id === cameraId)) return fromResolution(project.id, masterFrame, resolved, sceneEntry.scene, 'missing-camera')
-  return fromResolution(project.id, masterFrame, resolved, sceneEntry.scene, 'resolved')
+  if (!cameraResolution.camera || !cameraResolution.cameraId) return fromResolution(project.id, masterFrame, resolved, sceneEntry.scene, 'missing-camera')
+  return fromResolution(project.id, masterFrame, { ...resolved, cameraId: cameraResolution.cameraId }, sceneEntry.scene, 'resolved')
 }
 
 function fromResolution(projectId: string, masterFrame: number, resolved: ResolvedMasterFrame, scene: SceneDocument | null, status: MasterPreviewStatus): MasterPreviewContext {

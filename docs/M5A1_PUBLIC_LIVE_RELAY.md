@@ -16,15 +16,52 @@ The relay stores temporary serialized project snapshots and presentation state i
 
 ## Client configuration
 
-Set the frontend build variable to the public WebSocket URL, including the known path:
+The official production relay is:
 
-```sh
-VITE_LIVE_RELAY_URL=wss://live.example.com/live npm run build
+```text
+wss://live.duongtruongdp.net/live
 ```
 
-Production builds fail closed when this variable is absent, malformed, or not `wss://`. They never derive a relay from the application hostname and never fall back to a LAN address. Development builds use `ws://localhost:8787/live` only when no variable is supplied.
+Web and Desktop production builds use that official relay by default. An
+explicit build variable remains available for self-hosted deployments:
 
-The invite URL is always made from the current application origin: `https://app.example.com/?live=<session>`. The Host token is returned only to the Host transport and is never placed in the Viewer invite URL.
+```sh
+VITE_LIVE_RELAY_URL=wss://live.duongtruongdp.net/live npm run build
+```
+
+An explicit invalid production override fails closed and never falls back to
+the official relay. Production accepts only `wss://` with the `/live` path.
+When no override is supplied, production uses the official relay. Development
+uses `ws://localhost:8787/live` when no variable is supplied.
+
+The shareable Host invite is a separate concern from the relay URL. Production
+and packaged Desktop builds use the canonical public app destination:
+
+```text
+https://blocking.duongtruongdp.net/?live=<session>
+```
+
+Normal browser development keeps the current browser origin for local testing
+(the repository Vite server is fixed to `http://localhost:5174`). A controlled
+public-relay development build may set both endpoints explicitly:
+
+```sh
+VITE_LIVE_RELAY_URL=wss://live.duongtruongdp.net/live \
+VITE_LIVE_INVITE_BASE_URL=https://blocking.duongtruongdp.net \
+npm run dev
+```
+
+`VITE_LIVE_INVITE_BASE_URL` accepts only an HTTP(S) URL and is optional. A
+Tauri origin is never used as a shareable invite destination.
+
+The deployed `live.duongtruongdp.net` record is currently operated as
+Cloudflare **DNS Only**. During manual testing of this deployment, enabling
+Cloudflare Proxy left the WebSocket connection in `CONNECTING`; this is an
+observed deployment finding, not a universal Cloudflare limitation.
+
+The Host token is returned only to the Host transport and is never placed in
+the Viewer invite URL. The Live Review panel's Copy Link action copies this
+canonical invite URL.
 
 ## Relay build and run
 

@@ -67,7 +67,7 @@ export type FrameGuide = {
   safeMarginPercent: number
 }
 
-export type TimelineEntityType = 'Actor' | 'Prop' | 'Wall' | 'Opening' | 'Sun' | 'Camera'
+export type TimelineEntityType = 'Actor' | 'Prop' | 'Wall' | 'Opening' | 'Sun' | 'Camera' | 'Group'
 export type TimelineProperty = 'position' | 'heading' | 'rotation' | 'scale' | 'focalLengthMm' | 'openAngle' | 'azimuth' | 'elevation' | 'intensity' | 'color'
 export type TimelineInterpolation = 'linear' | 'hold'
 export type TimelineEasingMode = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut'
@@ -90,6 +90,17 @@ export type TimelineTrack = {
   entityType: TimelineEntityType
   property: TimelineProperty
   keyframes: TimelineKeyframe[]
+}
+
+/** A flat, persistent blocking group. Child transforms remain world-space;
+ * group position/rotation are a non-destructive delta evaluated around pivot. */
+export type SceneGroup = {
+  id: string
+  name: string
+  position: ActorVector3
+  rotation: ActorVector3
+  pivot: ActorVector3
+  childIds: string[]
 }
 
 export type TimelineDocument = {
@@ -221,6 +232,7 @@ export type SceneDocument = {
   cameras: CameraDocument[]
   activeCameraId: string | null
   lights: SunDocument[]
+  groups: SceneGroup[]
   timeline: TimelineDocument
 }
 
@@ -334,6 +346,7 @@ export function createEmptySceneDocument(): SceneDocument {
     cameras: [],
     activeCameraId: null,
     lights: [],
+    groups: [],
     timeline: {
       currentFrame: 0,
       startFrame: 0,

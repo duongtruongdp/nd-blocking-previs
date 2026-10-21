@@ -145,6 +145,28 @@ describe('master sequence foundation', () => {
     expect(second.endFrame).toBe(20)
   })
 
+  it('reorders first, middle, and last clips contiguously while preserving clip and music data', () => {
+    const shots = [shot('shot-a', 'scene-a', 0, 10), shot('shot-b', 'scene-a', 10, 13), shot('shot-c', 'scene-a', 13, 20), shot('shot-d', 'scene-a', 20, 25)]
+    const music = createMusicClip({ name: 'score.wav', type: 'audio/wav', size: 512 }, 12.5)
+    const sequence = { ...createMasterSequenceDocument(), clips: shots.map((source, order) => ({ id: `clip-${source.id.slice(-1)}`, shotId: source.id, sourceStartFrame: source.startFrame, sourceEndFrame: source.endFrame, order })), musicClip: music }
+    const originalDuration = masterSequenceDurationFrames(sequence)
+    const rangesByClipId = Object.fromEntries(sequence.clips.map((clip) => [clip.id, [clip.sourceStartFrame, clip.sourceEndFrame]]))
+
+    const middleFirst = reorderMasterClip(sequence, 'clip-c', 1)
+    expect(middleFirst?.clips.map((clip) => clip.id)).toEqual(['clip-a', 'clip-c', 'clip-b', 'clip-d'])
+    expect(middleFirst?.clips.map((clip) => rangesByClipId[clip.id])).toEqual(middleFirst?.clips.map((clip) => [clip.sourceStartFrame, clip.sourceEndFrame]))
+    expect(middleFirst?.musicClip).toEqual(music)
+    expect(masterSequenceDurationFrames(middleFirst!)).toBe(originalDuration)
+    expect(resolveMasterFrame(middleFirst!, shots, 10)).toMatchObject({ clipId: 'clip-c', shotId: 'shot-c', sourceFrame: 13 })
+
+    const firstLast = reorderMasterClip(sequence, 'clip-a', 3)
+    expect(firstLast?.clips.map((clip) => clip.id)).toEqual(['clip-b', 'clip-c', 'clip-d', 'clip-a'])
+
+    const lastFirst = reorderMasterClip(sequence, 'clip-d', 0)
+    expect(lastFirst?.clips.map((clip) => clip.id)).toEqual(['clip-d', 'clip-a', 'clip-b', 'clip-c'])
+    expect(new Set(lastFirst?.clips.map((clip) => clip.id))).toEqual(new Set(sequence.clips.map((clip) => clip.id)))
+  })
+
   it('keeps music metadata serializable and independent from shot duration mapping', () => {
     const music = createMusicClip({ name: 'score.mp3', type: 'audio/mpeg', size: 2048, lastModified: 123 }, 12.5)
     const sequence = { ...createMasterSequenceDocument(), musicClip: music }

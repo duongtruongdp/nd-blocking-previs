@@ -12,7 +12,7 @@ import { ProceduralCameraRuntime } from './cameraRuntime'
 import { createScenicVisual, scenicGeometrySignature, type ScenicDefinition, type ScenicVisual } from './scenicRuntime'
 import { resolveOpeningAgainstWalls } from '../architecture/wallMath'
 import { sunAnglesFromHelperPosition } from './sunMapping'
-import { cameraViewEntityCollections, sceneScopeChanged, staleRuntimeEntityIds } from './cameraViewReconciliation'
+import { cameraViewEntityCollections, cameraViewRenderableEntityIds, sceneScopeChanged, staleRuntimeEntityIds } from './cameraViewReconciliation'
 import type { CameraPoseSnapshot } from '../phoneCamera/cameraPoseComposition'
 
 const MAX_PIXEL_RATIO = 2
@@ -121,6 +121,9 @@ export class CameraViewRuntime {
     this.activeSceneId = scene.sceneId
     this.lastSceneRevision = scene.revision
     const scenic = [...scene.props, ...scene.walls, ...scene.openings.map((opening) => resolveOpeningAgainstWalls(opening, scene.walls)), ...scene.lights]
+    // The current evaluated collections are the Camera View existence
+    // contract. Runtime maps are caches and must not retain absent IDs.
+    cameraViewRenderableEntityIds(scene.actors, scenic, scene.camera)
     this.syncActors(scene.actors)
     this.syncScenic(scenic)
     this.syncCamera(scene.camera)

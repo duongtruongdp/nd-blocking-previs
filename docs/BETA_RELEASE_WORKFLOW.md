@@ -51,7 +51,7 @@ Manual checks show a friendly retry message and never block startup.
 Download URLs are centralized and stable:
 
 ```text
-https://github.com/duongtruongdp/nd-blocking-previs/releases/latest/download/ND-Blocking-Previs-macOS.zip
+https://github.com/duongtruongdp/nd-blocking-previs/releases/latest/download/ND-Blocking-Previs-macOS-latest.zip
 https://github.com/duongtruongdp/nd-blocking-previs/releases/latest/download/ND-Blocking-Previs-Windows.zip
 ```
 
@@ -76,20 +76,28 @@ npm run release:verify
 git diff --check
 ```
 
-`release:package` is currently macOS-only. It finds the current Tauri DMG and
-creates the fixed file `release/ND-Blocking-Previs-macOS.zip`. The ZIP contains
-only:
+`release:package` is currently macOS-only. It reads the project version,
+verifies the current Tauri application bundle and its Apple Silicon executable,
+then creates the fixed file `release/ND-Blocking-Previs-macOS-latest.zip`.
+The ZIP contains:
 
 ```text
-ND Blocking & Previs_<version>_<arch>.dmg
-README - INSTALLATION.txt
+ND Blocking & Previs.app
+INSTALLATION.md
+README.txt
 ```
 
 The future Windows package name is `ND-Blocking-Previs-Windows.zip`; it is not
 generated or claimed tested until a real Windows build exists.
 
-`release:verify` confirms the synchronized version, fixed ZIP name, exactly one
-DMG, and the installation README. Generated packages are ignored by Git.
+The application inside the ZIP remains versioned in its bundle metadata; the
+ZIP filename is deliberately stable so the GitHub `/releases/latest/download/`
+URL remains permanent. A matching `.sha256` file is generated next to the ZIP.
+The source installation guide is [`INSTALLATION_MACOS.md`](INSTALLATION_MACOS.md).
+
+`release:verify` confirms the synchronized version, fixed ZIP name, app bundle,
+installation guide, and architecture-specific package README. Generated
+packages are ignored by Git.
 
 ## GitHub Release procedure
 
@@ -101,13 +109,13 @@ the app's `/releases/latest` lookup and fixed asset URLs work.
 3. Commit the source, documentation, and version changes.
 4. Create and push the exact tag `vX.Y.Z`.
 5. Create a GitHub Release for that tag using `.github/RELEASE_TEMPLATE.md`.
-6. Publish `ND-Blocking-Previs-macOS.zip` as an asset before publishing the
-   release.
+6. Publish `ND-Blocking-Previs-macOS-latest.zip` and its `.sha256` file as
+   assets before publishing the release.
 7. Do not upload a Windows asset until a real Windows package is validated.
 
-The current published Beta baseline is **0.1.1**. The next planned update test
-is **0.1.1 → 0.1.2**. Do not bump to 0.1.2 automatically; use the version
-helper when preparing that release.
+The current published Beta baseline is **0.2.0**. Future releases reuse the
+stable ZIP filename and upload it to the new published release. Do not bump a
+version automatically; use the version helper when preparing a release.
 
 Removing an obsolete Git tag does not remove a GitHub Release object. Release
 objects must be audited and removed separately only with explicit approval.
@@ -134,14 +142,14 @@ claim in this pipeline.
 
 ## Manual update test
 
-After publishing both releases:
+After publishing the release:
 
-1. Install or run the published version 0.1.1.
-2. Confirm the About panel shows 0.1.1.
-3. Prepare and publish a normal 0.1.2 release with the macOS ZIP asset.
+1. Install or run the published version 0.2.0.
+2. Confirm the About panel shows 0.2.0.
+3. Prepare and publish a later release with the stable macOS ZIP asset.
 4. Open About and choose **Check for updates**.
 5. Confirm the newer version is shown and **Download Update** opens the fixed
-   `/releases/latest/download/ND-Blocking-Previs-macOS.zip` URL.
+   `/releases/latest/download/ND-Blocking-Previs-macOS-latest.zip` URL.
 6. Download and install manually; the app does not install it for the user.
 7. Repeat with automatic checks enabled on the next desktop launch.
 
@@ -154,7 +162,7 @@ After a normal published release has the required macOS asset, verify the
 stable direct URL without relying on a versioned filename:
 
 ```sh
-curl -I -L https://github.com/duongtruongdp/nd-blocking-previs/releases/latest/download/ND-Blocking-Previs-macOS.zip
+curl -I -L https://github.com/duongtruongdp/nd-blocking-previs/releases/latest/download/ND-Blocking-Previs-macOS-latest.zip
 ```
 
 The response should resolve successfully to the published ZIP. A release must

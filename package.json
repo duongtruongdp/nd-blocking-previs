@@ -15,7 +15,7 @@
     "desktop:build": "tauri build --config src-tauri/tauri.conf.json",
     "live-server": "npm run live-server:build && node live-server/dist/live-server/server.js",
     "live-server:build": "tsc -p live-server/tsconfig.json",
-    "release:package": "node scripts/package-release.mjs",
+    "release:package": "bash scripts/package-macos-release.sh",
     "release:verify": "node scripts/version-tools.mjs verify-release",
     "version:check": "node scripts/version-tools.mjs check",
     "version:set": "node scripts/version-tools.mjs set",

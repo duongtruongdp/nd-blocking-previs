@@ -22,4 +22,4 @@ after the Windows Beta build is validated. Do not treat this page as a current
 Windows download or as authoritative SmartScreen bypass instructions.
 
 For now, use the [Web App](https://blocking.duongtruongdp.net/) or the
-[macOS Beta guide](MACOS_BETA_INSTALL.md).
+[macOS installation guide](INSTALLATION_MACOS.md).

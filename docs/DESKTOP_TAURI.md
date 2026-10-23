@@ -40,7 +40,7 @@ URL, not a `tauri://` URL:
 `https://blocking.duongtruongdp.net/?live=<session>`.
 
 For the current macOS Beta installation flow, see
-[`MACOS_BETA_INSTALL.md`](MACOS_BETA_INSTALL.md). The desktop Preferences
+[`INSTALLATION_MACOS.md`](INSTALLATION_MACOS.md). The desktop Preferences
 dialog also includes the same compact **Beta Installation Help** on macOS.
 
 The desktop bundle registers `.ndblock` as `ND Blocking Project` with the

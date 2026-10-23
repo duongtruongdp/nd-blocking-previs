@@ -8,7 +8,7 @@ const packageJsonPath = join(repositoryRoot, 'package.json')
 const packageLockPath = join(repositoryRoot, 'package-lock.json')
 const tauriConfigPath = join(repositoryRoot, 'src-tauri', 'tauri.conf.json')
 const cargoManifestPath = join(repositoryRoot, 'src-tauri', 'Cargo.toml')
-const releaseZipPath = join(repositoryRoot, 'release', 'ND-Blocking-Previs-macOS.zip')
+const releaseZipPath = join(repositoryRoot, 'release', 'ND-Blocking-Previs-macOS-latest.zip')
 const semverPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'))
@@ -79,14 +79,17 @@ const verifyRelease = () => {
     .split('\n')
     .map((entry) => entry.trim())
     .filter(Boolean)
-  const dmgEntries = entries.filter((entry) => entry.endsWith('.dmg'))
-  const expectedReadme = 'README - INSTALLATION.txt'
-  if (dmgEntries.length !== 1 || !entries.includes(expectedReadme) || entries.length !== 2) {
+  const expectedEntries = ['ND Blocking & Previs.app/', 'INSTALLATION.md', 'README.txt']
+  if (!entries.includes(expectedEntries[0]) || !entries.includes(expectedEntries[1]) || !entries.includes(expectedEntries[2])) {
     throw new Error(`Unexpected macOS package contents: ${entries.join(', ')}`)
   }
-  const readme = execFileSync('unzip', ['-p', releaseZipPath, expectedReadme], { encoding: 'utf8' })
-  for (const requiredText of [`Version: ${version}`, 'Dương Trương (Andy)', 'Platform: macOS Apple Silicon / arm64']) {
+  const readme = execFileSync('unzip', ['-p', releaseZipPath, 'README.txt'], { encoding: 'utf8' })
+  const installation = execFileSync('unzip', ['-p', releaseZipPath, 'INSTALLATION.md'], { encoding: 'utf8' })
+  for (const requiredText of [`ND Blocking & Previs ${version}`, 'macOS Apple Silicon / arm64']) {
     if (!readme.includes(requiredText)) throw new Error(`Release README is missing: ${requiredText}`)
+  }
+  for (const requiredText of ['INSTALLATION', 'not Apple-notarized', 'Open Anyway']) {
+    if (!installation.includes(requiredText)) throw new Error(`Installation guide is missing: ${requiredText}`)
   }
   console.log(`Release package verified for ${version}: ${releaseZipPath}`)
 }

@@ -2,7 +2,7 @@
 
 ## macOS
 
-[macOS Beta Installation Guide](MACOS_BETA_INSTALL.md)
+[macOS Installation Guide](INSTALLATION_MACOS.md)
 
 Current validated desktop build: Apple Silicon / arm64.
 

@@ -99,4 +99,4 @@ jobs:
         run: |
           echo "Source validation passed for ${{ steps.release.outputs.tag }}."
           echo "The macOS ZIP is built locally on Apple Silicon because the repository sidecar is arm64-only."
-          echo "Create the normal published GitHub Release and upload ND-Blocking-Previs-macOS.zip manually after npm run release:verify."
+          echo "Create the normal published GitHub Release and upload ND-Blocking-Previs-macOS-latest.zip and its checksum manually after npm run release:verify."

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { LiveReviewRole } from '../liveReview/protocol'
 import type { LiveReviewTransportStatus } from '../liveReview/liveReviewTransport'
 
@@ -8,12 +8,17 @@ type V2TopBarProps = {
   sceneName: string
   isDirty: boolean
   fileError: string | null
+  saveState?: 'idle' | 'saving' | 'saved' | 'error'
   onViewChange: (view: 'blocking' | 'camera' | 'shot-list') => void
   onNewProject: () => void
   onBackToLibrary?: () => void
   onSaveProject: () => void
   onSaveProjectAs: () => void
   onLoadProject: () => void
+  onOpenProjectSettings?: () => void
+  onOpenMediaManager?: () => void
+  onExportProjectPackage?: () => void
+  missingMediaCount?: number
   onProjectNameChange: (name: string) => void
   onExport: () => void
   onOpenAbout?: () => void
@@ -25,10 +30,33 @@ type V2TopBarProps = {
   onOpenLive?: () => void
 }
 
-export function V2TopBar({ view, projectName, sceneName, isDirty, fileError, onViewChange, onNewProject, onBackToLibrary, onSaveProject, onSaveProjectAs, onLoadProject, onProjectNameChange, onExport, onOpenAbout, exportDisabled = false, readOnly = false, liveStatus = 'idle', liveRole = null, liveViewerCount = 0, onOpenLive }: V2TopBarProps) {
+export function V2TopBar({ view, projectName, sceneName, isDirty, fileError, saveState = 'idle', onViewChange, onNewProject, onBackToLibrary, onSaveProject, onSaveProjectAs, onLoadProject, onOpenProjectSettings, onOpenMediaManager, onExportProjectPackage, missingMediaCount = 0, onProjectNameChange, onExport, onOpenAbout, exportDisabled = false, readOnly = false, liveStatus = 'idle', liveRole = null, liveViewerCount = 0, onOpenLive }: V2TopBarProps) {
   const skipBlurRef = useRef(false)
+  const projectMenuRef = useRef<HTMLDivElement>(null)
+  const projectMenuButtonRef = useRef<HTMLButtonElement>(null)
   const [editingProjectName, setEditingProjectName] = useState(false)
   const [projectNameDraft, setProjectNameDraft] = useState(projectName)
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false)
+
+  useEffect(() => {
+    if (!projectMenuOpen) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (!projectMenuRef.current?.contains(event.target as Node)) setProjectMenuOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setProjectMenuOpen(false)
+        projectMenuButtonRef.current?.focus()
+      }
+    }
+    window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [projectMenuOpen])
 
   const beginProjectRename = () => {
     setProjectNameDraft(projectName)
@@ -51,23 +79,31 @@ export function V2TopBar({ view, projectName, sceneName, isDirty, fileError, onV
 
   return (
     <header className="v2-topbar">
-      <div className="v2-brand">
-        <span className="v2-brand-mark">ND</span>
-        <span>Blocking &amp; Previs</span>
+      <div className="v2-project-menu-anchor" ref={projectMenuRef}>
+        <button className="v2-brand" ref={projectMenuButtonRef} aria-expanded={projectMenuOpen} aria-haspopup="menu" aria-label="Open Project menu" onClick={() => setProjectMenuOpen((open) => !open)} type="button">
+          <span className="v2-brand-mark">ND</span>
+          <span>Blocking &amp; Previs</span>
+          <span className="v2-brand-chevron" aria-hidden="true">⌄</span>
+        </button>
+        {projectMenuOpen ? <div className="v2-project-menu" role="menu" aria-label="Project menu">
+          {onBackToLibrary ? <button role="menuitem" className="v2-project-menu-item" onClick={() => { setProjectMenuOpen(false); onBackToLibrary() }} type="button">Projects</button> : null}
+          <button role="menuitem" className="v2-project-menu-item" disabled={readOnly} onClick={() => { setProjectMenuOpen(false); onNewProject() }} type="button">New Project</button>
+          <button role="menuitem" className="v2-project-menu-item" disabled={readOnly} onClick={() => { setProjectMenuOpen(false); onLoadProject() }} type="button">Load Project</button>
+          <div className="v2-project-menu-separator" role="separator" />
+          <button role="menuitem" className="v2-project-menu-item" disabled={readOnly || saveState === 'saving'} onClick={() => { setProjectMenuOpen(false); onSaveProject() }} type="button"><span>{saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : 'Save'}</span>{saveState === 'idle' ? <kbd>⌘S</kbd> : null}</button>
+          <button role="menuitem" className="v2-project-menu-item" disabled={readOnly || saveState === 'saving'} onClick={() => { setProjectMenuOpen(false); onSaveProjectAs() }} type="button">Save As…</button>
+          {onExportProjectPackage ? <button role="menuitem" className="v2-project-menu-item" disabled={readOnly} onClick={() => { setProjectMenuOpen(false); onExportProjectPackage() }} type="button">Export Project Package…</button> : null}
+          {onOpenProjectSettings ? <><div className="v2-project-menu-separator" role="separator" /><button role="menuitem" className="v2-project-menu-item" disabled={readOnly} onClick={() => { setProjectMenuOpen(false); onOpenProjectSettings() }} type="button">Project Settings…</button></> : null}
+          {onOpenMediaManager ? <><div className="v2-project-menu-separator" role="separator" /><button role="menuitem" className="v2-project-menu-item" onClick={() => { setProjectMenuOpen(false); onOpenMediaManager() }} type="button">Media Manager{missingMediaCount > 0 ? <span className="v2-project-menu-count">{missingMediaCount}</span> : null}</button></> : null}
+        </div> : null}
       </div>
       <div className="v2-project-context" title={fileError ?? projectName}>
         {editingProjectName && !readOnly ? <input className="v2-project-name-input v2-project-name-edit" aria-label="Project name" autoFocus size={Math.max(12, Math.min(36, projectNameDraft.length + 2))} value={projectNameDraft} onChange={(event) => setProjectNameDraft(event.target.value)} onBlur={() => { if (!skipBlurRef.current) commitProjectRename(projectNameDraft) }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commitProjectRename(projectNameDraft) } else if (event.key === 'Escape') { event.preventDefault(); cancelProjectRename() } }} /> : <button className="v2-project-name" aria-label={`Rename project ${projectName}`} onClick={beginProjectRename} disabled={readOnly} type="button"><span className="v2-project-name-label">{projectName}</span>{isDirty ? <span className="v2-unsaved-dot" aria-label="Unsaved Project changes">•</span> : null}</button>}
         <span className="v2-project-scene">/ {sceneName}</span>
       </div>
+      {saveState === 'saving' ? <span className="v2-save-status" role="status">Saving…</span> : saveState === 'saved' ? <span className="v2-save-status is-saved" role="status">Saved</span> : null}
       {fileError ? <span className="v2-file-error" role="alert">{fileError}</span> : null}
       <div className="v2-topbar-actions">
-        <div className="v2-file-actions" aria-label="Project file actions">
-          {onBackToLibrary ? <button className="v2-button" onClick={onBackToLibrary} title="Back to Project Library" type="button">Projects</button> : null}
-          <button className="v2-button" disabled={readOnly} onClick={onNewProject} title="New Project" type="button">New</button>
-          <button className="v2-button" disabled={readOnly} onClick={onLoadProject} title="Load Project" type="button">Load</button>
-          <button className="v2-button" disabled={readOnly} onClick={onSaveProject} title="Save Project (.ndblock)" type="button">Save</button>
-          <button className="v2-button" disabled={readOnly} onClick={onSaveProjectAs} title="Save Project As (.ndblock)" type="button">Save As</button>
-        </div>
         <div className="v2-segmented" aria-label="View mode">
           <button className={view === 'blocking' ? 'is-active' : ''} onClick={() => onViewChange('blocking')}>Blocking View</button>
           <button className={view === 'camera' ? 'is-active' : ''} onClick={() => onViewChange('camera')}>Camera View</button>

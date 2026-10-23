@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deleteShortcutForKey, destructiveShortcutTarget, editorShortcutForKey, timelineMarkShortcutForKey, timelinePlayPauseShortcut } from '../core/editorShortcuts'
+import { deleteShortcutForKey, destructiveShortcutTarget, editorShortcutForKey, timelineMarkShortcutForKey, timelinePlayPauseShortcut, timelineZoomShortcutForKey } from '../core/editorShortcuts'
 import { shortcutMatches } from '../core/shortcutRegistry'
 
 describe('timeline play/pause shortcut', () => {
@@ -23,6 +23,21 @@ describe('timeline mark shortcuts', () => {
   it('ignores mark shortcuts while editing a field', () => {
     expect(timelineMarkShortcutForKey('i', true)).toBeNull()
     expect(timelineMarkShortcutForKey('o', true)).toBeNull()
+  })
+})
+
+describe('unified timeline zoom shortcuts', () => {
+  it('maps 1 and 2 to one existing zoom step without caring which timeline is active', () => {
+    expect(timelineZoomShortcutForKey('1', false)).toBe('out')
+    expect(timelineZoomShortcutForKey('2', false)).toBe('in')
+  })
+
+  it('ignores zoom shortcuts while editing or when a modifier is held', () => {
+    expect(timelineZoomShortcutForKey('1', true)).toBeNull()
+    expect(timelineZoomShortcutForKey('2', false, { metaKey: true, ctrlKey: false })).toBeNull()
+    expect(timelineZoomShortcutForKey('1', false, { metaKey: false, ctrlKey: true })).toBeNull()
+    expect(timelineZoomShortcutForKey('2', false, { metaKey: false, ctrlKey: false, altKey: true })).toBeNull()
+    expect(timelineZoomShortcutForKey('1', false, { metaKey: false, ctrlKey: false, shiftKey: true })).toBeNull()
   })
 })
 

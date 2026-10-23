@@ -14,6 +14,7 @@ import {
   zoomV2Navigation,
 } from './navigationState'
 import { v2ToolForShortcut } from './interactionMath'
+import { registerWebGLRenderer } from './webglDiagnostics'
 
 const MAX_PIXEL_RATIO = 2
 const SELECTION_COLOR = '#f0b866'
@@ -80,6 +81,7 @@ export class V2StageRuntime {
   private readonly scene: THREE.Scene
   private readonly camera: THREE.PerspectiveCamera
   private readonly renderer: THREE.WebGLRenderer
+  private readonly webglDiagnosticsDispose: () => void
   private readonly navigation: V2NavigationState
   private readonly resizeObserver: ResizeObserver | null
   private readonly options: V2StageRuntimeOptions
@@ -118,7 +120,9 @@ export class V2StageRuntime {
     this.renderer.domElement.className = 'v2-stage-canvas'
     this.renderer.domElement.setAttribute('aria-label', 'V2 Blocking Stage')
     this.renderer.domElement.dataset.stageOwnership = 'v2-runtime'
+    this.renderer.domElement.dataset.webglIdentity = 'stage'
     this.renderer.domElement.tabIndex = 0
+    this.webglDiagnosticsDispose = registerWebGLRenderer(this.renderer, 'stage')
     this.renderer.domElement.addEventListener('contextmenu', this.handleContextMenu)
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown)
     this.renderer.domElement.addEventListener('pointermove', this.handlePointerMove)
@@ -242,6 +246,7 @@ export class V2StageRuntime {
     this.entities.forEach((entity) => entity.dispose())
     this.stageResourceDisposers.forEach((dispose) => dispose())
     this.renderer.dispose()
+    this.webglDiagnosticsDispose()
     canvas.remove()
   }
 

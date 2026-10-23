@@ -11,12 +11,28 @@ import { buildMasterRenderPlan, resolveMasterRenderFrame } from '../export/maste
 import { createProjectDocument } from '../core/projectDocument'
 import { createShotDocument } from '../core/shotDocument'
 import { createMusicClip } from '../core/masterSequence'
+import { createExportTracker, ExportStageError } from '../export/exportDiagnostics'
 
 describe('V2.6 video export logic', () => {
-  it('creates an inclusive integer Mark In to Mark Out frame range', () => {
-    expect(exportFrameRange(0, 47)).toEqual(Array.from({ length: 48 }, (_, frame) => frame))
-    expect(exportFrameRange(3, 3)).toEqual([3])
+  it('creates a start-inclusive, end-exclusive integer frame range', () => {
+    expect(exportFrameRange(0, 48)).toEqual(Array.from({ length: 48 }, (_, frame) => frame))
+    expect(exportFrameRange(12, 16)).toEqual([12, 13, 14, 15])
+    expect(exportFrameRange(3, 3)).toEqual([])
     expect(exportFrameRange(3.5, 8)).toEqual([])
+  })
+
+  it('captures the failing export stage and exact frame counters', () => {
+    const stages: string[] = []
+    const tracker = createExportTracker({ settings: { source: 'scene' }, onStage: (event) => stages.push(event.stage) }, 4)
+    tracker.report('rendering')
+    tracker.markRendered()
+    tracker.report('encoding')
+    tracker.markSubmitted()
+    const failure = tracker.fail(new Error('encoder finalization failed'))
+    expect(failure).toBeInstanceOf(ExportStageError)
+    expect(failure.stage).toBe('encoding')
+    expect(failure.diagnostics).toMatchObject({ totalFrames: 4, renderedFrames: 1, submittedFrames: 1 })
+    expect(stages).toEqual(['rendering', 'encoding'])
   })
 
   it('preserves rational frame durations', () => {
@@ -27,9 +43,9 @@ describe('V2.6 video export logic', () => {
   })
 
   it('derives export duration and media timestamps from the rational frame rate', () => {
-    expect(exportDurationSeconds(0, 47, { numerator: 24, denominator: 1 })).toBe(2)
-    expect(exportDurationSeconds(0, 112, { numerator: 24, denominator: 1 })).toBeCloseTo(113 / 24)
-    expect(exportDurationSeconds(0, 239, { numerator: 24000, denominator: 1001 })).toBeCloseTo(240 * 1001 / 24000)
+    expect(exportDurationSeconds(0, 48, { numerator: 24, denominator: 1 })).toBe(2)
+    expect(exportDurationSeconds(0, 113, { numerator: 24, denominator: 1 })).toBeCloseTo(113 / 24)
+    expect(exportDurationSeconds(0, 240, { numerator: 24000, denominator: 1001 })).toBeCloseTo(240 * 1001 / 24000)
     expect(frameTimestampMicroseconds(0, { numerator: 24, denominator: 1 })).toBe(0)
     expect(frameTimestampMicroseconds(1, { numerator: 24, denominator: 1 })).toBe(41_667)
     expect(frameTimestampMicroseconds(24, { numerator: 24000, denominator: 1001 })).toBe(1_001_000)
@@ -58,7 +74,7 @@ describe('V2.6 video export logic', () => {
   it('formats safe download names and durations', () => {
     expect(sanitizeExportFilename('Scene / 01:Wide')).toBe('Scene_01_Wide')
     expect(exportFilename('Scene / 01', 'Camera: 01', 0, 47)).toBe('Scene_01_Camera_01_0-47.webm')
-    expect(formatExportDuration(0, 47, { numerator: 24, denominator: 1 })).toBe('00:02:00')
+    expect(formatExportDuration(0, 48, { numerator: 24, denominator: 1 })).toBe('00:02:00')
     expect(exportFilename('Scene', 'Camera', 0, 47, 'mp4')).toBe('Scene_Camera_0-47.mp4')
   })
 
@@ -140,6 +156,7 @@ describe('V2.6 video export logic', () => {
     expect(resolveMasterRenderFrame(fullProject, 2)).toMatchObject({ sceneId: sceneTwo.metadata.id, sourceFrame: 10, cameraId: cameraTwo.id })
     expect(resolveMasterRenderFrame(fullProject, 0).evaluatedEntities).toBeDefined()
     expect(resolveMasterRenderFrame(fullProject, plan.endFrameExclusive - 1).sourceFrame).toBe(12)
+    expect(() => resolveMasterRenderFrame(fullProject, plan.endFrameExclusive)).toThrow(/renderable samples/i)
   })
 
   it('rejects Master clips with source frames outside their Shot', () => {

@@ -23,10 +23,12 @@ math authorities.
 - clip boundaries are represented in `clipsUsed`, making exact hard cuts
   testable without screenshot tests.
 
-`MasterExportRenderer` owns one clean `VideoExportRenderer` per Scene/Camera
-pair. It never changes the editor active Scene, playhead, selection, or
-camera. The output canvas is fixed from the selected Delivery Frame and width.
-Existing camera framing and the existing clean export render convention remain
+`MasterExportRenderer` owns one export-only `VideoExportRenderer` for the full
+Master operation. At Scene/Camera boundaries it replaces the scene-owned
+Actor and scenic runtimes in place while retaining the export WebGL context;
+it never changes the editor active Scene, playhead, selection, or camera. The
+output canvas is fixed from the selected Delivery Frame and width. Existing
+camera framing and the existing clean export render convention remain
 authoritative; editor guides and selection overlays are not rendered.
 
 ## Browser and desktop paths
@@ -35,8 +37,9 @@ authoritative; editor guides and selection overlays are not rendered.
 - Browser WebM uses the existing MediaRecorder canvas path.
 - Desktop writes exact Master PNG frames, then invokes the existing FFmpeg
   runtime. The desktop path is not a second evaluator.
-- Cancellation is checked between frames and during encoding; temporary
-  renderers and workspaces are disposed in `finally` blocks.
+- Cancellation is checked between frames and during encoding; the single
+  export renderer, its scene-owned runtimes, and temporary workspaces are
+  disposed deterministically in `finally` blocks.
 
 ## Music contract
 
@@ -52,8 +55,8 @@ extend the Master render beyond the video range.
 
 ## Scene compatibility
 
-Scene export keeps its established inclusive Mark In/Mark Out behavior and
-existing renderer. The new `source` field is optional for serialized/backward
+Scene export uses the same start-inclusive/end-exclusive export range contract
+as Master export. The new `source` field is optional for serialized/backward
 compatible callers and defaults to Scene. Master-only fields are ignored by
 the Scene path. No Camera database, capture math, StageEngine, or Camera View
 behavior is changed by M4C.

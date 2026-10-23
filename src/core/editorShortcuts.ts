@@ -14,6 +14,7 @@ export function editorShortcutForKey(input: EditorShortcutInput): EditorShortcut
   if (key === 'v' && !input.shiftKey) return 'paste'
   if (key === 'd' && !input.shiftKey) return 'duplicate'
   if (key === 'z') return input.shiftKey ? 'redo' : 'undo'
+  if (key === 'y' && input.ctrlKey && !input.metaKey && !input.shiftKey) return 'redo'
   return null
 }
 
@@ -34,10 +35,25 @@ export function timelinePlayPauseShortcut(key: string, isTextEditing: boolean): 
 
 export type TimelineMarkShortcut = 'in' | 'out'
 
+export type TimelineZoomShortcut = 'out' | 'in'
+
+export type TimelineZoomShortcutHandler = (direction: -1 | 1) => void
+
 export function timelineMarkShortcutForKey(key: string, isTextEditing: boolean): TimelineMarkShortcut | null {
   if (isTextEditing) return null
   const normalized = key.toLowerCase()
   if (normalized === 'i') return 'in'
   if (normalized === 'o') return 'out'
+  return null
+}
+
+export function timelineZoomShortcutForKey(
+  key: string,
+  isTextEditing: boolean,
+  modifiers: Pick<EditorShortcutInput, 'metaKey' | 'ctrlKey'> & { altKey?: boolean; shiftKey?: boolean } = { metaKey: false, ctrlKey: false },
+): TimelineZoomShortcut | null {
+  if (isTextEditing || modifiers.metaKey || modifiers.ctrlKey || modifiers.altKey || modifiers.shiftKey) return null
+  if (key === '1') return 'out'
+  if (key === '2') return 'in'
   return null
 }

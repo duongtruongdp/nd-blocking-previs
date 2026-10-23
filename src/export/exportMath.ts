@@ -16,8 +16,8 @@ export type CropRect = {
 }
 
 export function exportFrameRange(markIn: number, markOut: number): number[] {
-  if (!Number.isInteger(markIn) || !Number.isInteger(markOut) || markOut < markIn) return []
-  return Array.from({ length: markOut - markIn + 1 }, (_, index) => markIn + index)
+  if (!Number.isInteger(markIn) || !Number.isInteger(markOut) || markOut <= markIn) return []
+  return Array.from({ length: markOut - markIn }, (_, index) => markIn + index)
 }
 
 export function exportFrameCount(markIn: number, markOut: number): number {
@@ -109,6 +109,6 @@ export function exportFilename(sceneName: string, cameraName: string, markIn: nu
 
 export function validateExportRequest(document: SceneDocument, cameraId: string | null, markIn: number, markOut: number): string | null {
   if (!cameraId || !document.cameras.some((camera) => camera.id === cameraId)) return 'Add or activate a Camera before exporting video.'
-  if (!Number.isInteger(markIn) || !Number.isInteger(markOut) || markOut < markIn) return 'Mark Out must be at or after Mark In.'
+  if (!Number.isInteger(markIn) || !Number.isInteger(markOut) || markOut <= markIn) return 'Mark Out must be after Mark In.'
   return null
 }

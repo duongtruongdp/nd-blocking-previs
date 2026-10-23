@@ -17,4 +17,10 @@ The Export Shot List dialog defaults PDF/Print from the active view and exposes 
 
 Print uses `@page { size: landscape; margin: 12mm 14mm; }`, full-width content inside that printable area, a spaced project/title header, and no negative offsets or viewport-width positioning. Storyboard cards and table rows use page-break avoidance. The table uses `thead { display: table-header-group; }` so browsers can repeat the header on subsequent pages when supported.
 
-Print never scales all Shots onto one page. The browser remains responsible for Save as PDF; no PDF library or server-side rendering was added.
+Print never scales all Shots onto one page. The browser remains responsible for Save as PDF in Web builds. The packaged desktop app uses the same print model to render isolated landscape pages into a lightweight JPEG-backed PDF, then saves those bytes through the existing native export file dialog. This avoids relying on `window.print()` inside the Tauri WebView while keeping the browser print path unchanged.
+
+Desktop PDF behavior
+
+- `storyboard` and `list` use the shared `ShotListPrintModel`, including enabled columns, thumbnails, missing-thumbnail fallbacks, long values, and Unicode rendered by the platform canvas font.
+- Native success is shown only after the bytes have been written. Cancelled destination selection returns to the dialog without success, and write/reveal failures remain explicit.
+- The generated PDF is intentionally dependency-free and image-backed; it is optimized for reliable previs delivery rather than selectable/searchable PDF text.

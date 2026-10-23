@@ -2,6 +2,11 @@ import type { SceneDocument } from './sceneDocument'
 import type { ShotDocument } from './shotDocument'
 import { createMasterSequenceDocument, type MasterSequenceDocument } from './masterSequence'
 import { createDefaultShotListSettings, type ShotListSettings } from './shotListSettings'
+import { CAMERA_DATABASE } from './cameraDatabase'
+
+export type ProjectCameraDefaults = {
+  cameraModelId: string
+}
 
 export type ProjectSettings = {
   shotList?: ShotListSettings
@@ -25,6 +30,7 @@ export type ProjectDocument = {
   activeShotId: string | null
   masterSequence: MasterSequenceDocument
   settings: ProjectSettings
+  cameraDefaults: ProjectCameraDefaults
 }
 
 export function createProjectDocument(id: string, name: string, scene: SceneDocument, now = new Date().toISOString()): ProjectDocument {
@@ -39,6 +45,7 @@ export function createProjectDocument(id: string, name: string, scene: SceneDocu
     activeShotId: null,
     masterSequence: createMasterSequenceDocument(),
     settings: { shotList: createDefaultShotListSettings() },
+    cameraDefaults: { cameraModelId: CAMERA_DATABASE[0]?.id ?? '' },
   }
 }
 

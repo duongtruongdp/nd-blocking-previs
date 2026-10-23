@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { ActorDocument, CameraDocument, SceneDocument } from '../core/sceneDocument'
+import type { ProjectDocument } from '../core/projectDocument'
 import { cameraProjectionForDocument } from '../runtime/cameraMath'
 import { createActorRuntime, type ActorRuntime } from '../runtime/actor/actorRuntime'
 import { createScenicVisual, scenicGeometrySignature, type ScenicDefinition, type ScenicVisual } from '../runtime/scenicRuntime'
@@ -8,6 +9,8 @@ import { centeredCrop, desqueezedCaptureAspect, dimensionsForDeliveryAspect, del
 import type { VideoExportSettings } from './exportTypes'
 import { resolveOpeningAgainstWalls } from '../architecture/wallMath'
 import type { EvaluatedEntityState } from '../timeline/timelineEvaluator'
+import { logWebGLDiagnostics, registerWebGLRenderer } from '../runtime/webglDiagnostics'
+import { drawShotInfoBurnIn, resolveSceneShotInfoBurnInModel } from './shotInfoBurnIn'
 
 /**
  * Dedicated production render path for browser video export.
@@ -25,17 +28,34 @@ export class VideoExportRenderer {
   private readonly scenicRuntimes = new Map<string, ScenicVisual>()
   private readonly scenicSignatures = new Map<string, string>()
   private readonly resources: Array<THREE.BufferGeometry | THREE.Material> = []
-  private readonly document: SceneDocument
-  private readonly settings: VideoExportSettings
-  private readonly sourceWidth: number
-  private readonly sourceHeight: number
-  private readonly deliveryAspectOverride: number | null
+  private document: SceneDocument
+  private settings: VideoExportSettings
+  private sourceWidth: number
+  private sourceHeight: number
+  private deliveryAspectOverride: number | null
+  private readonly diagnosticIdentity: 'scene-export' | 'master-export'
+  private readonly shotInfoProject: ProjectDocument | null
+  private readonly shotInfoProjectName: string
+  private readonly drawShotInfo: boolean
+  private exportContextLost = false
   private disposed = false
+  private disposing = false
+  private readonly webglDiagnosticsDispose: () => void
 
-  constructor(sceneDocument: SceneDocument, settings: VideoExportSettings, options: { outputDimensions?: ExportDimensions; deliveryAspectOverride?: number } = {}) {
+  private readonly handleContextLost = (event: Event): void => {
+    event.preventDefault()
+    this.exportContextLost = true
+    if (import.meta.env.DEV) console.error('[export] dedicated WebGL context lost', { renderer: this.diagnosticIdentity, disposing: this.disposing })
+  }
+
+  constructor(sceneDocument: SceneDocument, settings: VideoExportSettings, options: { outputDimensions?: ExportDimensions; deliveryAspectOverride?: number; diagnosticIdentity?: 'scene-export' | 'master-export'; shotInfoProject?: ProjectDocument; shotInfoProjectName?: string; drawShotInfo?: boolean } = {}) {
     this.document = sceneDocument
     this.settings = settings
     this.deliveryAspectOverride = options.deliveryAspectOverride ?? null
+    this.diagnosticIdentity = options.diagnosticIdentity ?? 'scene-export'
+    this.shotInfoProject = options.shotInfoProject ?? null
+    this.shotInfoProjectName = options.shotInfoProjectName ?? ''
+    this.drawShotInfo = options.drawShotInfo !== false
     this.canvas = window.document.createElement('canvas')
     const deliveryAspect = options.deliveryAspectOverride ?? deliveryAspectForCamera(settings.deliveryAspectRatio, settings.cameraId, sceneDocument)
     const outputDimensions = options.outputDimensions ?? dimensionsForDeliveryAspect(settings.width, deliveryAspect)
@@ -49,20 +69,32 @@ export class VideoExportRenderer {
     this.sourceWidth = outputDimensions.width
     this.sourceHeight = dimensionsForDeliveryAspect(outputDimensions.width, captureAspect).height
     this.sourceCanvas = window.document.createElement('canvas')
+    this.sourceCanvas.dataset.webglIdentity = this.diagnosticIdentity
     this.sourceRenderer = new THREE.WebGLRenderer({ canvas: this.sourceCanvas, antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' })
     this.sourceRenderer.setPixelRatio(1)
     this.sourceRenderer.setSize(this.sourceWidth, this.sourceHeight, false)
     this.sourceRenderer.setClearColor('#111721', 1)
     this.sourceRenderer.outputColorSpace = THREE.SRGBColorSpace
+    this.sourceCanvas.addEventListener('webglcontextlost', this.handleContextLost, false)
+    this.webglDiagnosticsDispose = registerWebGLRenderer(this.sourceRenderer, this.diagnosticIdentity)
+    logWebGLDiagnostics(`${this.diagnosticIdentity} created`)
     this.createEnvironment()
     this.cameraMount.add(this.camera)
     this.scene.add(this.cameraMount)
-    this.syncActors(sceneDocument.actors)
-    this.syncScenic([...sceneDocument.props, ...sceneDocument.walls, ...sceneDocument.openings.map((opening) => resolveOpeningAgainstWalls(opening, sceneDocument.walls)), ...sceneDocument.lights])
+    this.configureScene(sceneDocument, settings, options)
+  }
+
+  /** Replace scene-owned Three.js resources while retaining the export WebGL context. */
+  reconfigureScene(sceneDocument: SceneDocument, settings: VideoExportSettings, options: { outputDimensions?: ExportDimensions; deliveryAspectOverride?: number } = {}): number {
+    if (this.disposed) throw new Error('The export renderer has been disposed.')
+    const releasedResources = this.disposeSceneResources()
+    this.configureScene(sceneDocument, settings, options)
+    return releasedResources
   }
 
   renderFrame(frame: number, evaluatedOverride?: Record<string, EvaluatedEntityState>): void {
     if (this.disposed) throw new Error('The export renderer has been disposed.')
+    if (this.exportContextLost || this.sourceRenderer.getContext().isContextLost()) throw new Error('The dedicated export graphics context was lost.')
     const evaluated = evaluatedOverride ?? evaluateExportFrame(this.document, frame)
     const cameraDocument = this.resolveCamera(frame, evaluated)
     if (!cameraDocument) throw new Error('The active Camera is not available for export.')
@@ -108,6 +140,9 @@ export class VideoExportRenderer {
     const crop = centeredCrop(this.sourceWidth, this.sourceHeight, deliveryAspect)
     this.outputContext.clearRect(0, 0, this.canvas.width, this.canvas.height)
     this.outputContext.drawImage(this.sourceCanvas, crop.x, crop.y, crop.width, crop.height, 0, 0, this.canvas.width, this.canvas.height)
+    if (this.drawShotInfo && this.shotInfoProject && this.settings.source !== 'master' && this.settings.shotInfoBurnIn?.enabled) {
+      drawShotInfoBurnIn(this.outputContext, this.canvas.width, this.canvas.height, resolveSceneShotInfoBurnInModel(this.shotInfoProject, this.shotInfoProjectName, this.document, cameraDocument.id, frame, this.document.timeline.frameRate, evaluated), this.settings.shotInfoBurnIn)
+    }
   }
 
   async captureFramePng(frame: number): Promise<Blob> {
@@ -119,16 +154,56 @@ export class VideoExportRenderer {
 
   dispose(): void {
     if (this.disposed) return
+    this.disposing = true
     this.disposed = true
+    this.sourceCanvas.removeEventListener('webglcontextlost', this.handleContextLost, false)
     this.actorRuntimes.forEach((runtime) => runtime.dispose())
     this.scenicRuntimes.forEach((runtime) => runtime.dispose())
     this.scenicSignatures.clear()
     this.resources.forEach((resource) => resource.dispose())
     this.sourceRenderer.dispose()
+    // This renderer is export-owned. Explicitly release its WebGL context so
+    // native export cannot leave an extra high-resolution context resident in
+    // the desktop WebView. Interactive renderers are never force-released.
+    this.sourceRenderer.forceContextLoss()
+    this.webglDiagnosticsDispose()
+    logWebGLDiagnostics(`${this.diagnosticIdentity} disposed`)
     this.sourceCanvas.width = 0
     this.sourceCanvas.height = 0
     this.canvas.width = 0
     this.canvas.height = 0
+  }
+
+  private configureScene(sceneDocument: SceneDocument, settings: VideoExportSettings, options: { outputDimensions?: ExportDimensions; deliveryAspectOverride?: number }): void {
+    this.document = sceneDocument
+    this.settings = settings
+    this.deliveryAspectOverride = options.deliveryAspectOverride ?? null
+    const deliveryAspect = options.deliveryAspectOverride ?? deliveryAspectForCamera(settings.deliveryAspectRatio, settings.cameraId, sceneDocument)
+    const outputDimensions = options.outputDimensions ?? dimensionsForDeliveryAspect(settings.width, deliveryAspect)
+    this.sourceWidth = outputDimensions.width
+    const captureAspect = desqueezedCaptureAspect(sceneDocument, settings.cameraId) ?? 16 / 9
+    this.sourceHeight = dimensionsForDeliveryAspect(this.sourceWidth, captureAspect).height
+    this.canvas.width = outputDimensions.width
+    this.canvas.height = outputDimensions.height
+    this.sourceRenderer.setSize(this.sourceWidth, this.sourceHeight, false)
+    this.syncActors(sceneDocument.actors)
+    this.syncScenic([...sceneDocument.props, ...sceneDocument.walls, ...sceneDocument.openings.map((opening) => resolveOpeningAgainstWalls(opening, sceneDocument.walls)), ...sceneDocument.lights])
+  }
+
+  private disposeSceneResources(): number {
+    const releasedResources = this.actorRuntimes.size + this.scenicRuntimes.size
+    this.actorRuntimes.forEach((runtime) => {
+      runtime.root.removeFromParent()
+      runtime.dispose()
+    })
+    this.actorRuntimes.clear()
+    this.scenicRuntimes.forEach((runtime) => {
+      runtime.root.removeFromParent()
+      runtime.dispose()
+    })
+    this.scenicRuntimes.clear()
+    this.scenicSignatures.clear()
+    return releasedResources
   }
 
   private resolveCamera(frame: number, evaluatedEntities?: Record<string, EvaluatedEntityState>): CameraDocument | null {

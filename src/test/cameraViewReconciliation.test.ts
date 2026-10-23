@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { cameraViewEntityCollections, cameraViewRenderableEntityIds, sceneScopeChanged, staleRuntimeEntityIds } from '../runtime/cameraViewReconciliation'
+import * as THREE from 'three'
+import { cameraViewEntityCollections, cameraViewRenderableEntityIds, detachCameraViewRuntimeRoot, sceneScopeChanged, staleRuntimeEntityIds } from '../runtime/cameraViewReconciliation'
 
 describe('Camera View runtime reconciliation bookkeeping', () => {
   it('removes a deleted Prop from the authoritative scenic ID set', () => {
@@ -38,5 +39,18 @@ describe('Camera View runtime reconciliation bookkeeping', () => {
     expect(staleRuntimeEntityIds(before.actorIds, after.actorIds)).toEqual(['actor-01'])
     expect(staleRuntimeEntityIds(before.scenicIds, after.scenicIds)).toEqual(['prop-01'])
     expect(after.cameraId).toBeNull()
+  })
+
+  it('detaches the complete runtime root from its actual Three.js parent', () => {
+    const scene = new THREE.Scene()
+    const runtimeRoot = new THREE.Group()
+    runtimeRoot.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)))
+    scene.add(runtimeRoot)
+
+    expect(runtimeRoot.parent).toBe(scene)
+    expect(detachCameraViewRuntimeRoot(runtimeRoot)).toBe(true)
+    expect(runtimeRoot.parent).toBeNull()
+    expect(scene.children).not.toContain(runtimeRoot)
+    expect(runtimeRoot.children).toHaveLength(1)
   })
 })

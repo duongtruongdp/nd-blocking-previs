@@ -6,9 +6,13 @@ import { V2Timeline } from './components/V2Timeline'
 import { V2MasterTimeline } from './components/V2MasterTimeline'
 import { V2MasterShotBin } from './components/V2MasterShotBin'
 import { V2MasterInspector, type MasterInspectorSelection } from './components/V2MasterInspector'
+import { V2MediaManager } from './components/V2MediaManager'
 import { V2TopBar } from './components/V2TopBar'
+import { V2ProjectSettings } from './components/V2ProjectSettings'
+import { V2UnsavedChangesDialog, type UnsavedDialogChoice, type UnsavedDialogPurpose } from './components/V2UnsavedChangesDialog'
 import { V2ProjectLibrary } from './components/V2ProjectLibrary'
-import { closeDecisionForUnsavedChoice, platformAdapter, PlatformFileError, type DesktopDropEvent } from './platform/platformAdapter'
+import { V2ProjectPackageModal, type ProjectPackageModalResult, type ProjectPackageModalStatus } from './components/V2ProjectPackageModal'
+import { platformAdapter, PlatformFileError, type DesktopDropEvent, type PlatformFile } from './platform/platformAdapter'
 import { basename, createRecentProjectEntry, duplicateFilename, filenameWithoutExtension, firstSupportedProjectPath, isProjectFilePath, projectFilenameFromInput, recentProjectIdentity, recentProjectThumbnailKey, removeRecentProject, siblingPath, sortRecentProjects, updateRecentProjectPath, upsertRecentProject, type RecentProjectEntry } from './platform/projectLibrary'
 import { createDefaultProps } from './scene/testEntities'
 import { resolveFrameGuideSelection } from './core/frameGuideSelection'
@@ -21,20 +25,26 @@ import { createShotDocument, createShotId, duplicateShotName, nextShotName, reso
 import { normalizeShotListSettings, type ShotListSettings } from './core/shotListSettings'
 import { reorderShotDocuments } from './core/shotListModel'
 import { applyCollaborativePlanning, canEditCollaborativeShotCamera } from './core/collaborativePlanning'
-import { createMusicClip, duplicateMasterClip, effectiveMasterRenderRange, insertMasterClipAt, masterSequenceDurationFrames, masterSequenceFrameRate, removeMasterClip, reorderMasterClip, resolveMasterFrame, resolveMasterMusicTime, sameFrameRate, setMasterSequenceMark, updateMasterClipRange } from './core/masterSequence'
+import { clampMasterTimelineBoundary, createMusicClip, duplicateMasterClip, effectiveMasterRenderRange, insertMasterClipAt, masterClipDurationFrames, masterPlaybackFrameAt, masterSequenceFrameRate, masterSequenceVisualDurationFrames, orderedMasterClips, removeMasterClip, reorderMasterClip, resolveMasterFrame, resolveMasterMusicTime, sameFrameRate, setMasterSequenceMark, updateMasterClipRange, type MasterGraphicsTrackDocument, type MasterImageClipDocument } from './core/masterSequence'
+import { DEFAULT_IMAGE_CLIP_DURATION_FRAMES, clampFadeFrames } from './core/masterGraphics'
+import { createTimelineWorkspaceSessionState, getSceneTimelineWorkspace, pruneTimelineWorkspaceScenes, resetTimelineWorkspaceState, updateMasterTimelineWorkspace, updateSceneTimelineWorkspace, type TimelineWorkspaceSessionState } from './core/timelineWorkspaceSession'
+import { createWorkspaceSidebarState, updateWorkspaceSidebarSection, workspaceSidebarSessionKey, type WorkspaceSidebarSection, type WorkspaceSidebarSectionState } from './core/workspaceSidebarSession'
 import { resolveMasterPreviewContext } from './core/masterPreview'
 import { resolveShotCamera } from './core/shotCameraResolver'
 import { decodeMusicFile } from './core/musicWaveform'
 import { deleteMusicAsset, loadMusicAsset, saveMusicAsset } from './core/musicAssetStore'
-import { CAMERA_DATABASE } from './core/cameraDatabase'
+import { deleteImageAsset, loadImageAsset, saveImageAsset } from './core/imageAssetStore'
+import { decodeImageBlob, imageClipsIntersectingRange, isSupportedImageFile, resolveImageAssetHealth, scanImageAssets, type ImageAssetHealth } from './core/mediaHealth'
+import { CAMERA_DATABASE, resolveCameraDefinition } from './core/cameraDatabase'
 import { defaultCameraPlacement } from './core/cameraPlacement'
+import { projectCameraCreationSpec } from './core/projectCameraDefaults'
 import { cameraRotationLookingAt } from './runtime/cameraMath'
 import { cameraAimRotation, cameraPositionAfterMove, cameraSubjectDistance, currentEditableCameraPose, type CameraBlockingMove } from './runtime/cameraBlocking'
 import { cameraPositionForActorFraming, type FramingPreset, type TargetAimPoint } from './runtime/compositionMath'
 import { createEditorClipboard, pasteEditorClipboard, type EditorClipboard } from './core/editorClipboard'
-import { EditorHistory, type EditorHistorySnapshot } from './core/editorHistory'
+import { type EditorHistorySnapshot } from './core/editorHistory'
 import { ProjectHistory } from './core/projectHistory'
-import { destructiveShortcutTarget, editorShortcutForKey } from './core/editorShortcuts'
+import { destructiveShortcutTarget, editorShortcutForKey, timelineZoomShortcutForKey, type TimelineZoomShortcutHandler } from './core/editorShortcuts'
 import { clampTimelineHeight, TIMELINE_HEIGHT_DEFAULT, timelineHeightBounds } from './core/workspaceLayout'
 import type { StageSelection, StageTool, StageTransform, StageTransformBatch } from './stage-engine'
 import { evaluateTimeline } from './timeline/timelineEvaluator'
@@ -44,15 +54,20 @@ import { createTimelineKeyframeClipboardGroup, pasteTimelineKeyframes, type Time
 import { captureTimelineValue, commitTimelineTransform, type SuspendedTimelineProperties, type TimelineTransformCommit } from './timeline/transformOwnership'
 import { V2ExportModal } from './components/V2ExportModal'
 import { V2ShotListWorkspace } from './components/V2ShotListWorkspace'
-import { buildShotListCsv, shotListExportFilename, type ShotListExportScope } from './core/shotListExport'
-import { exportFilename } from './export/exportMath'
+import { buildShotListCsv, buildShotListPrintModel, shotListExportFilename, type ShotListExportScope, type ShotListPrintLayout } from './core/shotListExport'
+import { buildShotListPdf } from './export/shotListPdf'
+import { deliveryAspectForCamera, dimensionsForDeliveryAspect, exportFilename, exportFrameCount } from './export/exportMath'
 import { buildMasterRenderPlan } from './export/masterRenderPlan'
 import { isExportCancelled, userFacingExportError } from './export/exportErrors'
-import type { VideoExportProgress, VideoExportSettings, VideoExportStatus } from './export/exportTypes'
+import { successMetadataForExport, type ExportSaveResult } from './export/exportCompletion'
+import { defaultShotInfoBurnInSettings, loadShotInfoBurnInSettings, saveShotInfoBurnInSettings } from './export/shotInfoBurnIn'
+import type { VideoExportProgress, VideoExportRequest, VideoExportSettings, VideoExportStatus, VideoExportSuccess } from './export/exportTypes'
 import { parseSceneFile, prepareSceneForSave, sceneFilename, serializeScene, SceneFileError } from './core/scenePersistence'
-import { parseProjectFile, prepareProjectForSave, projectFilename, ProjectFileError, serializeProject } from './core/projectPersistence'
+import { normalizeCameraDefaults, parseProjectFile, prepareProjectForSave, projectFilename, ProjectFileError, serializeProject } from './core/projectPersistence'
+import { buildProjectPackage, isProjectPackageName, parseProjectPackage, prepareProjectPackageImport, ProjectPackageError, ProjectPackageMediaError, restoreProjectPackageMedia, projectPackageFilename, type ProjectPackageErrorCode, type ProjectPackageStorage } from './core/projectPackage'
 import { creativeSceneChanged } from './core/sceneDirty'
 import { creativeProjectFingerprint } from './core/projectDirty'
+import { checkpointForSuccessfulSave, currentDocumentMatchesSave, isProjectDirty as projectSaveIsDirty, type ProjectSaveCheckpoint } from './core/projectSaveState'
 import * as THREE from 'three'
 import { sunAnglesFromHelperPosition } from './runtime/sunMapping'
 import type { WallDrawingState } from './architecture/wallDrawing'
@@ -78,17 +93,24 @@ import { buildLiveReviewInviteUrl, liveReviewRelayConfig, parseLiveReviewInviteS
 import { createLiveReviewSnapshot } from './liveReview/projectSnapshot'
 import { defaultLiveReviewState, randomLiveReviewId, type LiveReviewChatMessage, type LiveReviewCollaborativeEntityType, type LiveReviewEditResult, type LiveReviewLease, type LiveReviewParticipant, type LiveReviewPlanningCommit, type LiveReviewPlanningDraft, type LiveReviewPointer, type LiveReviewRole, type LiveReviewServerMessage, type LiveReviewShotField, type LiveReviewState, type LiveReviewTimelineCommit, type LiveReviewTimelineProperty, type LiveReviewTransform, type LiveReviewTransformCommit } from './liveReview/protocol'
 
-function createDefaultV2Scene(id = 'scene-01', name = 'Scene 01', includeDefaultProps = true): SceneDocument {
+function createDefaultV2Scene(id = 'scene-01', name = 'Scene 01', includeDefaultProps = true, cameraModelId = CAMERA_DATABASE[0]?.id ?? ''): SceneDocument {
   const scene = createEmptySceneDocument()
+  const cameraSpec = projectCameraCreationSpec(cameraModelId)
+  const definition = cameraSpec?.definition ?? null
+  const placement = defaultCameraPlacement(1)
+  const camera = definition && cameraSpec ? createCameraDocument('camera-01', 'Camera 01', placement.position, cameraRotationLookingAt(placement.position, placement.target), definition.id, cameraSpec.captureMode.id) : null
   return {
     ...scene,
     metadata: { ...scene.metadata, id, name },
     props: includeDefaultProps ? createDefaultProps() : [],
+    cameras: camera ? [camera] : [],
+    activeCameraId: camera?.id ?? null,
   }
 }
 
 function createDefaultV2Project(): ProjectDocument {
-  return createProjectDocument('project-01', 'Untitled Project', createDefaultV2Scene())
+  const cameraModelId = CAMERA_DATABASE[0]?.id ?? ''
+  return { ...createProjectDocument('project-01', 'Untitled Project', createDefaultV2Scene('scene-01', 'Scene 01', true, cameraModelId)), cameraDefaults: { cameraModelId } }
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -182,6 +204,29 @@ function V2EditorApp() {
   const [projectDocument, setProjectDocument] = useState(createDefaultV2Project)
   const activeSceneEntry = projectDocument.scenes.find((entry) => entry.id === projectDocument.activeSceneId) ?? projectDocument.scenes[0]
   const sceneDocument = activeSceneEntry.scene
+  const workspaceSidebarProjectKey = workspaceSidebarSessionKey(projectDocument.id, projectDocument.createdAt)
+  const [workspaceSidebarSessions, setWorkspaceSidebarSessions] = useState<Record<string, WorkspaceSidebarSectionState>>(() => {
+    const initialScene = projectDocument.scenes.find((entry) => entry.id === projectDocument.activeSceneId)?.scene ?? projectDocument.scenes[0]?.scene
+    return {
+      [workspaceSidebarProjectKey]: createWorkspaceSidebarState({
+        architecture: (initialScene?.walls.length ?? 0) + (initialScene?.openings.length ?? 0),
+        lights: initialScene?.lights.length ?? 0,
+        groups: initialScene?.groups.length ?? 0,
+      }),
+    }
+  })
+  const workspaceSidebarState = workspaceSidebarSessions[workspaceSidebarProjectKey] ?? createWorkspaceSidebarState({
+    architecture: sceneDocument.walls.length + sceneDocument.openings.length,
+    lights: sceneDocument.lights.length,
+    groups: sceneDocument.groups.length,
+  })
+  const setWorkspaceSidebarSection = (section: WorkspaceSidebarSection, expanded: boolean) => {
+    setWorkspaceSidebarSessions((current) => {
+      const previous = current[workspaceSidebarProjectKey] ?? workspaceSidebarState
+      const next = updateWorkspaceSidebarSection(previous, section, expanded)
+      return next === previous ? current : { ...current, [workspaceSidebarProjectKey]: next }
+    })
+  }
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null)
   const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([])
   const [renameRequest, setRenameRequest] = useState<{ entityId: string; token: number } | null>(null)
@@ -192,21 +237,30 @@ function V2EditorApp() {
   const [cameraMoveReview, setCameraMoveReview] = useState<CameraMoveReviewState | null>(null)
   const [, setShotReview] = useState<ShotReviewState | null>(null)
   const [isDirty, setIsDirty] = useState(false)
+  const [projectSaveStatus, setProjectSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [recentProjects, setRecentProjects] = useState<RecentProjectEntry[]>([])
   const [recentProjectThumbnails, setRecentProjectThumbnails] = useState<Record<string, string | null>>({})
   const [recentProjectsLoading, setRecentProjectsLoading] = useState(platformAdapter.kind === 'desktop')
   const [recentProjectsError, setRecentProjectsError] = useState<string | null>(null)
   const [desktopDropState, setDesktopDropState] = useState<'idle' | 'valid' | 'invalid'>('idle')
   const [sceneFileError, setSceneFileError] = useState<string | null>(null)
+  const [unsavedDialogPurpose, setUnsavedDialogPurpose] = useState<UnsavedDialogPurpose | null>(null)
   const [transformTool, setTransformTool] = useState<StageTool>('select')
   const [isPlaying, setIsPlaying] = useState(false)
   const [timelineMode, setTimelineMode] = useState<'scene' | 'master'>('scene')
   const [masterSelection, setMasterSelection] = useState<MasterInspectorSelection>(null)
   const activeMasterClipId = masterSelection?.kind === 'clip' ? masterSelection.id : null
+  const activeMasterImageClipId = masterSelection?.kind === 'image' ? masterSelection.id : null
   const [masterFrame, setMasterFrame] = useState(0)
   const [isMasterPlaying, setIsMasterPlaying] = useState(false)
   const [isMasterLooping, setIsMasterLooping] = useState(false)
   const [masterMusicPeaks, setMasterMusicPeaks] = useState<number[] | null>(null)
+  const [masterImageUrls, setMasterImageUrls] = useState<Record<string, string>>({})
+  const [mediaManagerOpen, setMediaManagerOpen] = useState(false)
+  const [mediaHealth, setMediaHealth] = useState<ImageAssetHealth[]>([])
+  const [mediaScanning, setMediaScanning] = useState(false)
+  const [mediaScanToken, setMediaScanToken] = useState(0)
+  const [mediaManagerError, setMediaManagerError] = useState<string | null>(null)
   const [isLooping, setIsLooping] = useState(false)
   const [isScrubbing, setIsScrubbing] = useState(false)
   const [transformingEntityId, setTransformingEntityId] = useState<string | null>(null)
@@ -223,6 +277,66 @@ function V2EditorApp() {
   const [liveRole, setLiveRole] = useState<LiveReviewRole | null>(null)
   const [liveSession, setLiveSession] = useState<string | null>(null)
   const [liveInviteUrl, setLiveInviteUrl] = useState<string | null>(null)
+
+  const masterImageAssetKey = (projectDocument.masterSequence.imageAssets ?? []).map((asset) => `${asset.id}:${asset.fileName}:${asset.sizeBytes}`).join('|')
+  useEffect(() => {
+    let cancelled = false
+    const previousUrls = masterImageUrls
+    const assets = projectDocument.masterSequence.imageAssets ?? []
+    void Promise.all(assets.map(async (asset) => {
+      try {
+        const blob = await loadImageAsset(projectDocument.id, asset.id)
+        if (!blob) return null
+        const url = URL.createObjectURL(blob)
+        try {
+          const image = await loadExportImage(url)
+          return { assetId: asset.id, url, width: image.naturalWidth, height: image.naturalHeight }
+        } catch {
+          URL.revokeObjectURL(url)
+          return null
+        }
+      } catch {
+        return null
+      }
+    })).then((entries) => {
+      if (cancelled) return
+      const validEntries = entries.filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+      const next = Object.fromEntries(validEntries.map((entry) => [entry.assetId, entry.url]))
+      Object.values(previousUrls).forEach((url) => URL.revokeObjectURL(url))
+      setMasterImageUrls(next)
+      const current = projectDocumentRef.current
+      if (current.id !== projectDocument.id) return
+      const decodedDimensions = new Map(validEntries.flatMap((entry) => entry.width !== null && entry.height !== null ? [[entry.assetId, { width: entry.width, height: entry.height }] as const] : []))
+      if (decodedDimensions.size === 0) return
+      const currentAssets = current.masterSequence.imageAssets ?? []
+      let changed = false
+      const hydratedAssets = currentAssets.map((asset) => {
+        const dimensions = decodedDimensions.get(asset.id)
+        if (!dimensions || !asset.metadataPending) return asset
+        changed = true
+        return { ...asset, width: dimensions.width, height: dimensions.height, metadataPending: false }
+      })
+      if (!changed) return
+      const hydratedProject = { ...current, masterSequence: { ...current.masterSequence, imageAssets: hydratedAssets } }
+      projectRevisionRef.current += 1
+      projectDocumentRef.current = hydratedProject
+      setProjectDocument(hydratedProject)
+    })
+    return () => { cancelled = true }
+    // Asset metadata is the persistence boundary; media recovery explicitly
+    // bumps mediaScanToken so same-name/same-size replacements refresh safely.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectDocument.id, masterImageAssetKey, mediaScanToken])
+  useEffect(() => {
+    let cancelled = false
+    const assets = projectDocument.masterSequence.imageAssets ?? []
+    if (assets.length === 0) { setMediaHealth([]); return }
+    setMediaScanning(true)
+    void scanImageAssets(projectDocument.id, projectDocument.masterSequence).then((next) => {
+      if (!cancelled) setMediaHealth(next)
+    }).finally(() => { if (!cancelled) setMediaScanning(false) })
+    return () => { cancelled = true }
+  }, [projectDocument.id, projectDocument.masterSequence.imageAssets, mediaScanToken])
   const [liveViewerCount, setLiveViewerCount] = useState(0)
   const [liveParticipants, setLiveParticipants] = useState<LiveReviewParticipant[]>([])
   const [liveFollowHost, setLiveFollowHost] = useState(true)
@@ -238,11 +352,18 @@ function V2EditorApp() {
   const [exportStatus, setExportStatus] = useState<VideoExportStatus>('idle')
   const [exportProgress, setExportProgress] = useState<VideoExportProgress | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
-  const [exportSettings, setExportSettings] = useState<VideoExportSettings>(() => ({ source: 'scene', cameraId: null, markIn: 0, markOut: 120, frameRate: { numerator: 24, denominator: 1 }, deliveryAspectRatio: '16:9', width: 1920, format: 'mp4', quality: 'standard', includeMusic: false }))
+  const [exportSuccess, setExportSuccess] = useState<VideoExportSuccess | null>(null)
+  const [exportRevealError, setExportRevealError] = useState<string | null>(null)
+  const [projectPackageStatus, setProjectPackageStatus] = useState<ProjectPackageModalStatus | null>(null)
+  const [projectPackageResult, setProjectPackageResult] = useState<ProjectPackageModalResult | null>(null)
+  const [projectPackageError, setProjectPackageError] = useState<{ message: string; code?: ProjectPackageErrorCode; assetName?: string; referenceCount?: number } | null>(null)
+  const [projectPackageRevealError, setProjectPackageRevealError] = useState<string | null>(null)
+  const [exportSettings, setExportSettings] = useState<VideoExportSettings>(() => ({ source: 'scene', cameraId: null, markIn: 0, markOut: 120, frameRate: { numerator: 24, denominator: 1 }, deliveryAspectRatio: '16:9', width: 1920, format: 'mp4', quality: 'standard', includeMusic: false, shotInfoBurnIn: loadShotInfoBurnInSettings() }))
   const [timelineHeight, setTimelineHeight] = useState(TIMELINE_HEIGHT_DEFAULT)
   const [isResizingTimeline, setIsResizingTimeline] = useState(false)
   const [shortcutBindings, setShortcutBindings] = useState(() => shortcutPreferencesWithDefaults())
   const [shortcutSettingsOpen, setShortcutSettingsOpen] = useState(false)
+  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
   const [updatePreferences, setUpdatePreferences] = useState<UpdatePreferences>({ autoCheck: true })
   const [updateState, setUpdateState] = useState<AboutUpdateState>({ status: 'idle', currentVersion: APP_VERSION })
   const [updateNotice, setUpdateNotice] = useState<UpdateCheckResult | null>(null)
@@ -293,6 +414,12 @@ function V2EditorApp() {
   const isDirtyRef = useRef(isDirty)
   const workspaceModeRef = useRef(workspaceMode)
   const savedProjectFingerprintRef = useRef(creativeProjectFingerprint(projectDocument))
+  const projectRevisionRef = useRef(0)
+  const savedProjectCheckpointRef = useRef<ProjectSaveCheckpoint>(checkpointForSuccessfulSave(0, creativeProjectFingerprint(projectDocument)))
+  const projectSaveInFlightRef = useRef<Promise<boolean> | null>(null)
+  const projectSaveStatusTimerRef = useRef<number | null>(null)
+  const timelineWorkspaceSessionRef = useRef<TimelineWorkspaceSessionState>(createTimelineWorkspaceSessionState())
+  const unsavedDialogPromiseRef = useRef<{ promise: Promise<UnsavedDialogChoice>; resolve: (choice: UnsavedDialogChoice) => void } | null>(null)
   const selectedEntityIdRef = useRef<string | null>(selectedEntityId)
   const selectedEntityIdsRef = useRef<string[]>(selectedEntityIds)
   const renameRequestTokenRef = useRef(0)
@@ -300,7 +427,6 @@ function V2EditorApp() {
   const shortcutBindingsRef = useRef(shortcutBindings)
   const clipboardRef = useRef<EditorClipboard | null>(null)
   const keyframeClipboardRef = useRef<TimelineKeyframeClipboard | null>(null)
-  const historyRef = useRef<EditorHistory>(new EditorHistory(100))
   const projectHistoryRef = useRef<ProjectHistory>(new ProjectHistory(100))
   const transformTransactionRef = useRef<{ before: SceneDocument; beforeSelection: string | null; beforeSelectionIds: string[] } | null>(null)
   const cameraPathTransactionRef = useRef<{ before: SceneDocument; cameraId: string; keyframe: CameraPathKeyframe } | null>(null)
@@ -312,11 +438,16 @@ function V2EditorApp() {
   const masterMusicFileRef = useRef<Blob | null>(null)
   const masterAudioRef = useRef<HTMLAudioElement | null>(null)
   const masterAudioUrlRef = useRef<string | null>(null)
+  const mediaReplaceClipIdRef = useRef<string | null>(null)
+  const mediaReplaceAssetIdRef = useRef<string | null>(null)
+  const mediaSidecarHistoryRef = useRef<Array<{ projectId: string; assetId: string; beforeSignature: string; afterSignature: string; beforeBlob: Blob | null; afterBlob: Blob | null }>>([])
+  const mediaReplaceInputRef = useRef<HTMLInputElement>(null)
   const cameraMoveReviewRef = useRef<CameraMoveReviewState | null>(null)
   const shotReviewRef = useRef<ShotReviewState | null>(null)
   const isLoopingRef = useRef(isLooping)
   const isMasterLoopingRef = useRef(isMasterLooping)
   const exportAbortRef = useRef<AbortController | null>(null)
+  const projectPackageCancelRef = useRef(false)
   const recoveryManagerRef = useRef<RecoveryManager>(new RecoveryManager({
     loadEntries: () => platformAdapter.loadRecoveryEntries(),
     saveEntries: (entries) => platformAdapter.saveRecoveryEntries(entries),
@@ -337,8 +468,20 @@ function V2EditorApp() {
   const saveProjectRef = useRef<() => void>(() => {})
   const saveProjectAsRef = useRef<() => void>(() => {})
   const isPlayingRef = useRef(isPlaying)
+  const masterFrameRef = useRef(masterFrame)
+  const sceneTimelineZoomShortcutRef = useRef<TimelineZoomShortcutHandler | null>(null)
+  const masterTimelineZoomShortcutRef = useRef<TimelineZoomShortcutHandler | null>(null)
   const timelineModeRef = useRef(timelineMode)
   const timelineResizeRef = useRef<{ startY: number; startHeight: number } | null>(null)
+  const registerSceneTimelineZoomShortcut = useCallback((handler: TimelineZoomShortcutHandler | null) => { sceneTimelineZoomShortcutRef.current = handler }, [])
+  const registerMasterTimelineZoomShortcut = useCallback((handler: TimelineZoomShortcutHandler | null) => { masterTimelineZoomShortcutRef.current = handler }, [])
+  const updateTimelineWorkspace = useCallback((update: { master?: Parameters<typeof updateMasterTimelineWorkspace>[1]; scene?: { sceneId: string; patch: Parameters<typeof updateSceneTimelineWorkspace>[2] } }) => {
+    if (update.master) timelineWorkspaceSessionRef.current = updateMasterTimelineWorkspace(timelineWorkspaceSessionRef.current, update.master)
+    if (update.scene) timelineWorkspaceSessionRef.current = updateSceneTimelineWorkspace(timelineWorkspaceSessionRef.current, update.scene.sceneId, update.scene.patch)
+  }, [])
+  const clearTimelineWorkspace = useCallback(() => {
+    timelineWorkspaceSessionRef.current = resetTimelineWorkspaceState()
+  }, [])
   const evaluatedEntities = evaluateTimeline(sceneDocument, sceneDocument.timeline.currentFrame)
   const masterPreview = useMemo(() => timelineMode === 'master' ? resolveMasterPreviewContext(projectDocument, masterFrame) : null, [projectDocument, masterFrame, timelineMode])
   const cameraViewSceneRevision = `${projectDocument.id}:${projectDocument.activeSceneId}:${sceneDocument.metadata.id}:${sceneDocument.metadata.updatedAt}:${sceneDocument.timeline.currentFrame}`
@@ -397,8 +540,21 @@ function V2EditorApp() {
     isDirtyRef.current = isDirty
     workspaceModeRef.current = workspaceMode
     timelineModeRef.current = timelineMode
+    masterFrameRef.current = masterFrame
     recentProjectsRef.current = recentProjects
-  }, [projectDocument, sceneDocument, selectedEntityId, selectedEntityIds, selectedTimelineKeyframes, shortcutBindings, isDirty, workspaceMode, timelineMode, recentProjects])
+  }, [projectDocument, sceneDocument, selectedEntityId, selectedEntityIds, selectedTimelineKeyframes, shortcutBindings, isDirty, workspaceMode, timelineMode, recentProjects, masterFrame])
+
+  // Keep the visible dirty indicator tied to the last confirmed save, rather
+  // than to the timing of a button click. Fingerprint equality also allows an
+  // undo back to the saved document to become clean again.
+  useEffect(() => {
+    const fingerprint = creativeProjectFingerprint(projectDocument)
+    const dirty = projectSaveIsDirty(fingerprint, savedProjectCheckpointRef.current)
+    if (isDirtyRef.current !== dirty) {
+      isDirtyRef.current = dirty
+      setIsDirty(dirty)
+    }
+  }, [projectDocument])
 
   useEffect(() => {
     let active = true
@@ -564,8 +720,41 @@ function V2EditorApp() {
 
   const replaceProjectDocument = (next: ProjectDocument, options: { allowViewer?: boolean } = {}) => {
     if ((liveRoleRef.current === 'viewer' || liveRoleRef.current === 'editor') && !options.allowViewer) return
+    const previousFingerprint = creativeProjectFingerprint(projectDocumentRef.current)
+    const nextFingerprint = creativeProjectFingerprint(next)
+    if (previousFingerprint !== nextFingerprint) projectRevisionRef.current += 1
     projectDocumentRef.current = next
     setProjectDocument(next)
+  }
+
+  const requestUnsavedChoice = (purpose: UnsavedDialogPurpose): Promise<UnsavedDialogChoice> => {
+    if (unsavedDialogPromiseRef.current) return unsavedDialogPromiseRef.current.promise
+    let resolveChoice!: (choice: UnsavedDialogChoice) => void
+    const promise = new Promise<UnsavedDialogChoice>((resolve) => { resolveChoice = resolve })
+    unsavedDialogPromiseRef.current = { promise, resolve: resolveChoice }
+    setUnsavedDialogPurpose(purpose)
+    return promise
+  }
+
+  const resolveUnsavedChoice = (choice: UnsavedDialogChoice) => {
+    const pending = unsavedDialogPromiseRef.current
+    unsavedDialogPromiseRef.current = null
+    setUnsavedDialogPurpose(null)
+    pending?.resolve(choice)
+  }
+
+  const allowProjectContextChange = async (purpose: UnsavedDialogPurpose): Promise<boolean> => {
+    if (!isDirtyRef.current) return true
+    const choice = await requestUnsavedChoice(purpose)
+    if (choice === 'cancel') return false
+    if (choice === 'discard') {
+      await discardCurrentRecovery()
+      isDirtyRef.current = false
+      setIsDirty(false)
+      return true
+    }
+    const saved = await saveProject()
+    return saved && !isDirtyRef.current
   }
 
   const liveStateSnapshot = (): LiveReviewState => ({
@@ -614,17 +803,23 @@ function V2EditorApp() {
       liveTimelineEditTargetRef.current = null
       if (liveActiveLeaseRef.current?.targetType === 'Timeline') releaseLiveLease(liveActiveLeaseRef.current)
     }
-    const scene = project.scenes.find((entry) => entry.id === project.activeSceneId) ?? project.scenes[0]
+    const normalizedProject = { ...project, cameraDefaults: normalizeCameraDefaults(project) }
+    const scene = normalizedProject.scenes.find((entry) => entry.id === normalizedProject.activeSceneId) ?? normalizedProject.scenes[0]
     if (!scene) return
-    projectDocumentRef.current = project
+    if (normalizedProject.id !== projectDocumentRef.current.id) clearTimelineWorkspace()
+    projectDocumentRef.current = normalizedProject
     sceneDocumentRef.current = scene.scene
-    setProjectDocument(project)
+    const fingerprint = creativeProjectFingerprint(normalizedProject)
+    projectRevisionRef.current += 1
+    savedProjectFingerprintRef.current = fingerprint
+    savedProjectCheckpointRef.current = checkpointForSuccessfulSave(projectRevisionRef.current, fingerprint)
+    replaceProjectDocument(normalizedProject, { allowViewer: true })
     setSelectedEntityId(null)
     setSelectedEntityIds([])
     setSelectedFrameGuideId(null)
     setSelectedTimelineKeyframes([])
     setSelectedCameraPathSegment(null)
-    setShotListSelectedId(project.activeShotId)
+    setShotListSelectedId(normalizedProject.activeShotId)
     setIsDirty(false)
   }
 
@@ -866,8 +1061,7 @@ function V2EditorApp() {
     const result = applyCollaborativePlanning(projectDocumentRef.current, commit)
     if (!result) return { operationId: commit.operationId, accepted: false, reason: 'invalid_payload', projectRevision: liveProjectRevisionRef.current }
     projectHistoryRef.current.record({ label: `Collaborative ${commit.operation}`, before: projectDocumentRef.current, after: result.project })
-    projectDocumentRef.current = result.project
-    setProjectDocument(result.project)
+    replaceProjectDocument(result.project)
     const activeScene = result.project.scenes.find((entry) => entry.id === result.project.activeSceneId)
     if (activeScene) sceneDocumentRef.current = activeScene.scene
     setIsDirty(true)
@@ -1380,8 +1574,7 @@ function V2EditorApp() {
         return
       }
       if (isMasterLoopingRef.current) {
-        const span = range.endFrame - range.startFrame
-        const frame = range.startFrame + ((rawFrame - range.startFrame) % span + span) % span
+        const frame = masterPlaybackFrameAt(rawFrame, range, true)
         const resolved = resolveMasterFrame(current.masterSequence, current.shots, frame)
         void resolved
         setMasterFrame(frame)
@@ -1389,16 +1582,15 @@ function V2EditorApp() {
         masterPlaybackRequestRef.current = window.requestAnimationFrame(tick)
         return
       }
-      if (rawFrame >= range.endFrame) {
-        const lastFrame = range.endFrame - 1
-        setMasterFrame(lastFrame)
+      const frame = masterPlaybackFrameAt(rawFrame, range, false)
+      if (frame >= range.endFrame) {
+        setMasterFrame(range.endFrame)
         masterPlaybackRequestRef.current = null
         masterPlaybackStartRef.current = null
         setIsMasterPlaying(false)
-        syncMasterAudio(lastFrame, false)
+        syncMasterAudio(range.endFrame, false)
         return
       }
-      const frame = rawFrame
       const resolved = resolveMasterFrame(current.masterSequence, current.shots, frame)
       void resolved
       setMasterFrame(frame)
@@ -1469,6 +1661,26 @@ function V2EditorApp() {
     setSelectedEntityId(snapshot.selectedEntityId)
     setSelectedEntityIds(snapshot.selectedEntityId ? [snapshot.selectedEntityId] : [])
     setSuspendedTimelineEntityIds(suspendedIds)
+  }
+
+  const applyProjectHistorySnapshot = (project: ProjectDocument, selection: string | null | undefined) => {
+    const activeScene = project.scenes.find((entry) => entry.id === project.activeSceneId) ?? project.scenes[0]
+    if (!activeScene) return
+    // Playhead position is editor UI state, not a production edit. Keep the
+    // current playhead while restoring the immutable production snapshot.
+    const currentFrame = sceneDocumentRef.current.timeline.currentFrame
+    const scene = { ...activeScene.scene, timeline: { ...activeScene.scene.timeline, currentFrame } }
+    const restored = { ...project, scenes: project.scenes.map((entry) => entry.id === activeScene.id ? { ...entry, scene } : entry) }
+    sceneDocumentRef.current = scene
+    const resolvedSelection = selection === undefined ? selectedEntityIdRef.current : selection
+    selectedEntityIdRef.current = resolvedSelection
+    selectedEntityIdsRef.current = resolvedSelection ? [resolvedSelection] : []
+    replaceProjectDocument(restored)
+    setSelectedEntityId(resolvedSelection)
+    setSelectedEntityIds(resolvedSelection ? [resolvedSelection] : [])
+    setSuspendedTimelineEntityIds(new Set())
+    if (restored.masterSequence.musicClip) void restoreMasterMusicAsset(restored)
+    else { setMasterMusicPeaks(null); masterMusicFileRef.current = null }
   }
 
   const setCurrentFrame = (frame: number) => {
@@ -1553,11 +1765,14 @@ function V2EditorApp() {
   }
 
   const recordAction = (label: string, before: SceneDocument, beforeSelection: string | null, after: SceneDocument, afterSelection: string | null) => {
-    historyRef.current.record({
-      label,
-      before: { document: before, selectedEntityId: beforeSelection },
-      after: { document: after, selectedEntityId: afterSelection },
+    const current = projectDocumentRef.current
+    const currentFrame = sceneDocumentRef.current.timeline.currentFrame
+    const historyScene = (scene: SceneDocument): SceneDocument => ({ ...scene, timeline: { ...scene.timeline, currentFrame } })
+    const withScene = (project: ProjectDocument, scene: SceneDocument): ProjectDocument => ({
+      ...project,
+      scenes: project.scenes.map((entry) => entry.id === project.activeSceneId ? { ...entry, name: scene.metadata.name, scene: historyScene(scene) } : entry),
     })
+    projectHistoryRef.current.record({ label, before: withScene(current, before), after: withScene(current, after), beforeSelection, afterSelection })
     if (creativeSceneChanged(before, after)) setIsDirty(true)
   }
 
@@ -1583,7 +1798,7 @@ function V2EditorApp() {
     await refreshRecoveryEntries()
   }
 
-  const resetEditorForProject = (project: ProjectDocument, clean = true, currentPath = currentProjectPathRef.current) => {
+  const resetEditorForProject = (project: ProjectDocument, clean = true, currentPath = currentProjectPathRef.current, resetTimelineWorkspace = false) => {
     stopPlaybackSession()
     stopMasterPlayback()
     setSuspendedTimelineEntityIds(new Set())
@@ -1607,8 +1822,8 @@ function V2EditorApp() {
     if (masterAudioUrlRef.current) URL.revokeObjectURL(masterAudioUrlRef.current)
     masterAudioRef.current = null
     masterAudioUrlRef.current = null
+    if (resetTimelineWorkspace) clearTimelineWorkspace()
     setSceneFileError(null)
-    historyRef.current = new EditorHistory(100)
     projectHistoryRef.current = new ProjectHistory(100)
     const active = project.scenes.find((entry) => entry.id === project.activeSceneId) ?? project.scenes[0]
     const normalizedProject = { ...project, activeShotId: project.shots.find((shot) => shot.id === project.activeShotId && shot.sceneId === active.id)?.id ?? null }
@@ -1621,8 +1836,12 @@ function V2EditorApp() {
     setSelectedEntityIds([])
     setSuspendedTimelineEntityIds(new Set())
     setSuspendedTimelineProperties({})
-    if (clean) savedProjectFingerprintRef.current = creativeProjectFingerprint(normalizedProject)
-    recoveryFingerprintRef.current = creativeProjectFingerprint(normalizedProject)
+    const normalizedFingerprint = creativeProjectFingerprint(normalizedProject)
+    if (clean) {
+      savedProjectFingerprintRef.current = normalizedFingerprint
+      savedProjectCheckpointRef.current = checkpointForSuccessfulSave(projectRevisionRef.current, normalizedFingerprint)
+    }
+    recoveryFingerprintRef.current = normalizedFingerprint
     dirtySinceRef.current = clean ? null : new Date().toISOString()
     setIsDirty(!clean)
   }
@@ -1636,7 +1855,6 @@ function V2EditorApp() {
     setTransformingEntityId(null)
     transformTransactionRef.current = null
     cameraPathTransactionRef.current = null
-    historyRef.current = new EditorHistory(100)
     setSelectedEntityId(null)
     setSelectedEntityIds([])
     setSelectedFrameGuideId(null)
@@ -1702,62 +1920,143 @@ function V2EditorApp() {
     })
   }
 
-  const saveProject = async (): Promise<boolean> => {
-    const savedAt = new Date().toISOString()
-    const previousRecoveryId = currentRecoveryId()
-    try {
-      const prepared = prepareProjectForSave(projectDocumentRef.current, savedAt)
-      const text = serializeProject(prepared, savedAt)
-      const result = await platformAdapter.saveProjectFile(text, projectFilename(prepared.name), currentProjectPathRef.current)
-      if (result.cancelled) return false
-      currentProjectPathRef.current = result.path
-      sceneDocumentRef.current = prepared.scenes.find((entry) => entry.id === prepared.activeSceneId)!.scene
-      replaceProjectDocument(prepared)
-      savedProjectFingerprintRef.current = creativeProjectFingerprint(prepared)
-      setSceneFileError(null)
-      setIsDirty(false)
-      dirtySinceRef.current = null
-      recoveryFingerprintRef.current = creativeProjectFingerprint(prepared)
-      if (result.path) {
-        currentRecoveryIdRef.current = recoveryIdForProjectPath(result.path)
-        await recoveryManagerRef.current.cleanup(previousRecoveryId)
-        await updateRecentForProject(result.path, prepared)
-        captureProjectThumbnail(result.path, prepared)
-      }
-      return true
-    } catch (error: unknown) {
-      setSceneFileError(error instanceof ProjectFileError || error instanceof PlatformFileError ? error.message : 'This Project could not be saved.')
-      return false
+  const showProjectSaveStatus = (status: 'idle' | 'saving' | 'saved' | 'error') => {
+    if (projectSaveStatusTimerRef.current !== null) window.clearTimeout(projectSaveStatusTimerRef.current)
+    setProjectSaveStatus(status)
+    if (status === 'saved') {
+      projectSaveStatusTimerRef.current = window.setTimeout(() => {
+        projectSaveStatusTimerRef.current = null
+        setProjectSaveStatus('idle')
+      }, 1800)
     }
   }
 
-  const saveProjectAs = async (): Promise<boolean> => {
-    const savedAt = new Date().toISOString()
-    const previousPath = currentProjectPathRef.current
-    const previousRecoveryId = currentRecoveryId()
-    try {
-      const prepared = prepareProjectForSave(projectDocumentRef.current, savedAt)
-      const result = await platformAdapter.saveProjectFileAs(serializeProject(prepared, savedAt), projectFilename(prepared.name))
-      if (result.cancelled) return false
-      currentProjectPathRef.current = result.path
-      sceneDocumentRef.current = prepared.scenes.find((entry) => entry.id === prepared.activeSceneId)!.scene
-      replaceProjectDocument(prepared)
-      savedProjectFingerprintRef.current = creativeProjectFingerprint(prepared)
-      setSceneFileError(null)
-      setIsDirty(false)
-      dirtySinceRef.current = null
-      recoveryFingerprintRef.current = creativeProjectFingerprint(prepared)
-      if (result.path) {
-        currentRecoveryIdRef.current = recoveryIdForProjectPath(result.path)
-        await recoveryManagerRef.current.cleanup(previousRecoveryId)
-        await updateRecentForProject(result.path, prepared, savedAt, previousPath ?? undefined)
-        captureProjectThumbnail(result.path, prepared)
+  const runProjectSave = (saveAs: boolean): Promise<boolean> => {
+    if (projectSaveInFlightRef.current) return projectSaveInFlightRef.current
+    const operation = (async () => {
+      showProjectSaveStatus('saving')
+      const savedAt = new Date().toISOString()
+      const previousPath = currentProjectPathRef.current
+      const previousRecoveryId = currentRecoveryId()
+      const snapshot = projectDocumentRef.current
+      const snapshotFingerprint = creativeProjectFingerprint(snapshot)
+      const snapshotRevision = projectRevisionRef.current
+      try {
+        const prepared = prepareProjectForSave(snapshot, savedAt)
+        const text = serializeProject(prepared, savedAt)
+        const result = saveAs
+          ? await platformAdapter.saveProjectFileAs(text, projectFilename(prepared.name))
+          : await platformAdapter.saveProjectFile(text, projectFilename(prepared.name), currentProjectPathRef.current)
+        if (result.cancelled) {
+          showProjectSaveStatus('idle')
+          return false
+        }
+
+        // The path is a successful-write fact, so it may change only after the
+        // adapter has resolved. The live document is deliberately not replaced
+        // with the snapshot: it may contain edits made while the write ran.
+        currentProjectPathRef.current = result.path
+        const currentFingerprint = creativeProjectFingerprint(projectDocumentRef.current)
+        const currentMatchesSnapshot = currentDocumentMatchesSave(currentFingerprint, snapshotFingerprint)
+        savedProjectFingerprintRef.current = snapshotFingerprint
+        savedProjectCheckpointRef.current = checkpointForSuccessfulSave(snapshotRevision, snapshotFingerprint)
+        if (currentMatchesSnapshot) {
+          isDirtyRef.current = false
+          setIsDirty(false)
+          dirtySinceRef.current = null
+          recoveryFingerprintRef.current = snapshotFingerprint
+        } else {
+          // A later edit wins over the completion of this older save.
+          isDirtyRef.current = true
+          setIsDirty(true)
+        }
+        setSceneFileError(null)
+        showProjectSaveStatus('saved')
+
+        // Recent-project metadata and thumbnails are useful follow-up work, but
+        // they are not allowed to report a successful file write as failed.
+        if (result.path) {
+          currentRecoveryIdRef.current = recoveryIdForProjectPath(result.path)
+          if (currentMatchesSnapshot) {
+            await recoveryManagerRef.current.cleanup(previousRecoveryId).catch((error: unknown) => {
+              if (import.meta.env.DEV) console.warn('[recovery] saved snapshot cleanup failed', error)
+            })
+          }
+          await updateRecentForProject(result.path, prepared, savedAt, saveAs ? previousPath ?? undefined : undefined).catch((error: unknown) => {
+            if (import.meta.env.DEV) console.warn('[projects] recent project update failed after save', error)
+          })
+          captureProjectThumbnail(result.path, prepared)
+        }
+        return true
+      } catch (error: unknown) {
+        showProjectSaveStatus('error')
+        setSceneFileError(error instanceof ProjectFileError || error instanceof PlatformFileError ? error.message : 'This Project could not be saved.')
+        if (import.meta.env.DEV) console.error('[ND Blocking & Previs] Project save failed', error)
+        return false
       }
-      return true
+    })()
+    projectSaveInFlightRef.current = operation
+    void operation.finally(() => {
+      if (projectSaveInFlightRef.current === operation) projectSaveInFlightRef.current = null
+    })
+    return operation
+  }
+
+  const saveProject = (): Promise<boolean> => runProjectSave(false)
+  const saveProjectAs = (): Promise<boolean> => runProjectSave(true)
+
+  const cancelProjectPackage = () => {
+    projectPackageCancelRef.current = true
+    setProjectPackageStatus(null)
+    setProjectPackageResult(null)
+    setProjectPackageError(null)
+  }
+
+  const runProjectPackageExport = async () => {
+    projectPackageCancelRef.current = false
+    setProjectPackageStatus('checking')
+    setProjectPackageResult(null)
+    setProjectPackageError(null)
+    setProjectPackageRevealError(null)
+    const snapshot = projectDocumentRef.current
+    try {
+      const loadMedia = async (kind: 'image' | 'audio', assetId: string) => kind === 'image'
+        ? loadImageAsset(snapshot.id, assetId)
+        : loadMusicAsset(snapshot.id, assetId)
+      setProjectPackageStatus('collecting')
+      const built = await buildProjectPackage(snapshot, loadMedia)
+      if (projectPackageCancelRef.current) return
+      setProjectPackageStatus('building')
+      await Promise.resolve()
+      if (projectPackageCancelRef.current) return
+      setProjectPackageStatus('saving')
+      const result = await platformAdapter.saveProjectPackage(built.data, projectPackageFilename(snapshot.name))
+      if (result.cancelled || projectPackageCancelRef.current) {
+        setProjectPackageStatus(null)
+        return
+      }
+      if (result.path) {
+        const stat = await platformAdapter.statFile(result.path)
+        if (!stat || stat.byteLength === undefined || stat.byteLength <= 0) throw new ProjectPackageError('invalid-archive', 'The saved Project Package could not be verified as a non-empty file.')
+      }
+      setProjectPackageResult({ fileName: projectPackageFilename(snapshot.name), byteLength: built.data.byteLength, assetCount: built.assetCount, path: result.path })
+      setProjectPackageStatus('completed')
     } catch (error: unknown) {
-      setSceneFileError(error instanceof ProjectFileError || error instanceof PlatformFileError ? error.message : 'This Project could not be saved.')
-      return false
+      if (projectPackageCancelRef.current) return
+      const packageError = error instanceof ProjectPackageError ? { message: error.message, code: error.code, assetName: error.assetName, referenceCount: error instanceof ProjectPackageMediaError ? error.referenceCount : undefined } : { message: error instanceof Error ? error.message : 'The Project Package could not be exported.' }
+      setProjectPackageError(packageError)
+      setProjectPackageStatus('error')
     }
+  }
+
+  const openProjectPackage = () => {
+    void runProjectPackageExport()
+  }
+
+  const projectPackageStorage: ProjectPackageStorage = {
+    load: (projectId, kind, assetId) => kind === 'image' ? loadImageAsset(projectId, assetId) : loadMusicAsset(projectId, assetId),
+    save: (projectId, kind, assetId, blob) => kind === 'image' ? saveImageAsset(projectId, assetId, blob) : saveMusicAsset(projectId, assetId, blob),
+    remove: (projectId, kind, assetId) => kind === 'image' ? deleteImageAsset(projectId, assetId) : deleteMusicAsset(projectId, assetId),
   }
 
   const exportScene = async (sceneId = projectDocumentRef.current.activeSceneId) => {
@@ -1774,31 +2073,32 @@ function V2EditorApp() {
     }
   }
 
-  const enterLoadedProject = async (file: { path: string | null; text: string }) => {
+  const enterLoadedProject = async (file: PlatformFile) => {
     const loaded = parseProjectFile(file.text)
-    resetEditorForProject(loaded, true, file.path)
+    resetEditorForProject(loaded, true, file.path, true)
     setView('blocking')
     setWorkspaceMode('editor')
     if (file.path) await updateRecentForProject(file.path, loaded)
   }
 
-  const confirmProjectSwitch = async (): Promise<boolean> => {
-    if (!isDirtyRef.current) return true
-    if (platformAdapter.promptUnsavedClose) {
-      const choice = await platformAdapter.promptUnsavedClose()
-      const decision = closeDecisionForUnsavedChoice(choice, choice !== 'save' || await saveProject())
-      if (choice === 'discard' && decision === 'close') {
-        await discardCurrentRecovery()
-        setIsDirty(false)
-      }
-      return decision === 'close'
-    }
-    return window.confirm('Discard unsaved Project changes and load this Project?')
+  const enterLoadedProjectPackage = async (file: PlatformFile) => {
+    if (!file.data) throw new ProjectPackageError('invalid-archive', 'This Project Package could not be read.')
+    const parsed = await parseProjectPackage(file.data)
+    const plan = await prepareProjectPackageImport(parsed, projectPackageStorage)
+    await restoreProjectPackageMedia(plan, projectPackageStorage)
+    resetEditorForProject(plan.project, true, null, true)
+    setView('blocking')
+    setWorkspaceMode('editor')
   }
 
-  const openProjectFile = async (file: { path: string | null; text: string } | null) => {
+  const confirmProjectSwitch = async (): Promise<boolean> => {
+    return allowProjectContextChange('load')
+  }
+
+  const openProjectFile = async (file: PlatformFile | null) => {
     if (!file || !await confirmProjectSwitch()) return
-    await enterLoadedProject(file)
+    if (isProjectPackageName(file.name)) await enterLoadedProjectPackage(file)
+    else await enterLoadedProject(file)
   }
 
   const openDesktopProjectPath = async (path: string) => {
@@ -1820,7 +2120,7 @@ function V2EditorApp() {
       if (!recovered) throw new Error('Recovery snapshot is no longer available.')
       currentRecoveryIdRef.current = entry.recoveryId
       if (!entry.projectPath) unsavedRecoveryIdRef.current = entry.recoveryId
-      resetEditorForProject(recovered.project, false, entry.projectPath)
+      resetEditorForProject(recovered.project, false, entry.projectPath, true)
       recoveryRequestedPathRef.current = null
       setRecoveryRequestedPath(null)
       setRecoveryModalOpen(false)
@@ -1861,16 +2161,9 @@ function V2EditorApp() {
   }
 
   const newProject = async () => {
-    if (isDirty) {
-      if (platformAdapter.promptUnsavedClose) {
-        const choice = await platformAdapter.promptUnsavedClose()
-        if (choice === 'cancel') return
-        if (choice === 'save' && !await saveProject()) return
-        if (choice === 'discard') await discardCurrentRecovery()
-      } else if (!window.confirm('Discard unsaved Project changes and start a New Project?')) return
-    }
+    if (!await allowProjectContextChange('new')) return
     unsavedRecoveryIdRef.current = createUnsavedRecoveryId()
-    resetEditorForProject(createDefaultV2Project(), true, null)
+    resetEditorForProject(createDefaultV2Project(), true, null, true)
     setView('blocking')
     setWorkspaceMode('editor')
   }
@@ -1937,7 +2230,7 @@ function V2EditorApp() {
       const file = await platformAdapter.locateProjectFile()
       if (!file) return
       const loaded = parseProjectFile(file.text)
-      resetEditorForProject(loaded, true, file.path)
+      resetEditorForProject(loaded, true, file.path, true)
       setView('blocking')
       setWorkspaceMode('editor')
       if (file.path) await updateRecentForProject(file.path, loaded, new Date().toISOString(), entry.path)
@@ -2045,15 +2338,7 @@ function V2EditorApp() {
       setExportError('Cancel the video export before returning to Projects.')
       return
     }
-    if (isDirtyRef.current) {
-      const choice = platformAdapter.promptUnsavedClose ? await platformAdapter.promptUnsavedClose() : 'cancel'
-      const decision = closeDecisionForUnsavedChoice(choice, choice !== 'save' || await saveProject())
-      if (decision === 'cancel') return
-      if (choice === 'discard') {
-        await discardCurrentRecovery()
-        setIsDirty(false)
-      }
-    }
+    if (!await allowProjectContextChange('projects')) return
     setWorkspaceMode('library')
     setView('blocking')
     const refreshed = await refreshRecentProjectStatus(recentProjectsRef.current)
@@ -2067,12 +2352,24 @@ function V2EditorApp() {
     setIsDirty(true)
   }
 
+  const updateProjectCameraDefault = (cameraModelId: string) => {
+    if (liveRoleRef.current === 'viewer' || liveRoleRef.current === 'editor') return
+    const current = projectDocumentRef.current
+    const definition = resolveCameraDefinition(cameraModelId)
+    if (!definition || current.cameraDefaults.cameraModelId === definition.id) return
+    const next = { ...current, updatedAt: new Date().toISOString(), cameraDefaults: { cameraModelId: definition.id } }
+    projectHistoryRef.current.record({ label: 'Change Project Default Camera', before: current, after: next })
+    replaceProjectDocument(next)
+    setIsDirty(true)
+    publishLiveProject(next)
+  }
+
   const addScene = () => {
     const current = projectDocumentRef.current
     const number = nextSceneNumber(current.scenes)
     const id = `scene-${String(number).padStart(2, '0')}`
     const name = `Scene ${String(number).padStart(2, '0')}`
-    const scene = createDefaultV2Scene(id, name, false)
+    const scene = createDefaultV2Scene(id, name, false, current.cameraDefaults.cameraModelId)
     resetEditorForProject({ ...current, scenes: [...current.scenes, { id, name, scene }], activeSceneId: id, updatedAt: new Date().toISOString() }, false)
     setView('blocking')
   }
@@ -2117,6 +2414,7 @@ function V2EditorApp() {
     const masterSequence = { ...current.masterSequence, clips: current.masterSequence.clips.filter((clip) => !removedShotIds.has(clip.shotId)).map((clip, clipIndex) => ({ ...clip, order: clipIndex })) }
     const activeShotId = current.activeShotId && shots.some((shot) => shot.id === current.activeShotId) ? current.activeShotId : null
     const next = { ...current, updatedAt: new Date().toISOString(), scenes, activeSceneId, shots, masterSequence, activeShotId }
+    timelineWorkspaceSessionRef.current = pruneTimelineWorkspaceScenes(timelineWorkspaceSessionRef.current, scenes.map((scene) => scene.id))
     if (masterSelection?.kind === 'clip' && !masterSequence.clips.some((clip) => clip.id === masterSelection.id)) setMasterSelection(null)
     if (activeSceneId !== current.activeSceneId) resetEditorForProject(next, false)
     else {
@@ -2240,7 +2538,9 @@ function V2EditorApp() {
     }
     const nextSequence = insertMasterClipAt(current.masterSequence, shot, index ?? current.masterSequence.clips.length)
     const newClip = nextSequence.clips.find((clip) => !current.masterSequence.clips.some((existing) => existing.id === clip.id))
-    replaceProjectDocument({ ...current, updatedAt: new Date().toISOString(), masterSequence: nextSequence })
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: nextSequence }
+    projectHistoryRef.current.record({ label: 'Add Master Clip', before: current, after: next })
+    replaceProjectDocument(next)
     if (newClip) setMasterSelection({ kind: 'clip', id: newClip.id })
     switchTimelineMode('master')
     setSceneFileError(null)
@@ -2259,16 +2559,24 @@ function V2EditorApp() {
 
   const setMasterPlayhead = (frame: number) => {
     const current = projectDocumentRef.current
-    const total = masterSequenceDurationFrames(current.masterSequence)
-    const clamped = total > 0 ? Math.max(0, Math.min(total - 1, Math.round(frame))) : 0
+    const total = masterSequenceVisualDurationFrames(current.masterSequence, masterSequenceFrameRate(current.masterSequence, current.shots, current.scenes, sceneDocumentRef.current.timeline.frameRate).rate)
+    const clamped = clampMasterTimelineBoundary(frame, total)
     setMasterFrame(clamped)
     syncMasterAudio(clamped, isMasterPlaying)
   }
 
   const clampMasterFrame = (sequence: typeof projectDocument.masterSequence, frame: number) => {
-    const total = masterSequenceDurationFrames(sequence)
-    return total > 0 ? Math.max(0, Math.min(total - 1, Math.round(frame))) : 0
+    const current = projectDocumentRef.current
+    const total = masterSequenceVisualDurationFrames(sequence, masterSequenceFrameRate(sequence, current.shots, current.scenes, sceneDocumentRef.current.timeline.frameRate).rate)
+    return clampMasterTimelineBoundary(frame, total)
   }
+
+  useEffect(() => {
+    const sequence = projectDocument.masterSequence
+    const rate = masterSequenceFrameRate(sequence, projectDocument.shots, projectDocument.scenes, sceneDocument.timeline.frameRate).rate
+    const duration = masterSequenceVisualDurationFrames(sequence, rate)
+    setMasterFrame((current) => clampMasterTimelineBoundary(current, duration))
+  }, [projectDocument.masterSequence, projectDocument.shots, projectDocument.scenes, sceneDocument.timeline.frameRate])
 
   const returnMasterToStart = () => {
     stopMasterPlayback(false)
@@ -2278,9 +2586,11 @@ function V2EditorApp() {
 
   const changeMasterMark = (kind: 'in' | 'out') => {
     const current = projectDocumentRef.current
-    const masterSequence = setMasterSequenceMark(current.masterSequence, kind, masterFrame)
+    const masterSequence = setMasterSequenceMark(current.masterSequence, kind, masterFrameRef.current)
     if (masterSequence.markInFrame === current.masterSequence.markInFrame && masterSequence.markOutFrame === current.masterSequence.markOutFrame) return
-    replaceProjectDocument({ ...current, updatedAt: new Date().toISOString(), masterSequence })
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence }
+    projectHistoryRef.current.record({ label: 'Change Master Mark', before: current, after: next })
+    replaceProjectDocument(next)
     setIsDirty(true)
   }
 
@@ -2290,7 +2600,9 @@ function V2EditorApp() {
     const sequence = duplicateMasterClip(current.masterSequence, clipId)
     if (!sequence) return
     const newClip = sequence.clips.find((clip) => !current.masterSequence.clips.some((existing) => existing.id === clip.id))
-    replaceProjectDocument({ ...current, updatedAt: new Date().toISOString(), masterSequence: sequence })
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: sequence }
+    projectHistoryRef.current.record({ label: 'Duplicate Master Clip', before: current, after: next })
+    replaceProjectDocument(next)
     if (newClip) setMasterSelection({ kind: 'clip', id: newClip.id })
     setIsDirty(true)
   }
@@ -2300,7 +2612,9 @@ function V2EditorApp() {
     const current = projectDocumentRef.current
     if (!current.masterSequence.clips.some((clip) => clip.id === clipId)) return
     const masterSequence = removeMasterClip(current.masterSequence, clipId)
-    replaceProjectDocument({ ...current, updatedAt: new Date().toISOString(), masterSequence })
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence }
+    projectHistoryRef.current.record({ label: 'Remove Master Clip', before: current, after: next })
+    replaceProjectDocument(next)
     const clampedFrame = clampMasterFrame(masterSequence, masterFrame)
     setMasterFrame(clampedFrame)
     syncMasterAudio(clampedFrame, false)
@@ -2332,7 +2646,9 @@ function V2EditorApp() {
       setSceneFileError('Master Clip trim must remain inside the source Shot range.')
       return
     }
-    replaceProjectDocument({ ...current, updatedAt: new Date().toISOString(), masterSequence: sequence })
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: sequence }
+    projectHistoryRef.current.record({ label: 'Trim Master Clip', before: current, after: next })
+    replaceProjectDocument(next)
     const clampedFrame = clampMasterFrame(sequence, masterFrame)
     setMasterFrame(clampedFrame)
     syncMasterAudio(clampedFrame, false)
@@ -2370,7 +2686,9 @@ function V2EditorApp() {
       } catch {
         // The current browser session remains usable even when IndexedDB is unavailable.
       }
-      replaceProjectDocument({ ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, musicClip } })
+      const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, musicClip, musicTrackPresent: true } }
+      projectHistoryRef.current.record({ label: 'Import Master Music', before: current, after: next })
+      replaceProjectDocument(next)
       setMasterSelection({ kind: 'music', id: musicClip.id })
       switchTimelineMode('master')
       setSceneFileError(sidecarStored ? null : 'Music imported for this session, but browser storage is unavailable. Re-import it after reopening this project to restore waveform and audition.')
@@ -2390,7 +2708,9 @@ function V2EditorApp() {
     const sourceEndSeconds = patch.sourceEndSeconds === undefined ? clip.sourceEndSeconds : Math.min(clip.durationSeconds, patch.sourceEndSeconds)
     if (sourceEndSeconds <= sourceStartSeconds) return
     const musicClip = { ...clip, startMasterFrame, sourceStartSeconds, sourceEndSeconds }
-    replaceProjectDocument({ ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, musicClip } })
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, musicClip } }
+    projectHistoryRef.current.record({ label: 'Edit Master Music', before: current, after: next })
+    replaceProjectDocument(next)
     setIsDirty(true)
   }
 
@@ -2400,7 +2720,9 @@ function V2EditorApp() {
     const music = current.masterSequence.musicClip
     if (!music) return
     void deleteMusicAsset(current.id, music.asset.id).catch(() => undefined)
-    replaceProjectDocument({ ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, musicClip: null } })
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, musicClip: null, musicTrackPresent: true } }
+    projectHistoryRef.current.record({ label: 'Remove Master Music', before: current, after: next })
+    replaceProjectDocument(next)
     if (masterSelection?.kind === 'music') setMasterSelection(null)
     setMasterMusicPeaks(null)
     masterMusicFileRef.current = null
@@ -2408,6 +2730,340 @@ function V2EditorApp() {
     if (masterAudioUrlRef.current) URL.revokeObjectURL(masterAudioUrlRef.current)
     masterAudioRef.current = null
     masterAudioUrlRef.current = null
+    setIsDirty(true)
+  }
+
+  const addMusicTrack = () => {
+    const current = projectDocumentRef.current
+    if (current.masterSequence.musicTrackPresent !== false) return
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, musicTrackPresent: true, musicClip: null } }
+    projectHistoryRef.current.record({ label: 'Add Music Track', before: current, after: next })
+    replaceProjectDocument(next)
+    setIsDirty(true)
+  }
+
+  const deleteMusicTrack = () => {
+    const current = projectDocumentRef.current
+    if (current.masterSequence.musicTrackPresent === false) return
+    if (isMasterPlaying) stopMasterPlayback(false)
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, musicTrackPresent: false, musicClip: null } }
+    projectHistoryRef.current.record({ label: 'Delete Music Track', before: current, after: next })
+    replaceProjectDocument(next)
+    if (masterSelection?.kind === 'music') setMasterSelection(null)
+    setMasterMusicPeaks(null)
+    masterMusicFileRef.current = null
+    masterAudioRef.current?.pause()
+    if (masterAudioUrlRef.current) URL.revokeObjectURL(masterAudioUrlRef.current)
+    masterAudioRef.current = null
+    masterAudioUrlRef.current = null
+    // Keep the existing sidecar until normal cleanup can prove it is unreferenced;
+    // this preserves metadata/audio restoration through project undo.
+    setIsDirty(true)
+  }
+
+  const addGraphicsTrack = () => {
+    const current = projectDocumentRef.current
+    const tracks = current.masterSequence.graphicsTracks ?? []
+    const id = `graphics-track-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+    const track: MasterGraphicsTrackDocument = { id, name: `Graphics ${String(tracks.length + 1).padStart(2, '0')}`, order: tracks.length, visible: true, locked: false }
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, graphicsTracks: [...tracks, track], imageAssets: current.masterSequence.imageAssets ?? [], imageClips: current.masterSequence.imageClips ?? [] } }
+    projectHistoryRef.current.record({ label: 'Add Graphics Track', before: current, after: next })
+    replaceProjectDocument(next)
+    setIsDirty(true)
+  }
+
+  const updateGraphicsTrack = (trackId: string, patch: { name?: string; visible?: boolean }) => {
+    const current = projectDocumentRef.current
+    const track = (current.masterSequence.graphicsTracks ?? []).find((candidate) => candidate.id === trackId)
+    if (!track) return
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, graphicsTracks: (current.masterSequence.graphicsTracks ?? []).map((item) => item.id === trackId ? { ...item, ...patch } : item) } }
+    projectHistoryRef.current.record({ label: patch.name ? 'Rename Graphics Track' : 'Toggle Graphics Track', before: current, after: next })
+    replaceProjectDocument(next)
+    setIsDirty(true)
+  }
+
+  const deleteGraphicsTrack = (trackId: string) => {
+    const current = projectDocumentRef.current
+    const track = (current.masterSequence.graphicsTracks ?? []).find((candidate) => candidate.id === trackId)
+    if (!track) return
+    const clips = (current.masterSequence.imageClips ?? []).filter((clip) => clip.trackId === trackId)
+    if (clips.length > 0 && !window.confirm(`Delete ${track.name}?\n\nThis track contains ${clips.length} image${clips.length === 1 ? '' : 's'}. Deleting the track will also remove these image clips.`)) return
+    const removedAssetIds = new Set(clips.map((clip) => clip.assetId))
+    const remainingClips = (current.masterSequence.imageClips ?? []).filter((clip) => clip.trackId !== trackId)
+    const stillUsedAssetIds = new Set(remainingClips.map((clip) => clip.assetId))
+    const deletedAssetIds = [...removedAssetIds].filter((assetId) => !stillUsedAssetIds.has(assetId))
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, graphicsTracks: (current.masterSequence.graphicsTracks ?? []).filter((candidate) => candidate.id !== trackId), imageClips: remainingClips, imageAssets: (current.masterSequence.imageAssets ?? []).filter((asset) => !deletedAssetIds.includes(asset.id)) } }
+    projectHistoryRef.current.record({ label: 'Delete Graphics Track', before: current, after: next })
+    replaceProjectDocument(next)
+    if (masterSelection?.kind === 'image' && clips.some((clip) => clip.id === masterSelection.id)) setMasterSelection(null)
+    // Keep the sidecar while the edit remains undoable; the restored history
+    // snapshot may need to rehydrate the image immediately.
+    deletedAssetIds.forEach((assetId) => { const url = masterImageUrls[assetId]; if (url) URL.revokeObjectURL(url) })
+    if (deletedAssetIds.length > 0) setMasterImageUrls((urls) => { const nextUrls = { ...urls }; deletedAssetIds.forEach((assetId) => delete nextUrls[assetId]); return nextUrls })
+    setIsDirty(true)
+  }
+
+  const selectMasterImage = (clipId: string) => {
+    const clip = (projectDocumentRef.current.masterSequence.imageClips ?? []).find((candidate) => candidate.id === clipId)
+    if (!clip) return
+    setMasterSelection({ kind: 'image', id: clipId })
+    setMasterFrame(clip.startMasterFrame)
+  }
+
+  const snapMasterImageFrame = (frame: number, clipId: string, threshold = 3) => {
+    const current = projectDocumentRef.current
+    const boundaries = [masterFrame, 0]
+    let cursor = 0
+    orderedMasterClips(current.masterSequence).forEach((clip) => { boundaries.push(cursor, cursor + masterClipDurationFrames(clip)); cursor += masterClipDurationFrames(clip) })
+    ;(current.masterSequence.imageClips ?? []).filter((clip) => clip.id !== clipId).forEach((clip) => boundaries.push(clip.startMasterFrame, clip.startMasterFrame + clip.durationFrames))
+    const nearest = boundaries.reduce((best, candidate) => Math.abs(candidate - frame) < Math.abs(best - frame) ? candidate : best, frame)
+    return Math.abs(nearest - frame) <= threshold ? Math.max(0, nearest) : Math.max(0, Math.round(frame))
+  }
+
+  const importMasterImage = async (trackId: string, file: File) => {
+    if (!/^image\/(png|jpe?g)$/i.test(file.type) && !/\.(png|jpe?g)$/i.test(file.name)) {
+      setSceneFileError('Graphics images must be PNG or JPEG files.')
+      return
+    }
+    const objectUrl = URL.createObjectURL(file)
+    try {
+      const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+        const image = new Image()
+        image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight })
+        image.onerror = () => reject(new Error('Image could not be decoded.'))
+        image.src = objectUrl
+      })
+      const current = projectDocumentRef.current
+      const assetId = `image-asset-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+      const clipId = `image-clip-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+      const asset = { id: assetId, fileName: file.name, mimeType: file.type || (file.name.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg'), sizeBytes: file.size, lastModified: file.lastModified || null, width: dimensions.width, height: dimensions.height }
+      const clip: MasterImageClipDocument = { id: clipId, trackId, assetId, startMasterFrame: masterFrame, durationFrames: DEFAULT_IMAGE_CLIP_DURATION_FRAMES, positionX: 0.5, positionY: 0.5, scale: 1, rotation: 0, opacity: 1, fadeInFrames: 0, fadeOutFrames: 0 }
+      const sidecarStored = await saveImageAsset(current.id, assetId, file).catch(() => false)
+      const nextSequence = { ...current.masterSequence, graphicsTracks: current.masterSequence.graphicsTracks ?? [], imageAssets: [...(current.masterSequence.imageAssets ?? []), asset], imageClips: [...(current.masterSequence.imageClips ?? []), clip] }
+      const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: nextSequence }
+      projectHistoryRef.current.record({ label: 'Add Graphics Image', before: current, after: next })
+      replaceProjectDocument(next)
+      setMasterImageUrls((urls) => ({ ...urls, [assetId]: objectUrl }))
+      setMasterSelection({ kind: 'image', id: clipId })
+      setMasterFrame(clip.startMasterFrame)
+      switchTimelineMode('master')
+      setSceneFileError(sidecarStored ? null : 'Image imported for this session, but browser storage is unavailable. Re-import it after reopening this project to restore the image.')
+      setIsDirty(true)
+    } catch {
+      URL.revokeObjectURL(objectUrl)
+      setSceneFileError('This image could not be decoded.')
+    }
+  }
+
+  const imageAssetSignature = (asset: { id: string; fileName: string; mimeType: string; sizeBytes: number; width: number; height: number } | undefined): string => asset ? `${asset.id}|${asset.fileName}|${asset.mimeType}|${asset.sizeBytes}|${asset.width}|${asset.height}` : 'absent'
+
+  const retainMediaSidecarVersion = (projectId: string, assetId: string, beforeAsset: { id: string; fileName: string; mimeType: string; sizeBytes: number; width: number; height: number } | undefined, afterAsset: { id: string; fileName: string; mimeType: string; sizeBytes: number; width: number; height: number } | undefined, beforeBlob: Blob | null, afterBlob: Blob | null) => {
+    mediaSidecarHistoryRef.current.push({ projectId, assetId, beforeSignature: imageAssetSignature(beforeAsset), afterSignature: imageAssetSignature(afterAsset), beforeBlob, afterBlob })
+    if (mediaSidecarHistoryRef.current.length > 100) mediaSidecarHistoryRef.current.shift()
+  }
+
+  const restoreMediaSidecarsForHistory = (from: ProjectDocument, to: ProjectDocument) => {
+    const fromAssets = new Map((from.masterSequence.imageAssets ?? []).map((asset) => [asset.id, asset]))
+    const toAssets = new Map((to.masterSequence.imageAssets ?? []).map((asset) => [asset.id, asset]))
+    const assetIds = new Set([...fromAssets.keys(), ...toAssets.keys()])
+    let didRestore = false
+    void Promise.all([...assetIds].map(async (assetId) => {
+      const version = [...mediaSidecarHistoryRef.current].reverse().find((candidate) => candidate.projectId === from.id && candidate.assetId === assetId && candidate.beforeSignature === imageAssetSignature(toAssets.get(assetId)) && candidate.afterSignature === imageAssetSignature(fromAssets.get(assetId)))
+        ?? [...mediaSidecarHistoryRef.current].reverse().find((candidate) => candidate.projectId === from.id && candidate.assetId === assetId && candidate.beforeSignature === imageAssetSignature(fromAssets.get(assetId)) && candidate.afterSignature === imageAssetSignature(toAssets.get(assetId)))
+      if (!version) return
+      didRestore = true
+      const isUndo = version.afterSignature === imageAssetSignature(fromAssets.get(assetId))
+      const blob = isUndo ? version.beforeBlob : version.afterBlob
+      if (blob) await saveImageAsset(to.id, assetId, blob)
+      else await deleteImageAsset(to.id, assetId)
+    })).finally(() => { if (didRestore) setMediaScanToken((value) => value + 1) })
+  }
+
+  const relinkMasterImage = async (assetId: string, file: File) => {
+    if (!isSupportedImageFile(file)) { const message = 'Graphics images must be PNG or JPEG files.'; setSceneFileError(message); setMediaManagerError(message); return }
+    try {
+      const decoded = await decodeImageBlob(file)
+      const current = projectDocumentRef.current
+      const source = (current.masterSequence.imageAssets ?? []).find((asset) => asset.id === assetId)
+      if (!source) return
+      const beforeBlob = await loadImageAsset(current.id, assetId)
+      const stored = await saveImageAsset(current.id, assetId, file)
+      if (!stored) throw new Error('The image was decoded but could not be saved to browser sidecar storage.')
+      const replacement = { ...source, fileName: file.name, mimeType: file.type || decoded.actualMimeType, sizeBytes: file.size, lastModified: file.lastModified || null, width: decoded.width, height: decoded.height, metadataPending: false }
+      retainMediaSidecarVersion(current.id, assetId, source, replacement, beforeBlob, file)
+      const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, imageAssets: (current.masterSequence.imageAssets ?? []).map((asset) => asset.id === assetId ? replacement : asset) } }
+      projectHistoryRef.current.record({ label: 'Relink Graphics Image', before: current, after: next })
+      replaceProjectDocument(next)
+      setSceneFileError(null)
+      setMediaManagerError(null)
+      setMediaScanToken((value) => value + 1)
+      setIsDirty(true)
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'This image could not be relinked.'
+      setSceneFileError(message)
+      setMediaManagerError(message)
+    }
+  }
+
+  const relinkAllMasterImages = async (files: Map<string, File>): Promise<{ recovered: number; failed: string[] }> => {
+    const current = projectDocumentRef.current
+    const assets = current.masterSequence.imageAssets ?? []
+    const replacements = new Map<string, { file: File; decoded: { width: number; height: number; actualMimeType: string }; beforeBlob: Blob | null }>()
+    const failures: string[] = []
+    for (const [assetId, file] of files) {
+      const source = assets.find((asset) => asset.id === assetId)
+      if (!source) continue
+      try {
+        if (!isSupportedImageFile(file)) throw new Error('unsupported format')
+        const decoded = await decodeImageBlob(file)
+        const beforeBlob = await loadImageAsset(current.id, assetId)
+        const stored = await saveImageAsset(current.id, assetId, file)
+        if (!stored) throw new Error('sidecar storage unavailable')
+        replacements.set(assetId, { file, decoded, beforeBlob })
+      } catch {
+        failures.push(source.fileName)
+      }
+    }
+    if (replacements.size > 0) {
+      const nextAssets = assets.map((asset) => {
+        const replacement = replacements.get(asset.id)
+        if (!replacement) return asset
+        const updated = { ...asset, fileName: replacement.file.name, mimeType: replacement.file.type || replacement.decoded.actualMimeType, sizeBytes: replacement.file.size, lastModified: replacement.file.lastModified || null, width: replacement.decoded.width, height: replacement.decoded.height, metadataPending: false }
+        retainMediaSidecarVersion(current.id, asset.id, asset, updated, replacement.beforeBlob, replacement.file)
+        return updated
+      })
+      const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, imageAssets: nextAssets } }
+      projectHistoryRef.current.record({ label: `Relink ${replacements.size} Graphics Images`, before: current, after: next })
+      replaceProjectDocument(next)
+      setIsDirty(true)
+    }
+    setMediaScanToken((value) => value + 1)
+    const message = failures.length > 0 ? `Recovered ${replacements.size}; still missing ${failures.length}: ${failures.join(', ')}.` : null
+    setSceneFileError(message)
+    setMediaManagerError(message)
+    return { recovered: replacements.size, failed: failures }
+  }
+
+  const replaceMasterImageClipAsset = async (clipId: string, file: File) => {
+    if (!isSupportedImageFile(file)) { const message = 'Graphics images must be PNG or JPEG files.'; setSceneFileError(message); setMediaManagerError(message); return }
+    try {
+      const decoded = await decodeImageBlob(file)
+      const current = projectDocumentRef.current
+      const clip = (current.masterSequence.imageClips ?? []).find((candidate) => candidate.id === clipId)
+      if (!clip) return
+      const assetId = `image-asset-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+      const stored = await saveImageAsset(current.id, assetId, file)
+      if (!stored) throw new Error('The image was decoded but could not be saved to browser sidecar storage.')
+      const asset = { id: assetId, fileName: file.name, mimeType: file.type || decoded.actualMimeType, sizeBytes: file.size, lastModified: file.lastModified || null, width: decoded.width, height: decoded.height }
+      retainMediaSidecarVersion(current.id, assetId, undefined, asset, null, file)
+      const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, imageAssets: [...(current.masterSequence.imageAssets ?? []), asset], imageClips: (current.masterSequence.imageClips ?? []).map((item) => item.id === clipId ? { ...item, assetId } : item) } }
+      projectHistoryRef.current.record({ label: 'Replace Graphics Clip Image', before: current, after: next })
+      replaceProjectDocument(next)
+      setMasterSelection({ kind: 'image', id: clipId })
+      setSceneFileError(null)
+      setMediaManagerError(null)
+      setMediaScanToken((value) => value + 1)
+      setIsDirty(true)
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'This image could not replace the selected clip.'
+      setSceneFileError(message)
+      setMediaManagerError(message)
+    }
+  }
+
+  const requestMasterImageReplacement = (clipId: string) => {
+    mediaReplaceAssetIdRef.current = null
+    mediaReplaceClipIdRef.current = clipId
+    mediaReplaceInputRef.current?.click()
+  }
+
+  const requestMasterImageSourceReplacement = (assetId: string) => {
+    mediaReplaceClipIdRef.current = null
+    mediaReplaceAssetIdRef.current = assetId
+    mediaReplaceInputRef.current?.click()
+  }
+
+  const handleMasterImageReplacement = (file: File | undefined) => {
+    const clipId = mediaReplaceClipIdRef.current
+    const assetId = mediaReplaceAssetIdRef.current
+    mediaReplaceClipIdRef.current = null
+    mediaReplaceAssetIdRef.current = null
+    if (file && clipId) void replaceMasterImageClipAsset(clipId, file)
+    else if (file && assetId) void relinkMasterImage(assetId, file)
+    if (mediaReplaceInputRef.current) mediaReplaceInputRef.current.value = ''
+  }
+
+  const updateMasterImage = (patch: { positionX?: number; positionY?: number; scale?: number; rotation?: number; opacity?: number; fadeInFrames?: number; fadeOutFrames?: number }) => {
+    const current = projectDocumentRef.current
+    const clip = (current.masterSequence.imageClips ?? []).find((candidate) => candidate.id === (masterSelection?.kind === 'image' ? masterSelection.id : ''))
+    if (!clip) return
+    const nextClip = { ...clip, ...patch }
+    const fades = clampFadeFrames(nextClip.durationFrames, nextClip.fadeInFrames, nextClip.fadeOutFrames)
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, imageClips: (current.masterSequence.imageClips ?? []).map((item) => item.id === clip.id ? { ...nextClip, ...fades } : item) } }
+    projectHistoryRef.current.record({ label: 'Edit Graphics Image', before: current, after: next })
+    replaceProjectDocument(next)
+    setIsDirty(true)
+  }
+
+  const moveMasterImage = (clipId: string, startMasterFrame: number) => {
+    const current = projectDocumentRef.current
+    const clip = (current.masterSequence.imageClips ?? []).find((candidate) => candidate.id === clipId)
+    if (!clip || clip.startMasterFrame === startMasterFrame) return
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, imageClips: (current.masterSequence.imageClips ?? []).map((item) => item.id === clipId ? { ...item, startMasterFrame: snapMasterImageFrame(startMasterFrame, clipId) } : item) } }
+    projectHistoryRef.current.record({ label: 'Move Graphics Image', before: current, after: next })
+    replaceProjectDocument(next)
+    setIsDirty(true)
+  }
+
+  const trimMasterImage = (clipId: string, startMasterFrame: number, durationFrames: number) => {
+    const current = projectDocumentRef.current
+    const clip = (current.masterSequence.imageClips ?? []).find((candidate) => candidate.id === clipId)
+    if (!clip) return
+    const duration = Math.max(1, Math.round(durationFrames))
+    const snappedStart = snapMasterImageFrame(startMasterFrame, clipId)
+    const fades = clampFadeFrames(duration, clip.fadeInFrames, clip.fadeOutFrames)
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, imageClips: (current.masterSequence.imageClips ?? []).map((item) => item.id === clipId ? { ...item, startMasterFrame: snappedStart, durationFrames: duration, ...fades } : item) } }
+    projectHistoryRef.current.record({ label: 'Trim Graphics Image', before: current, after: next })
+    replaceProjectDocument(next)
+    setIsDirty(true)
+  }
+
+  const changeMasterImageFade = (clipId: string, fadeInFrames: number, fadeOutFrames: number) => {
+    const current = projectDocumentRef.current
+    const clip = (current.masterSequence.imageClips ?? []).find((candidate) => candidate.id === clipId)
+    if (!clip) return
+    const fades = clampFadeFrames(clip.durationFrames, fadeInFrames, fadeOutFrames)
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, imageClips: (current.masterSequence.imageClips ?? []).map((item) => item.id === clipId ? { ...item, ...fades } : item) } }
+    projectHistoryRef.current.record({ label: 'Edit Graphics Fade', before: current, after: next })
+    replaceProjectDocument(next)
+    setIsDirty(true)
+  }
+
+  const duplicateMasterImage = () => {
+    const current = projectDocumentRef.current
+    const selectedId = masterSelection?.kind === 'image' ? masterSelection.id : null
+    const source = selectedId ? (current.masterSequence.imageClips ?? []).find((clip) => clip.id === selectedId) : null
+    if (!source) return
+    const copy = { ...source, id: `image-clip-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, startMasterFrame: source.startMasterFrame + source.durationFrames }
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, imageClips: [...(current.masterSequence.imageClips ?? []), copy] } }
+    projectHistoryRef.current.record({ label: 'Duplicate Graphics Image', before: current, after: next })
+    replaceProjectDocument(next)
+    setMasterSelection({ kind: 'image', id: copy.id })
+    setIsDirty(true)
+  }
+
+  const removeMasterImage = () => {
+    const current = projectDocumentRef.current
+    const selectedId = masterSelection?.kind === 'image' ? masterSelection.id : null
+    const source = selectedId ? (current.masterSequence.imageClips ?? []).find((clip) => clip.id === selectedId) : null
+    if (!source) return
+    const remaining = (current.masterSequence.imageClips ?? []).filter((clip) => clip.id !== source.id)
+    const assetStillUsed = remaining.some((clip) => clip.assetId === source.assetId)
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, imageAssets: assetStillUsed ? current.masterSequence.imageAssets : (current.masterSequence.imageAssets ?? []).filter((asset) => asset.id !== source.assetId), imageClips: remaining } }
+    projectHistoryRef.current.record({ label: 'Remove Graphics Image', before: current, after: next })
+    replaceProjectDocument(next)
+    if (!assetStillUsed) { const url = masterImageUrls[source.assetId]; if (url) URL.revokeObjectURL(url); setMasterImageUrls((urls) => { const nextUrls = { ...urls }; delete nextUrls[source.assetId]; return nextUrls }) }
+    setMasterSelection(null)
     setIsDirty(true)
   }
 
@@ -2427,7 +3083,9 @@ function V2EditorApp() {
     const current = projectDocumentRef.current
     const shots = reorderShotDocuments(current.shots, shotId, targetIndex)
     if (shots.every((shot, index) => shot.id === current.shots[index]?.id)) return
-    replaceProjectDocument({ ...current, updatedAt: new Date().toISOString(), shots })
+    const next = { ...current, updatedAt: new Date().toISOString(), shots }
+    projectHistoryRef.current.record({ label: 'Reorder Shot', before: current, after: next })
+    replaceProjectDocument(next)
     setShotListSelectedId(shotId)
     setIsDirty(true)
   }
@@ -2589,6 +3247,7 @@ function V2EditorApp() {
   }
 
   const saveGeneratedFile = async (blob: Blob, fileName: string, extension: string): Promise<boolean> => {
+    if (blob.size <= 0) throw new Error('The export produced an empty output file.')
     if (platformAdapter.kind === 'desktop') {
       const path = await platformAdapter.chooseExportLocation(fileName, extension)
       if (!path) return false
@@ -2618,6 +3277,21 @@ function V2EditorApp() {
     } catch (error: unknown) {
       setSceneFileError(error instanceof Error ? `Shot List export failed: ${error.message}` : 'Shot List export failed.')
     }
+  }
+
+  const exportShotListPdf = async (scope: ShotListExportScope, layout: ShotListPrintLayout, onStage: (stage: 'preparing' | 'saving') => void): Promise<{ cancelled: boolean; path: string | null; byteLength: number }> => {
+    if (platformAdapter.kind !== 'desktop') throw new Error('Native Shot List PDF export is available in the desktop app.')
+    onStage('preparing')
+    const project = projectDocumentRef.current
+    const settings = normalizeShotListSettings(project.settings.shotList)
+    const payload = buildShotListPrintModel(project, settings, scope, layout)
+    const data = await buildShotListPdf(payload)
+    if (data.byteLength <= 0) throw new Error('The PDF renderer produced an empty output file.')
+    onStage('saving')
+    const path = await platformAdapter.chooseExportLocation(shotListExportFilename(project.name, 'pdf'), 'pdf')
+    if (!path) return { cancelled: true, path: null, byteLength: 0 }
+    await platformAdapter.writeExportFile(path, data)
+    return { cancelled: false, path, byteLength: data.byteLength }
   }
 
   const handleCaptureFrameReady = async (blob: Blob, _options: StillCaptureOptions) => {
@@ -2895,8 +3569,9 @@ function V2EditorApp() {
   const addCamera = () => {
     const before = sceneDocumentRef.current
     const nextIndex = Math.max(0, ...before.cameras.map((camera) => Number(/camera-(\d+)/.exec(camera.id)?.[1] ?? 0))) + 1
-    const definition = CAMERA_DATABASE[0]
-    const captureMode = definition.captureModes[0]
+    const cameraSpec = projectCameraCreationSpec(projectDocumentRef.current.cameraDefaults.cameraModelId)
+    if (!cameraSpec) return
+    const { definition, captureMode } = cameraSpec
     const placement = defaultCameraPlacement(nextIndex)
     const camera = createCameraDocument(
       `camera-${String(nextIndex).padStart(2, '0')}`,
@@ -3848,9 +4523,11 @@ function V2EditorApp() {
       playbackRef.current = null
       setIsPlaying(false)
     }
-    setExportSettings({ source, cameraId: source === 'scene' ? activeCamera?.id ?? null : null, markIn: source === 'scene' ? current.timeline.markIn : masterRange.startFrame, markOut: source === 'scene' ? current.timeline.markOut : masterRange.endFrame, frameRate: source === 'scene' ? current.timeline.frameRate : masterRate, deliveryAspectRatio: source === 'scene' ? activeCamera?.deliveryAspectRatio ?? '16:9' : '16:9', width: 1920, format: 'mp4', quality: 'standard', includeMusic: source === 'master' && Boolean(projectDocumentRef.current.masterSequence.musicClip) })
+    setExportSettings({ source, cameraId: source === 'scene' ? activeCamera?.id ?? null : null, markIn: source === 'scene' ? current.timeline.markIn : masterRange.startFrame, markOut: source === 'scene' ? current.timeline.markOut : masterRange.endFrame, frameRate: source === 'scene' ? current.timeline.frameRate : masterRate, deliveryAspectRatio: source === 'scene' ? activeCamera?.deliveryAspectRatio ?? '16:9' : '16:9', width: 1920, format: 'mp4', quality: 'standard', includeMusic: source === 'master' && Boolean(projectDocumentRef.current.masterSequence.musicClip), shotInfoBurnIn: exportSettings.shotInfoBurnIn ?? defaultShotInfoBurnInSettings() })
     setExportProgress(null)
     setExportError(null)
+    setExportSuccess(null)
+    setExportRevealError(null)
     setExportStatus('idle')
     setExportOpen(true)
   }
@@ -3861,20 +4538,41 @@ function V2EditorApp() {
 
   const startExport = async () => {
     if (exportAbortRef.current) return
+    setExportSuccess(null)
+    setExportRevealError(null)
+    setExportError(null)
+    setExportProgress(null)
     const snapshot = sceneDocumentRef.current
     const activeCamera = snapshot.cameras.find((camera) => camera.id === snapshot.activeCameraId) ?? null
     const source = exportSettings.source ?? 'scene'
     let settings: VideoExportSettings = { ...exportSettings, source, cameraId: source === 'scene' ? activeCamera?.id ?? null : null, markIn: snapshot.timeline.markIn, markOut: snapshot.timeline.markOut, frameRate: snapshot.timeline.frameRate, deliveryAspectRatio: activeCamera && exportSettings.cameraId !== activeCamera.id && source === 'scene' ? activeCamera.deliveryAspectRatio : exportSettings.deliveryAspectRatio }
     let masterPlan: ReturnType<typeof buildMasterRenderPlan> | undefined
     let musicBlob: Blob | null = null
+    const masterImageAssets = new Map<string, HTMLImageElement>()
     try {
       if (source === 'master') {
         masterPlan = buildMasterRenderPlan(projectDocumentRef.current, { width: settings.width, deliveryAspectRatio: settings.deliveryAspectRatio, includeMusic: settings.includeMusic === true })
         settings = { ...settings, cameraId: null, frameRate: masterPlan.frameRate, markIn: masterPlan.startFrame, markOut: masterPlan.endFrameExclusive }
+        const renderAssetIds = new Set(imageClipsIntersectingRange(projectDocumentRef.current.masterSequence, masterPlan.startFrame, masterPlan.endFrameExclusive).map((clip) => clip.assetId))
+        const renderAssets = (projectDocumentRef.current.masterSequence.imageAssets ?? []).filter((asset) => renderAssetIds.has(asset.id))
+        const renderHealth = await Promise.all(renderAssets.map((asset) => resolveImageAssetHealth(projectDocumentRef.current.id, asset)))
+        const invalidRenderAssets = renderHealth.filter((item) => item.status !== 'available')
+        if (invalidRenderAssets.length > 0) throw new Error(`Master export is blocked because ${invalidRenderAssets.length} Graphics image${invalidRenderAssets.length === 1 ? ' is' : 's are'} missing or unreadable. Open Project → Media Manager to recover them.`)
         const music = projectDocumentRef.current.masterSequence.musicClip
         if (settings.includeMusic === true && music) {
           musicBlob = await loadMusicAsset(projectDocumentRef.current.id, music.asset.id)
           if (!musicBlob) throw new Error('Master Music is missing. Re-import the Music asset or export without Music.')
+        }
+        for (const asset of projectDocumentRef.current.masterSequence.imageAssets ?? []) {
+          const blob = await loadImageAsset(projectDocumentRef.current.id, asset.id)
+          if (!blob) continue
+          const url = URL.createObjectURL(blob)
+          try {
+            const image = await loadExportImage(url)
+            masterImageAssets.set(asset.id, image)
+          } finally {
+            URL.revokeObjectURL(url)
+          }
         }
       }
     } catch (error: unknown) {
@@ -3883,8 +4581,6 @@ function V2EditorApp() {
       return
     }
     setExportSettings(settings)
-    setExportError(null)
-    setExportProgress(null)
     setExportStatus('preparing')
     if (isPlaying) {
       playbackRef.current = null
@@ -3893,27 +4589,36 @@ function V2EditorApp() {
     const controller = new AbortController()
     exportAbortRef.current = controller
     const camera = snapshot.cameras.find((item) => item.id === settings.cameraId)
+    const onExportStage = (event: Parameters<NonNullable<VideoExportRequest['onStage']>>[0]) => {
+      setExportStatus(event.stage === 'rendering' ? 'exporting' : event.stage)
+    }
     const fileName = source === 'master' ? exportFilename(projectDocumentRef.current.name, 'Master', settings.markIn, settings.markOut, settings.format) : exportFilename(snapshot.metadata.name, camera?.name ?? 'Camera', settings.markIn, settings.markOut, settings.format)
-    const exportPromise = platformAdapter.kind === 'desktop'
+    const exportPromise: Promise<ExportSaveResult> = platformAdapter.kind === 'desktop'
       ? (source === 'master' ? import('./export/nativeMasterVideoExporter').then(async ({ exportNativeMasterVideo }) => {
         const path = await platformAdapter.chooseExportLocation(fileName, settings.format)
-        if (!path) return false
-        await exportNativeMasterVideo({ document: snapshot, project: projectDocumentRef.current, masterPlan, musicBlob, settings, signal: controller.signal, onProgress: (progress) => { setExportStatus(progress.phase === 'encoding' ? 'encoding' : 'exporting'); setExportProgress(progress) } }, path)
-        return true
+        if (!path) return { saved: false, outputPath: null, outputBytes: null }
+        const output = await exportNativeMasterVideo({ document: snapshot, project: projectDocumentRef.current, masterPlan, musicBlob, masterImageAssets, settings, signal: controller.signal, onStage: onExportStage, onProgress: (progress) => { setExportStatus(progress.phase === 'encoding' ? 'encoding' : 'exporting'); setExportProgress(progress) } }, path)
+        return { saved: true, outputPath: path, outputBytes: output.byteLength }
       }) : import('./export/nativeVideoExporter').then(async ({ exportNativeVideo }) => {
         const path = await platformAdapter.chooseExportLocation(fileName, 'mp4')
-        if (!path) return false
-        await exportNativeVideo({ document: snapshot, settings, signal: controller.signal, onProgress: (progress) => { setExportStatus(progress.phase === 'encoding' ? 'encoding' : 'exporting'); setExportProgress(progress) } }, path)
-        return true
+        if (!path) return { saved: false, outputPath: null, outputBytes: null }
+        const output = await exportNativeVideo({ document: snapshot, project: projectDocumentRef.current, settings, signal: controller.signal, onStage: onExportStage, onProgress: (progress) => { setExportStatus(progress.phase === 'encoding' ? 'encoding' : 'exporting'); setExportProgress(progress) } }, path)
+        return { saved: true, outputPath: path, outputBytes: output.byteLength }
       }))
-      : (source === 'master' ? import('./export/masterVideoExporter').then(({ exportMasterVideo }) => exportMasterVideo({ document: snapshot, project: projectDocumentRef.current, masterPlan, musicBlob, settings, signal: controller.signal, onProgress: (progress) => { setExportStatus('exporting'); setExportProgress(progress) } })).then(async (blob) => saveGeneratedFile(blob, fileName, settings.format)) : import('./export/videoExporter').then(({ exportVideo }) => exportVideo({ document: snapshot, settings, signal: controller.signal, onProgress: (progress) => { setExportStatus('exporting'); setExportProgress(progress) } })).then(async (blob) => saveGeneratedFile(blob, fileName, settings.format)))
-    void exportPromise.then((written) => {
-      setExportStatus('finalizing')
-      if (!written) {
+      : (source === 'master' ? import('./export/masterVideoExporter').then(({ exportMasterVideo }) => exportMasterVideo({ document: snapshot, project: projectDocumentRef.current, masterPlan, musicBlob, masterImageAssets, settings, signal: controller.signal, onStage: onExportStage, onProgress: (progress) => { setExportStatus(progress.phase === 'encoding' ? 'encoding' : 'exporting'); setExportProgress(progress) } })).then(async (blob) => { setExportStatus('saving'); const saved = await saveGeneratedFile(blob, fileName, settings.format); return { saved, outputPath: null, outputBytes: saved ? blob.size : null } }) : import('./export/videoExporter').then(({ exportVideo }) => exportVideo({ document: snapshot, project: projectDocumentRef.current, settings, signal: controller.signal, onStage: onExportStage, onProgress: (progress) => { setExportStatus(progress.phase === 'encoding' ? 'encoding' : 'exporting'); setExportProgress(progress) } })).then(async (blob) => { setExportStatus('saving'); const saved = await saveGeneratedFile(blob, fileName, settings.format); return { saved, outputPath: null, outputBytes: saved ? blob.size : null } }))
+    void exportPromise.then((result) => {
+      if (!result.saved) {
         setExportStatus('cancelled')
         setExportError(null)
         return
       }
+      const outputAspect = source === 'master' && masterPlan ? masterPlan.deliveryAspect : deliveryAspectForCamera(settings.deliveryAspectRatio, settings.cameraId, snapshot)
+      const frameRate = source === 'master' && masterPlan ? masterPlan.frameRate : settings.frameRate
+      const frameCount = source === 'master' && masterPlan ? masterPlan.frameCount : exportFrameCount(settings.markIn, settings.markOut)
+      const success = successMetadataForExport({ source, format: settings.format, resolution: dimensionsForDeliveryAspect(settings.width, outputAspect), frameCount, frameRate, saveResult: result })
+      if (!success) throw new Error('The export did not produce a confirmed saved output.')
+      setExportSuccess(success)
+      setExportRevealError(null)
       setExportStatus('completed')
     }).catch((error: unknown) => {
       if (isExportCancelled(error)) {
@@ -3926,6 +4631,17 @@ function V2EditorApp() {
     }).finally(() => {
       exportAbortRef.current = null
     })
+  }
+
+  const revealExport = async () => {
+    const path = exportSuccess?.outputPath
+    if (!path) return
+    setExportRevealError(null)
+    try {
+      await platformAdapter.revealFile(path)
+    } catch (error: unknown) {
+      setExportRevealError(error instanceof Error ? error.message : 'The exported video could not be revealed.')
+    }
   }
 
   useEffect(() => () => exportAbortRef.current?.abort(), [])
@@ -3977,40 +4693,37 @@ function V2EditorApp() {
     if (liveRoleRef.current === 'host' || liveRoleRef.current === null) {
       const planningEntry = projectHistoryRef.current.undo()
       if (planningEntry) {
-        projectDocumentRef.current = planningEntry.before
-        const activeScene = planningEntry.before.scenes.find((entry) => entry.id === planningEntry.before.activeSceneId)
-        if (activeScene) sceneDocumentRef.current = activeScene.scene
-        setProjectDocument(planningEntry.before)
+        restoreMediaSidecarsForHistory(projectDocumentRef.current, planningEntry.before)
+        applyProjectHistorySnapshot(planningEntry.before, planningEntry.beforeSelection)
         setIsDirty(true)
         publishLiveProject(planningEntry.before)
         return true
       }
     }
-    const entry = historyRef.current.undo()
-    if (!entry) return false
-    applyEditorSnapshot(entry.before)
-    setIsDirty(creativeProjectFingerprint(projectDocumentRef.current) !== savedProjectFingerprintRef.current)
-    return true
+    return false
   }
 
   const redo = (): boolean => {
     if (liveRoleRef.current === 'host') {
       const planningEntry = projectHistoryRef.current.redo()
       if (planningEntry) {
-        projectDocumentRef.current = planningEntry.after
-        const activeScene = planningEntry.after.scenes.find((entry) => entry.id === planningEntry.after.activeSceneId)
-        if (activeScene) sceneDocumentRef.current = activeScene.scene
-        setProjectDocument(planningEntry.after)
+        restoreMediaSidecarsForHistory(projectDocumentRef.current, planningEntry.after)
+        applyProjectHistorySnapshot(planningEntry.after, planningEntry.afterSelection)
         setIsDirty(true)
         publishLiveProject(planningEntry.after)
         return true
       }
     }
-    const entry = historyRef.current.redo()
-    if (!entry) return false
-    applyEditorSnapshot(entry.after)
-    setIsDirty(creativeProjectFingerprint(projectDocumentRef.current) !== savedProjectFingerprintRef.current)
-    return true
+    if (liveRoleRef.current === null) {
+      const planningEntry = projectHistoryRef.current.redo()
+      if (planningEntry) {
+        restoreMediaSidecarsForHistory(projectDocumentRef.current, planningEntry.after)
+        applyProjectHistorySnapshot(planningEntry.after, planningEntry.afterSelection)
+        setIsDirty(true)
+        return true
+      }
+    }
+    return false
   }
 
   useEffect(() => {
@@ -4051,10 +4764,18 @@ function V2EditorApp() {
         return 'cancel'
       }
       if (!isDirtyRef.current) return 'close'
-      const choice = platformAdapter.promptUnsavedClose ? await platformAdapter.promptUnsavedClose() : 'cancel'
-      const decision = closeDecisionForUnsavedChoice(choice, choice !== 'save' || await saveProject())
-      if (choice === 'discard' && decision === 'close') await discardCurrentRecovery()
-      return decision
+      const choice = await requestUnsavedChoice('quit')
+      if (choice === 'discard') {
+        await discardCurrentRecovery()
+        isDirtyRef.current = false
+        setIsDirty(false)
+        return 'close'
+      }
+      if (choice === 'save') {
+        const saved = await saveProject()
+        return saved && !isDirtyRef.current ? 'close' : 'cancel'
+      }
+      return 'cancel'
     }).then((unlisten) => {
       if (active) cleanup = unlisten
       else unlisten()
@@ -4070,7 +4791,8 @@ function V2EditorApp() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target instanceof HTMLElement ? event.target : null
-      const isTextEditing = Boolean(target && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable))
+      const isTextEditing = Boolean(target && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable || target.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""], [role="textbox"]')))
+      if (target?.closest('[role="dialog"], .v2-shot-list-options') || unsavedDialogPromiseRef.current) return
       const bindings = shortcutBindingsRef.current
       if (!isTextEditing && shortcutMatches(event, bindings.open)) {
         event.preventDefault()
@@ -4101,12 +4823,29 @@ function V2EditorApp() {
       if (markShortcut && !event.repeat) {
         event.preventDefault()
         if (timelineModeRef.current === 'scene') changeMark(markShortcut)
+        else if (timelineModeRef.current === 'master' && (liveRoleRef.current === null || liveRoleRef.current === 'host')) changeMasterMark(markShortcut)
+        return
+      }
+      const zoomShortcut = timelineZoomShortcutForKey(event.key, isTextEditing, event)
+      if (zoomShortcut) {
+        const handler = timelineModeRef.current === 'scene' ? sceneTimelineZoomShortcutRef.current : masterTimelineZoomShortcutRef.current
+        if (handler) {
+          event.preventDefault()
+          handler(zoomShortcut === 'out' ? -1 : 1)
+        }
         return
       }
       if (isTextEditing) return
       const shortcut = editorShortcutForKey(event)
       if (shortcut) {
-        const handled = shortcut === 'copy' ? copySelection() : shortcut === 'paste' ? pasteSelection() : shortcut === 'undo' ? undo() : shortcut === 'redo' ? redo() : duplicateEntity(selectedEntityIdRef.current ?? '')
+        if (shortcut === 'undo' || shortcut === 'redo') {
+          event.preventDefault()
+          if (event.repeat) return
+          if (shortcut === 'undo') undo()
+          else redo()
+          return
+        }
+        const handled = shortcut === 'copy' ? copySelection() : shortcut === 'paste' ? pasteSelection() : duplicateEntity(selectedEntityIdRef.current ?? '')
         if (handled) event.preventDefault()
         return
       }
@@ -4128,8 +4867,10 @@ function V2EditorApp() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
+  const unsavedDialog = unsavedDialogPurpose ? <V2UnsavedChangesDialog purpose={unsavedDialogPurpose} onChoice={resolveUnsavedChoice} /> : null
+
   if (workspaceMode === 'library') {
-    return <><V2ProjectLibrary entries={recentProjects} thumbnails={recentProjectThumbnails} loading={recentProjectsLoading} error={recentProjectsError} dropState={desktopDropState} revealLabel={platformAdapter.revealProjectLabel} onNewProject={newProject} onOpenProject={loadProject} onOpenRecent={openRecentProject} onLocate={locateRecentProject} onReveal={revealRecentFile} onRemove={removeRecent} onRename={renameRecentFile} onDuplicate={duplicateRecentFile} onDelete={deleteRecentFile} onOpenSettings={() => setShortcutSettingsOpen(true)} recoveryCount={recoveryLoading ? 0 : recoveryEntries.length} onOpenRecoveries={() => setRecoveryModalOpen(true)} />{updateNotice ? <V2UpdateNotice release={updateNotice} downloadStatus={downloadStatus} downloadError={downloadError} onDownload={() => downloadUpdate(updateNotice)} onLater={dismissUpdate} /> : null}{shortcutSettingsOpen ? <V2ShortcutSettings bindings={shortcutBindings} onChange={updateShortcut} onReset={resetShortcuts} onClose={() => setShortcutSettingsOpen(false)} recoveryEnabled={recoveryEnabled} onRecoveryEnabledChange={platformAdapter.kind === 'desktop' ? setRecoveryPreference : undefined} showMacosBetaHelp={isMacOSDesktop()} appVersion={APP_VERSION} websiteUrl={APP_WEBSITE_URL} contactEmail={APP_CONTACT_EMAIL} onOpenExternalUrl={(url) => { void platformAdapter.openExternalUrl(url) }} updateState={updateState} onCheckForUpdates={() => { void checkForUpdates() }} onDownloadUpdate={() => downloadUpdate()} onLaterUpdate={dismissUpdate} downloadStatus={downloadStatus} downloadError={downloadError} autoUpdateChecks={updatePreferences.autoCheck} onAutoUpdateChecksChange={platformAdapter.kind === 'desktop' ? saveUpdatePreference : undefined} /> : null}{recoveryModalOpen && recoveryEntries.length > 0 ? <V2RecoveryCenter entries={recoveryEntries} requestedPath={recoveryRequestedPath} onRecover={(entry) => { void recoverProject(entry) }} onDiscard={(entry) => { void discardRecoveryEntry(entry) }} onOpenSaved={(entry) => { void openSavedVersion(entry) }} onClose={() => setRecoveryModalOpen(false)} /> : null}</>
+    return <>{unsavedDialog}<V2ProjectLibrary entries={recentProjects} thumbnails={recentProjectThumbnails} loading={recentProjectsLoading} error={recentProjectsError} dropState={desktopDropState} revealLabel={platformAdapter.revealProjectLabel} onNewProject={newProject} onOpenProject={loadProject} onOpenRecent={openRecentProject} onLocate={locateRecentProject} onReveal={revealRecentFile} onRemove={removeRecent} onRename={renameRecentFile} onDuplicate={duplicateRecentFile} onDelete={deleteRecentFile} onOpenSettings={() => setShortcutSettingsOpen(true)} recoveryCount={recoveryLoading ? 0 : recoveryEntries.length} onOpenRecoveries={() => setRecoveryModalOpen(true)} />{updateNotice ? <V2UpdateNotice release={updateNotice} downloadStatus={downloadStatus} downloadError={downloadError} onDownload={() => downloadUpdate(updateNotice)} onLater={dismissUpdate} /> : null}{shortcutSettingsOpen ? <V2ShortcutSettings bindings={shortcutBindings} onChange={updateShortcut} onReset={resetShortcuts} onClose={() => setShortcutSettingsOpen(false)} recoveryEnabled={recoveryEnabled} onRecoveryEnabledChange={platformAdapter.kind === 'desktop' ? setRecoveryPreference : undefined} showMacosBetaHelp={isMacOSDesktop()} appVersion={APP_VERSION} websiteUrl={APP_WEBSITE_URL} contactEmail={APP_CONTACT_EMAIL} onOpenExternalUrl={(url) => { void platformAdapter.openExternalUrl(url) }} updateState={updateState} onCheckForUpdates={() => { void checkForUpdates() }} onDownloadUpdate={() => downloadUpdate()} onLaterUpdate={dismissUpdate} downloadStatus={downloadStatus} downloadError={downloadError} autoUpdateChecks={updatePreferences.autoCheck} onAutoUpdateChecksChange={platformAdapter.kind === 'desktop' ? saveUpdatePreference : undefined} /> : null}{recoveryModalOpen && recoveryEntries.length > 0 ? <V2RecoveryCenter entries={recoveryEntries} requestedPath={recoveryRequestedPath} onRecover={(entry) => { void recoverProject(entry) }} onDiscard={(entry) => { void discardRecoveryEntry(entry) }} onOpenSaved={(entry) => { void openSavedVersion(entry) }} onClose={() => setRecoveryModalOpen(false)} /> : null}</>
   }
 
   const timelineBounds = timelineHeightBounds(typeof window === 'undefined' ? 900 : window.innerHeight)
@@ -4138,12 +4879,12 @@ function V2EditorApp() {
   const selectedShotLeaseReason = selectedShotLease ? `Shot is being edited by ${selectedShotLease.displayName}` : null
 
   return (
-    <main ref={appShellRef} className={`v2-app-shell${isResizingTimeline ? ' is-resizing-timeline' : ''}${shotListPresentation ? ' is-shot-presentation' : ''}`} style={appShellStyle}>
-      {desktopDropState === 'valid' ? <div className="v2-desktop-drop-feedback" role="status">Drop .ndblock to open this Project</div> : null}
+    <>{unsavedDialog}<main ref={appShellRef} className={`v2-app-shell${isResizingTimeline ? ' is-resizing-timeline' : ''}${shotListPresentation ? ' is-shot-presentation' : ''}`} style={appShellStyle}>
+      {desktopDropState === 'valid' ? <div className="v2-desktop-drop-feedback" role="status">Drop .ndblock or .ndpack to open this Project</div> : null}
       {updateNotice ? <V2UpdateNotice release={updateNotice} downloadStatus={downloadStatus} downloadError={downloadError} onDownload={() => downloadUpdate(updateNotice)} onLater={dismissUpdate} /> : null}
-      <V2TopBar projectName={projectDocument.name} sceneName={view === 'shot-list' ? 'Shot List' : sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} view={view} onViewChange={handleViewChange} onNewProject={newProject} onBackToLibrary={platformAdapter.kind === 'desktop' ? returnToLibrary : undefined} onSaveProject={saveProject} onSaveProjectAs={saveProjectAs} onLoadProject={loadProject} onProjectNameChange={renameProject} onExport={openExport} onOpenAbout={() => setShortcutSettingsOpen(true)} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'encoding' || exportStatus === 'finalizing'} readOnly={liveRole !== null && liveRole !== 'host'} liveStatus={liveStatus} liveRole={liveRole} liveViewerCount={liveViewerCount} onOpenLive={() => setLivePanelOpen(true)} />
-      {view === 'shot-list' ? <V2ShotListWorkspace project={projectDocument} selectedShotId={shotListSelectedId} presentation={shotListPresentation} controlledView={shotListViewMode} controlledSceneFilter={shotListSceneFilter} onViewChange={setShotListViewMode} onSceneFilterChange={setShotListSceneFilter} onSelectShot={setShotListSelectedId} onPresentationChange={setShotListPresentation} onOpenShot={activateShot} onPreviewShot={previewShot} onCaptureThumbnail={(shotId) => { if (liveRole !== 'editor') void captureShotThumbnail(shotId) }} onRenameShot={liveRole === 'viewer' ? () => {} : renameShotForRole} onNotesChange={liveRole === 'viewer' ? () => {} : updateShotNotesForRole} onShotMetadataChange={liveRole === 'viewer' ? () => {} : updateShotMetadataForRole} onShotCameraChange={liveRole === 'viewer' ? () => {} : updateShotCameraForRole} canEditShotCamera={canEditCollaborativeShotCamera(liveRole, Boolean(selectedShotLease))} shotCameraEditDisabledReason={liveRole === 'editor' ? selectedShotLeaseReason : null} onDuplicateShot={liveRole === null || liveRole === 'host' ? duplicateShot : () => {}} onDeleteShot={liveRole === null || liveRole === 'host' ? deleteShot : () => {}} onReorderShot={liveRole === 'viewer' ? () => {} : reorderShotForRole} onShotListSettingsChange={liveRole === null || liveRole === 'host' ? updateShotListSettings : () => {}} onExportShotList={(format, scope) => { void exportShotList(format, scope) }} onOpenBlocking={() => setView('blocking')} /> : <>
-      {timelineMode === 'master' ? <V2MasterShotBin shots={projectDocument.shots} scenes={projectDocument.scenes} activeShotId={activeMasterClipId ? projectDocument.masterSequence.clips.find((clip) => clip.id === activeMasterClipId)?.shotId ?? null : null} onSelectShot={(shotId) => { const clip = projectDocument.masterSequence.clips.find((candidate) => candidate.shotId === shotId); if (clip) selectMasterClip(clip.id, 0) }} onAddShot={liveRole === 'viewer' ? () => {} : addShotToMasterForRole} /> : <V2ScenePanel scenes={projectDocument.scenes} activeSceneId={projectDocument.activeSceneId} actors={sceneDocument.actors} props={sceneDocument.props} walls={sceneDocument.walls} openings={sceneDocument.openings} lights={sceneDocument.lights} cameras={sceneDocument.cameras} groups={sceneDocument.groups} activeCameraId={sceneDocument.activeCameraId} selectedEntityIds={selectedEntityIds} onSelectScene={switchScene} onAddScene={liveRole === null || liveRole === 'host' ? addScene : () => {}} onRenameScene={liveRole === null || liveRole === 'host' ? renameScene : () => {}} onDuplicateScene={liveRole === null || liveRole === 'host' ? duplicateScene : () => {}} onDeleteScene={liveRole === null || liveRole === 'host' ? deleteScene : () => {}} onImportScene={liveRole === null || liveRole === 'host' ? importScene : () => {}} onExportScene={exportScene} onAddActor={liveRole === null || liveRole === 'host' ? addActor : () => {}} onAddProp={liveRole === null || liveRole === 'host' ? addProp : () => {}} onAddWall={liveRole === null || liveRole === 'host' ? addWall : () => {}} onAddOpening={liveRole === null || liveRole === 'host' ? addOpening : () => {}} onAddSun={liveRole === null || liveRole === 'host' ? addSun : () => {}} onAddCamera={liveRole === null || liveRole === 'host' ? addCamera : () => {}} onSetActiveCamera={liveRole === null || liveRole === 'host' ? setActiveCamera : () => {}} onSelectEntity={handleSelectionChange} onBeginEntityRename={liveRole === null || liveRole === 'host' ? beginEntityRename : () => {}} shots={projectDocument.shots} activeShotId={projectDocument.activeShotId} onCreateShot={liveRole === 'viewer' ? () => {} : createShotForRole} onSelectShot={activateShot} onRenameShot={liveRole === 'viewer' ? () => {} : renameShotForRole} onDuplicateShot={liveRole === null || liveRole === 'host' ? duplicateShot : () => {}} onDeleteShot={liveRole === null || liveRole === 'host' ? deleteShot : () => {}} onMoveShot={liveRole === 'viewer' ? () => {} : (shotId, direction) => { const shot = projectDocument.shots.find((candidate) => candidate.id === shotId); if (shot) reorderShotForRole(shotId, shot.order + direction) }} onCaptureShotThumbnail={(shotId) => { if (liveRole !== 'editor') void captureShotThumbnail(shotId) }} onShotNotesChange={liveRole === 'viewer' ? () => {} : updateShotNotesForRole} onShotRangeChange={liveRole === 'viewer' ? () => {} : updateShotRangeForRole} onPreviewShot={previewShot} onAddShotToMaster={liveRole === 'viewer' ? () => {} : addShotToMasterForRole} />}
+      <V2TopBar projectName={projectDocument.name} sceneName={view === 'shot-list' ? 'Shot List' : sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} saveState={projectSaveStatus} view={view} onViewChange={handleViewChange} onNewProject={newProject} onBackToLibrary={returnToLibrary} onSaveProject={saveProject} onSaveProjectAs={saveProjectAs} onLoadProject={loadProject} onOpenProjectSettings={() => setProjectSettingsOpen(true)} onOpenMediaManager={() => setMediaManagerOpen(true)} onExportProjectPackage={openProjectPackage} missingMediaCount={mediaHealth.filter((item) => item.status !== 'available').length} onProjectNameChange={renameProject} onExport={openExport} onOpenAbout={() => setShortcutSettingsOpen(true)} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'encoding' || exportStatus === 'finalizing' || exportStatus === 'saving'} readOnly={liveRole !== null && liveRole !== 'host'} liveStatus={liveStatus} liveRole={liveRole} liveViewerCount={liveViewerCount} onOpenLive={() => setLivePanelOpen(true)} />
+      {view === 'shot-list' ? <V2ShotListWorkspace project={projectDocument} selectedShotId={shotListSelectedId} presentation={shotListPresentation} controlledView={shotListViewMode} controlledSceneFilter={shotListSceneFilter} onViewChange={setShotListViewMode} onSceneFilterChange={setShotListSceneFilter} onSelectShot={setShotListSelectedId} onPresentationChange={setShotListPresentation} onOpenShot={activateShot} onPreviewShot={previewShot} onCaptureThumbnail={(shotId) => { if (liveRole !== 'editor') void captureShotThumbnail(shotId) }} onRenameShot={liveRole === 'viewer' ? () => {} : renameShotForRole} onNotesChange={liveRole === 'viewer' ? () => {} : updateShotNotesForRole} onShotMetadataChange={liveRole === 'viewer' ? () => {} : updateShotMetadataForRole} onShotCameraChange={liveRole === 'viewer' ? () => {} : updateShotCameraForRole} canEditShotCamera={canEditCollaborativeShotCamera(liveRole, Boolean(selectedShotLease))} shotCameraEditDisabledReason={liveRole === 'editor' ? selectedShotLeaseReason : null} onDuplicateShot={liveRole === null || liveRole === 'host' ? duplicateShot : () => {}} onDeleteShot={liveRole === null || liveRole === 'host' ? deleteShot : () => {}} onReorderShot={liveRole === 'viewer' ? () => {} : reorderShotForRole} onShotListSettingsChange={liveRole === null || liveRole === 'host' ? updateShotListSettings : () => {}} onExportShotList={(format, scope) => { void exportShotList(format, scope) }} onExportShotListPdf={exportShotListPdf} onRevealShotListPdf={platformAdapter.revealFile} shotListPdfRevealLabel={platformAdapter.revealFileLabel} desktop={platformAdapter.kind === 'desktop'} onOpenBlocking={() => setView('blocking')} /> : <>
+      {timelineMode === 'master' ? <V2MasterShotBin shots={projectDocument.shots} scenes={projectDocument.scenes} activeShotId={activeMasterClipId ? projectDocument.masterSequence.clips.find((clip) => clip.id === activeMasterClipId)?.shotId ?? null : null} onSelectShot={(shotId) => { const clip = projectDocument.masterSequence.clips.find((candidate) => candidate.shotId === shotId); if (clip) selectMasterClip(clip.id, 0) }} onAddShot={liveRole === 'viewer' ? () => {} : addShotToMasterForRole} /> : <V2ScenePanel scenes={projectDocument.scenes} activeSceneId={projectDocument.activeSceneId} actors={sceneDocument.actors} props={sceneDocument.props} walls={sceneDocument.walls} openings={sceneDocument.openings} lights={sceneDocument.lights} cameras={sceneDocument.cameras} groups={sceneDocument.groups} activeCameraId={sceneDocument.activeCameraId} selectedEntityIds={selectedEntityIds} sectionState={workspaceSidebarState} onSectionToggle={setWorkspaceSidebarSection} onSelectScene={switchScene} onAddScene={liveRole === null || liveRole === 'host' ? addScene : () => {}} onRenameScene={liveRole === null || liveRole === 'host' ? renameScene : () => {}} onDuplicateScene={liveRole === null || liveRole === 'host' ? duplicateScene : () => {}} onDeleteScene={liveRole === null || liveRole === 'host' ? deleteScene : () => {}} onImportScene={liveRole === null || liveRole === 'host' ? importScene : () => {}} onExportScene={exportScene} onAddActor={liveRole === null || liveRole === 'host' ? addActor : () => {}} onAddProp={liveRole === null || liveRole === 'host' ? addProp : () => {}} onAddWall={liveRole === null || liveRole === 'host' ? addWall : () => {}} onAddOpening={liveRole === null || liveRole === 'host' ? addOpening : () => {}} onAddSun={liveRole === null || liveRole === 'host' ? addSun : () => {}} onAddCamera={liveRole === null || liveRole === 'host' ? addCamera : () => {}} onSetActiveCamera={liveRole === null || liveRole === 'host' ? setActiveCamera : () => {}} onSelectEntity={handleSelectionChange} onBeginEntityRename={liveRole === null || liveRole === 'host' ? beginEntityRename : () => {}} shots={projectDocument.shots} activeShotId={projectDocument.activeShotId} onCreateShot={liveRole === 'viewer' ? () => {} : createShotForRole} onSelectShot={activateShot} onRenameShot={liveRole === 'viewer' ? () => {} : renameShotForRole} onDuplicateShot={liveRole === null || liveRole === 'host' ? duplicateShot : () => {}} onDeleteShot={liveRole === null || liveRole === 'host' ? deleteShot : () => {}} onMoveShot={liveRole === 'viewer' ? () => {} : (shotId, direction) => { const shot = projectDocument.shots.find((candidate) => candidate.id === shotId); if (shot) reorderShotForRole(shotId, shot.order + direction) }} onCaptureShotThumbnail={(shotId) => { if (liveRole !== 'editor') void captureShotThumbnail(shotId) }} onShotNotesChange={liveRole === 'viewer' ? () => {} : updateShotNotesForRole} onShotRangeChange={liveRole === 'viewer' ? () => {} : updateShotRangeForRole} onPreviewShot={previewShot} onAddShotToMaster={liveRole === 'viewer' ? () => {} : addShotToMasterForRole} />}
       <V2Stage
         view={view}
         activeSceneId={projectDocument.activeSceneId}
@@ -4190,6 +4931,10 @@ function V2EditorApp() {
         suspendedTimelineProperties={suspendedTimelineProperties}
         runtimeSceneRef={sceneDocumentRef}
         masterPreview={masterPreview}
+        masterImageUrls={masterImageUrls}
+        activeMasterImageClipId={activeMasterImageClipId}
+        onMasterImageSelect={selectMasterImage}
+        onMasterImageChange={liveRole === 'viewer' ? () => {} : updateMasterImage}
         timeline={sceneDocument.timeline}
         isScrubbing={isScrubbing}
         lastTransformDebug={lastTransformDebug}
@@ -4211,7 +4956,7 @@ function V2EditorApp() {
         livePointerActive={liveRole === 'host' && livePointerActive}
         onLivePointerMove={(point) => publishLivePointer({ ...point, participantId: '', displayName: '', surface: 'stage', updatedAt: Date.now() })}
       />
-      {timelineMode === 'master' ? <V2MasterInspector sequence={projectDocument.masterSequence} shots={projectDocument.shots} scenes={projectDocument.scenes} selection={masterSelection} rate={masterSequenceFrameRate(projectDocument.masterSequence, projectDocument.shots, projectDocument.scenes, sceneDocument.timeline.frameRate).rate} onOpenShot={openMasterClip} onDuplicateClip={liveRole === 'viewer' ? () => {} : duplicateMasterClipForRole} onRemoveClip={liveRole === 'viewer' ? () => {} : removeMasterClipForRole} onTrimClip={liveRole === 'viewer' ? () => {} : trimMasterClipForRole} onMusicChange={liveRole === null || liveRole === 'host' ? updateMasterMusic : () => {}} onRemoveMusic={liveRole === null || liveRole === 'host' ? removeMasterMusic : () => {}} /> : <V2DetailsPanel actor={selectedActor} prop={selectedProp} wall={selectedWall} opening={selectedOpening} sun={selectedSun} camera={selectedCamera} group={selectedGroup} selectedEntityIds={selectedEntityIds} selectedTypeCounts={selectedTypeCounts} timeline={sceneDocument.timeline} selectedTimelineKeyframes={selectedTimelineKeyframes} selectedCameraPathSegment={selectedCameraPathSegment} cameraPathVisible={cameraPathVisible} onCameraPathVisibleChange={setCameraPathVisible} onCameraPathSegmentSelect={handleCameraPathSegmentSelect} onCameraPathRetime={liveRole === null || liveRole === 'host' ? handleCameraPathRetime : () => null} cameraMoveReview={cameraMoveReview} onCameraMoveReview={startCameraMoveReview} onCameraMoveReviewStop={() => stopPlaybackSession()} onCameraMoveReviewPose={goToCameraMovePose} onActorChange={liveRole === 'viewer' ? () => {} : updateActorForRole} onPropChange={liveRole === 'viewer' ? () => {} : updatePropForRole} onCameraChange={liveRole === 'viewer' ? () => {} : updateCameraForRole} onAimAtTarget={liveRole === null || liveRole === 'host' ? aimCameraAtTarget : () => {}} onMoveCameraBlocking={liveRole === null || liveRole === 'host' ? moveCameraBlocking : () => {}} onFrameCamera={liveRole === null || liveRole === 'host' ? frameCameraOnActor : () => {}} cameraTargets={cameraTargetEntities} cameraSubjectDistance={selectedCameraSubjectDistance} onWallChange={liveRole === null || liveRole === 'host' ? updateWall : () => {}} onOpeningChange={liveRole === null || liveRole === 'host' ? updateOpening : () => {}} onSunChange={liveRole === null || liveRole === 'host' ? updateSun : () => {}} onDuplicateEntity={liveRole === null || liveRole === 'host' ? duplicateEntity : () => {}} onDeleteEntity={liveRole === null || liveRole === 'host' ? deleteEntity : () => {}} onDeleteSelected={liveRole === null || liveRole === 'host' ? deleteSelectedEntities : () => {}} onCreateGroup={createGroupFromSelection} onUpdateGroup={updateGroup} onUngroup={dissolveGroup} onSetActiveCamera={liveRole === null || liveRole === 'host' ? setActiveCamera : () => {}} onAddKeyframe={addKeyframeForRole} activeCameraId={sceneDocument.activeCameraId} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={setSelectedFrameGuideId} renameRequest={renameRequest} phoneCamera={{ enabled: platformAdapter.kind === 'desktop' && liveRole !== 'viewer' && liveRole !== 'editor', state: phoneCameraState, onPair: () => { try { phoneCameraControllerRef.current?.beginPairing() } catch (error) { if (import.meta.env.DEV) console.error('[phone-camera] pairing failed', error) } }, onDisconnect: () => phoneCameraControllerRef.current?.disconnect(), onRecenter: () => phoneCameraControllerRef.current?.recenter(), onControlChannels: (channels) => phoneCameraControllerRef.current?.setControlChannels(channels), onMovementScale: (value) => phoneCameraControllerRef.current?.setMovementScale(value), onRotationSensitivity: (value) => phoneCameraControllerRef.current?.setRotationSensitivity(value), onSetCameraKey: setPhoneCameraKey, onStartRecording: startPhoneCameraRecording, onStopRecording: stopPhoneCameraRecording }} />}
+      {timelineMode === 'master' ? <V2MasterInspector sequence={projectDocument.masterSequence} shots={projectDocument.shots} scenes={projectDocument.scenes} selection={masterSelection} rate={masterSequenceFrameRate(projectDocument.masterSequence, projectDocument.shots, projectDocument.scenes, sceneDocument.timeline.frameRate).rate} onOpenShot={openMasterClip} onDuplicateClip={liveRole === 'viewer' ? () => {} : duplicateMasterClipForRole} onRemoveClip={liveRole === 'viewer' ? () => {} : removeMasterClipForRole} onTrimClip={liveRole === 'viewer' ? () => {} : trimMasterClipForRole} onMusicChange={liveRole === null || liveRole === 'host' ? updateMasterMusic : () => {}} onRemoveMusic={liveRole === null || liveRole === 'host' ? removeMasterMusic : () => {}} onImageChange={liveRole === 'viewer' ? () => {} : updateMasterImage} onRemoveImage={liveRole === 'viewer' ? () => {} : removeMasterImage} onDuplicateImage={liveRole === 'viewer' ? () => {} : duplicateMasterImage} onReplaceImageSource={liveRole === 'viewer' ? () => {} : requestMasterImageSourceReplacement} onReplaceImageClip={liveRole === 'viewer' ? () => {} : requestMasterImageReplacement} /> : <V2DetailsPanel actor={selectedActor} prop={selectedProp} wall={selectedWall} opening={selectedOpening} sun={selectedSun} camera={selectedCamera} group={selectedGroup} selectedEntityIds={selectedEntityIds} selectedTypeCounts={selectedTypeCounts} timeline={sceneDocument.timeline} selectedTimelineKeyframes={selectedTimelineKeyframes} selectedCameraPathSegment={selectedCameraPathSegment} cameraPathVisible={cameraPathVisible} onCameraPathVisibleChange={setCameraPathVisible} onCameraPathSegmentSelect={handleCameraPathSegmentSelect} onCameraPathRetime={liveRole === null || liveRole === 'host' ? handleCameraPathRetime : () => null} cameraMoveReview={cameraMoveReview} onCameraMoveReview={startCameraMoveReview} onCameraMoveReviewStop={() => stopPlaybackSession()} onCameraMoveReviewPose={goToCameraMovePose} onActorChange={liveRole === 'viewer' ? () => {} : updateActorForRole} onPropChange={liveRole === 'viewer' ? () => {} : updatePropForRole} onCameraChange={liveRole === 'viewer' ? () => {} : updateCameraForRole} onAimAtTarget={liveRole === null || liveRole === 'host' ? aimCameraAtTarget : () => {}} onMoveCameraBlocking={liveRole === null || liveRole === 'host' ? moveCameraBlocking : () => {}} onFrameCamera={liveRole === null || liveRole === 'host' ? frameCameraOnActor : () => {}} cameraTargets={cameraTargetEntities} cameraSubjectDistance={selectedCameraSubjectDistance} onWallChange={liveRole === null || liveRole === 'host' ? updateWall : () => {}} onOpeningChange={liveRole === null || liveRole === 'host' ? updateOpening : () => {}} onSunChange={liveRole === null || liveRole === 'host' ? updateSun : () => {}} onDuplicateEntity={liveRole === null || liveRole === 'host' ? duplicateEntity : () => {}} onDeleteEntity={liveRole === null || liveRole === 'host' ? deleteEntity : () => {}} onDeleteSelected={liveRole === null || liveRole === 'host' ? deleteSelectedEntities : () => {}} onCreateGroup={createGroupFromSelection} onUpdateGroup={updateGroup} onUngroup={dissolveGroup} onSetActiveCamera={liveRole === null || liveRole === 'host' ? setActiveCamera : () => {}} onAddKeyframe={addKeyframeForRole} activeCameraId={sceneDocument.activeCameraId} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={setSelectedFrameGuideId} renameRequest={renameRequest} phoneCamera={{ enabled: platformAdapter.kind === 'desktop' && liveRole !== 'viewer' && liveRole !== 'editor', state: phoneCameraState, onPair: () => { try { phoneCameraControllerRef.current?.beginPairing() } catch (error) { if (import.meta.env.DEV) console.error('[phone-camera] pairing failed', error) } }, onDisconnect: () => phoneCameraControllerRef.current?.disconnect(), onRecenter: () => phoneCameraControllerRef.current?.recenter(), onControlChannels: (channels) => phoneCameraControllerRef.current?.setControlChannels(channels), onMovementScale: (value) => phoneCameraControllerRef.current?.setMovementScale(value), onRotationSensitivity: (value) => phoneCameraControllerRef.current?.setRotationSensitivity(value), onSetCameraKey: setPhoneCameraKey, onStartRecording: startPhoneCameraRecording, onStopRecording: stopPhoneCameraRecording }} />}
       <div
         className="v2-timeline-resize-handle"
         role="separator"
@@ -4237,15 +4982,19 @@ function V2EditorApp() {
         }}
       ><span aria-hidden="true" /></div>
       <div className="v2-timeline-shell">
-        {timelineMode === 'scene' ? <V2Timeline key={`${projectDocument.id}:${projectDocument.createdAt}:${sceneDocument.metadata.id}`} timeline={sceneDocument.timeline} tracks={sceneDocument.timeline.tracks} entities={timelineEntities} selectedEntityId={selectedEntityId} isPlaying={isPlaying} isLooping={isLooping} onFrameChange={liveRole === 'viewer' && liveFollowHost ? () => {} : setCurrentFrame} onDurationChange={liveRole === null || liveRole === 'host' ? changeTimelineDuration : () => {}} onFrameRateChange={liveRole === null || liveRole === 'host' ? changeFrameRate : () => {}} onTogglePlayback={liveRole === null || liveRole === 'host' ? togglePlayback : () => {}} onStopPlayback={liveRole === null || liveRole === 'host' ? () => stopPlaybackSession() : () => {}} onMarkIn={liveRole === null || liveRole === 'host' ? () => changeMark('in') : () => {}} onMarkOut={liveRole === null || liveRole === 'host' ? () => changeMark('out') : () => {}} onToggleLoop={liveRole === null || liveRole === 'host' ? () => setIsLooping((current) => !current) : () => {}} onMoveKeyframes={moveKeyframesForRole} onKeyframeInterpolationChange={changeKeyframeEasingForRole} canEditKeyframe={liveRole === 'editor' ? canEditTimelineSelection : undefined} canEditTimelineStructure={liveRole === null || liveRole === 'host'} canEditTimelineInterpolation={liveRole === null || liveRole === 'host'} onKeyframeEditStart={beginTimelineKeyframeLease} onKeyframeEditActivity={renewActiveLiveLease} onKeyframeEditEnd={endTimelineKeyframeLease} selectedKeyframes={selectedTimelineKeyframes} onKeyframeSelect={selectTimelineKeyframe} onEntitySelect={handleSelectionChange} onScrubStart={() => setIsScrubbing(true)} onScrubEnd={() => setIsScrubbing(false)} onSwitchToScene={() => switchTimelineMode('scene')} onSwitchToMaster={() => switchTimelineMode('master')} /> : <V2MasterTimeline sequence={projectDocument.masterSequence} shots={projectDocument.shots} scenes={projectDocument.scenes} activeClipId={activeMasterClipId} masterFrame={masterFrame} fallbackRate={sceneDocument.timeline.frameRate} isPlaying={isMasterPlaying} isLooping={isMasterLooping} musicPeaks={masterMusicPeaks} onSelectClip={selectMasterClip} onSelectMusic={selectMasterMusic} onSetMasterFrame={liveRole === null || liveRole === 'host' ? setMasterPlayhead : () => {}} onReturnToStart={liveRole === null || liveRole === 'host' ? returnMasterToStart : () => {}} onAddShot={liveRole === 'viewer' ? () => {} : addShotToMasterForRole} onReorderClip={liveRole === 'viewer' ? () => {} : reorderMasterClipForRole} onImportMusic={liveRole === null || liveRole === 'host' ? (file) => { void importMasterMusic(file) } : () => {}} onPlay={liveRole === null || liveRole === 'host' ? playMasterPlayback : () => {}} onPause={liveRole === null || liveRole === 'host' ? pauseMasterPlayback : () => {}} onStop={liveRole === null || liveRole === 'host' ? () => stopMasterPlayback(false) : () => {}} onToggleLoop={liveRole === null || liveRole === 'host' ? () => setIsMasterLooping((current) => !current) : () => {}} onMarkIn={liveRole === null || liveRole === 'host' ? () => changeMasterMark('in') : () => {}} onMarkOut={liveRole === null || liveRole === 'host' ? () => changeMasterMark('out') : () => {}} onSwitchToScene={() => switchTimelineMode('scene')} onSwitchToMaster={() => switchTimelineMode('master')} />}
+      {timelineMode === 'scene' ? <V2Timeline key={`${projectDocument.id}:${projectDocument.createdAt}:${sceneDocument.metadata.id}`} timeline={sceneDocument.timeline} tracks={sceneDocument.timeline.tracks} entities={timelineEntities} selectedEntityId={selectedEntityId} isPlaying={isPlaying} isLooping={isLooping} onFrameChange={liveRole === 'viewer' && liveFollowHost ? () => {} : setCurrentFrame} onDurationChange={liveRole === null || liveRole === 'host' ? changeTimelineDuration : () => {}} onFrameRateChange={liveRole === null || liveRole === 'host' ? changeFrameRate : () => {}} onTogglePlayback={liveRole === null || liveRole === 'host' ? togglePlayback : () => {}} onStopPlayback={liveRole === null || liveRole === 'host' ? () => stopPlaybackSession() : () => {}} onMarkIn={liveRole === null || liveRole === 'host' ? () => changeMark('in') : () => {}} onMarkOut={liveRole === null || liveRole === 'host' ? () => changeMark('out') : () => {}} onToggleLoop={liveRole === null || liveRole === 'host' ? () => setIsLooping((current) => !current) : () => {}} onMoveKeyframes={moveKeyframesForRole} onKeyframeInterpolationChange={changeKeyframeEasingForRole} canEditKeyframe={liveRole === 'editor' ? canEditTimelineSelection : undefined} canEditTimelineStructure={liveRole === null || liveRole === 'host'} canEditTimelineInterpolation={liveRole === null || liveRole === 'host'} onKeyframeEditStart={beginTimelineKeyframeLease} onKeyframeEditActivity={renewActiveLiveLease} onKeyframeEditEnd={endTimelineKeyframeLease} selectedKeyframes={selectedTimelineKeyframes} onKeyframeSelect={selectTimelineKeyframe} onEntitySelect={handleSelectionChange} onScrubStart={() => setIsScrubbing(true)} onScrubEnd={() => setIsScrubbing(false)} onSwitchToScene={() => switchTimelineMode('scene')} onSwitchToMaster={() => switchTimelineMode('master')} initialWorkspaceState={getSceneTimelineWorkspace(timelineWorkspaceSessionRef.current, sceneDocument.metadata.id)} onWorkspaceStateChange={(patch) => updateTimelineWorkspace({ scene: { sceneId: sceneDocument.metadata.id, patch } })} onRegisterZoomShortcut={registerSceneTimelineZoomShortcut} /> : <V2MasterTimeline key={`${projectDocument.id}:${projectDocument.createdAt}`} projectId={projectDocument.id} sequence={projectDocument.masterSequence} shots={projectDocument.shots} scenes={projectDocument.scenes} activeClipId={activeMasterClipId} masterFrame={masterFrame} fallbackRate={sceneDocument.timeline.frameRate} isPlaying={isMasterPlaying} isLooping={isMasterLooping} musicPeaks={masterMusicPeaks} onSelectClip={selectMasterClip} onSelectMusic={selectMasterMusic} onDeleteMusicTrack={liveRole === null || liveRole === 'host' ? deleteMusicTrack : () => {}} onAddMusicTrack={liveRole === null || liveRole === 'host' ? addMusicTrack : () => {}} onSetMasterFrame={liveRole === null || liveRole === 'host' ? setMasterPlayhead : () => {}} onReturnToStart={liveRole === null || liveRole === 'host' ? returnMasterToStart : () => {}} onAddShot={liveRole === 'viewer' ? () => {} : addShotToMasterForRole} onReorderClip={liveRole === 'viewer' ? () => {} : reorderMasterClipForRole} onImportMusic={liveRole === null || liveRole === 'host' ? (file) => { void importMasterMusic(file) } : () => {}} onPlay={liveRole === null || liveRole === 'host' ? playMasterPlayback : () => {}} onPause={liveRole === null || liveRole === 'host' ? pauseMasterPlayback : () => {}} onStop={liveRole === null || liveRole === 'host' ? () => stopMasterPlayback(false) : () => {}} onToggleLoop={liveRole === null || liveRole === 'host' ? () => setIsMasterLooping((current) => !current) : () => {}} onMarkIn={liveRole === null || liveRole === 'host' ? () => changeMasterMark('in') : () => {}} onMarkOut={liveRole === null || liveRole === 'host' ? () => changeMasterMark('out') : () => {}} onSwitchToScene={() => switchTimelineMode('scene')} onSwitchToMaster={() => switchTimelineMode('master')} activeImageClipId={activeMasterImageClipId} onSelectImage={selectMasterImage} onAddGraphicsTrack={addGraphicsTrack} onImportImage={(trackId, file) => { void importMasterImage(trackId, file) }} imageHealth={mediaHealth} onMoveImage={liveRole === 'viewer' ? () => {} : moveMasterImage} onTrimImage={liveRole === 'viewer' ? () => {} : trimMasterImage} onChangeImageFade={liveRole === 'viewer' ? () => {} : changeMasterImageFade} onGraphicsTrackChange={liveRole === 'viewer' ? () => {} : updateGraphicsTrack} onDeleteGraphicsTrack={liveRole === 'viewer' ? () => {} : deleteGraphicsTrack} initialWorkspaceState={timelineWorkspaceSessionRef.current.master} onWorkspaceStateChange={(patch) => updateTimelineWorkspace({ master: patch })} onRegisterZoomShortcut={registerMasterTimelineZoomShortcut} />}
       </div>
-      {exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'encoding' || exportStatus === 'finalizing' ? <div className="v2-export-lock" aria-hidden="true" /> : null}
+      {exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'encoding' || exportStatus === 'finalizing' || exportStatus === 'saving' ? <div className="v2-export-lock" aria-hidden="true" /> : null}
       </>}
-      {exportOpen ? <V2ExportModal document={sceneDocument} project={projectDocument} projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} settings={exportSettings} status={exportStatus} progress={exportProgress} error={exportError} onSettingsChange={setExportSettings} onExport={startExport} onCancel={cancelExport} onClose={() => setExportOpen(false)} desktop={platformAdapter.kind === 'desktop'} /> : null}
+      {exportOpen ? <V2ExportModal document={sceneDocument} project={projectDocument} projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} settings={exportSettings} status={exportStatus} progress={exportProgress} error={exportError} success={exportSuccess} revealError={exportRevealError} revealLabel={platformAdapter.revealFileLabel} onSettingsChange={(next) => { setExportSettings(next); if (next.shotInfoBurnIn) saveShotInfoBurnInSettings(next.shotInfoBurnIn) }} onExport={startExport} onCancel={cancelExport} onClose={() => setExportOpen(false)} onOpenMediaManager={() => { setExportOpen(false); setMediaManagerOpen(true) }} onReveal={() => { void revealExport() }} desktop={platformAdapter.kind === 'desktop'} /> : null}
+      {projectPackageStatus ? <V2ProjectPackageModal status={projectPackageStatus} result={projectPackageResult} error={projectPackageError} revealError={projectPackageRevealError} revealLabel={platformAdapter.revealFileLabel} onRetry={() => { void runProjectPackageExport() }} onCancel={cancelProjectPackage} onClose={() => { setProjectPackageStatus(null); setProjectPackageResult(null); setProjectPackageError(null); setProjectPackageRevealError(null) }} onReveal={() => { if (!projectPackageResult?.path) return; void platformAdapter.revealFile(projectPackageResult.path).catch((error: unknown) => setProjectPackageRevealError(error instanceof Error ? error.message : 'The Project Package could not be revealed.')) }} onOpenMediaManager={() => { setProjectPackageStatus(null); setMediaManagerOpen(true) }} /> : null}
+      {projectSettingsOpen ? <V2ProjectSettings cameraModelId={projectDocument.cameraDefaults.cameraModelId} readOnly={liveRole !== null && liveRole !== 'host'} onCameraModelChange={updateProjectCameraDefault} onClose={() => setProjectSettingsOpen(false)} /> : null}
       <LiveReviewPanel open={livePanelOpen} role={liveRole} status={liveStatus} session={liveSession} inviteUrl={liveInviteUrl} viewerCount={liveViewerCount} participants={liveParticipants} leases={liveLeases} hostConnected={liveHostConnected} chatMessages={liveChatMessages} followHost={liveFollowHost} pointerActive={livePointerActive} inviteSession={liveInviteSession} error={liveError} canStart={liveRelayConfig.url !== null} pendingAction={livePendingAction} configurationError={liveRelayConfig.error} onStart={(name) => { void startLiveReview(name) }} onJoin={(name) => { void joinLiveReview(name) }} onFollowHost={changeLiveFollowHost} onTogglePointer={() => { setLivePointerActive((active) => { if (active) clearLivePointer(); return !active }) }} onSendChat={sendLiveChat} onEnd={endLiveReview} onLeave={leaveLiveReview} onClose={() => setLivePanelOpen(false)} onRoleChange={changeLiveParticipantRole} onTakeControl={takeLiveLeaseControl} />
       {shortcutSettingsOpen ? <V2ShortcutSettings bindings={shortcutBindings} onChange={updateShortcut} onReset={resetShortcuts} onClose={() => setShortcutSettingsOpen(false)} recoveryEnabled={recoveryEnabled} onRecoveryEnabledChange={platformAdapter.kind === 'desktop' ? setRecoveryPreference : undefined} showMacosBetaHelp={isMacOSDesktop()} appVersion={APP_VERSION} websiteUrl={APP_WEBSITE_URL} contactEmail={APP_CONTACT_EMAIL} onOpenExternalUrl={(url) => { void platformAdapter.openExternalUrl(url) }} updateState={updateState} onCheckForUpdates={() => { void checkForUpdates() }} onDownloadUpdate={() => downloadUpdate()} onLaterUpdate={dismissUpdate} downloadStatus={downloadStatus} downloadError={downloadError} autoUpdateChecks={updatePreferences.autoCheck} onAutoUpdateChecksChange={platformAdapter.kind === 'desktop' ? saveUpdatePreference : undefined} /> : null}
       {recoveryModalOpen && recoveryEntries.length > 0 ? <V2RecoveryCenter entries={recoveryEntries} requestedPath={recoveryRequestedPath} onRecover={(entry) => { void recoverProject(entry) }} onDiscard={(entry) => { void discardRecoveryEntry(entry) }} onOpenSaved={(entry) => { void openSavedVersion(entry) }} onClose={() => setRecoveryModalOpen(false)} /> : null}
-    </main>
+      {mediaManagerOpen ? <V2MediaManager projectName={projectDocument.name} sequence={projectDocument.masterSequence} health={mediaHealth} scanning={mediaScanning} error={mediaManagerError} readOnly={liveRole !== null && liveRole !== 'host'} onRefresh={() => { setMediaManagerError(null); setMediaScanToken((value) => value + 1) }} onRelinkAsset={relinkMasterImage} onRelinkAll={relinkAllMasterImages} onClose={() => { setMediaManagerError(null); setMediaManagerOpen(false) }} /> : null}
+      <input ref={mediaReplaceInputRef} hidden type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" onChange={(event) => handleMasterImageReplacement(event.target.files?.[0])} />
+    </main></>
   )
 }
 
@@ -4259,6 +5008,15 @@ function V2DesktopViewportNotice() {
   }, [])
 
   return isCompact ? <div className="v2-viewport-notice" role="status">ND Blocking &amp; Previs is designed for desktop-sized screens.</div> : null
+}
+
+function loadExportImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('A Master Graphics image could not be loaded for export.'))
+    image.src = url
+  })
 }
 
 function V2UpdateNotice({ release, downloadStatus, downloadError, onDownload, onLater }: { release: UpdateCheckResult; downloadStatus: 'idle' | 'opening' | 'error'; downloadError: string | null; onDownload: () => void; onLater: () => void }) {

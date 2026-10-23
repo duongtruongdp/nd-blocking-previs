@@ -55,6 +55,12 @@ describe('Master preview context', () => {
     expect(resolveMasterPreviewContext(project, 3)).toMatchObject({ masterFrame: 3, clipId: 'clip-b', sceneId: 'scene-b', cameraId: 'camera-b', sourceFrame: 40, status: 'resolved' })
   })
 
+  it('holds the final valid preview sample at the exact Master end boundary', () => {
+    const project = projectWithScenes()
+    const context = resolveMasterPreviewContext(project, 6)
+    expect(context).toMatchObject({ masterFrame: 6, clipId: 'clip-b', sourceFrame: 42, status: 'resolved' })
+  })
+
   it('reports invalid source state without mutating the project context', () => {
     const project = projectWithScenes()
     const missingCameraProject = { ...project, shots: project.shots.map((shot) => shot.id === 'shot-b' ? { ...shot, cameraId: 'missing-camera' } : shot) }

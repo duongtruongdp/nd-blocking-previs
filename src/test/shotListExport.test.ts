@@ -124,5 +124,6 @@ describe('M4D.2 Shot List export model', () => {
   it('sanitizes project-based filenames', () => {
     expect(shotListExportFilename('Project: Café / Day 01', 'csv')).toBe('Project_Café_Day_01_Shot_List.csv')
     expect(shotListExportFilename('', 'xlsx')).toBe('Untitled_Project_Shot_List.xlsx')
+    expect(shotListExportFilename('Project', 'pdf')).toBe('Project_Shot_List.pdf')
   })
 })

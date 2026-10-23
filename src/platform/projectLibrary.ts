@@ -43,7 +43,8 @@ export function recentProjectThumbnailKey(path: string): string {
 }
 
 export function isProjectFilePath(path: string): boolean {
-  return path.trim().toLowerCase().endsWith('.ndblock')
+  const normalized = path.trim().toLowerCase()
+  return normalized.endsWith('.ndblock') || normalized.endsWith('.ndpack')
 }
 
 export function firstSupportedProjectPath(paths: readonly string[]): string | null {
@@ -94,7 +95,7 @@ export function parseRecentProjects(value: unknown): RecentProjectEntry[] {
 
 export function filenameWithoutExtension(path: string): string {
   const filename = path.split(/[\\/]/).pop() ?? path
-  return filename.replace(/\.ndblock$/i, '') || 'Untitled Project'
+  return filename.replace(/\.(?:ndblock|ndpack)$/i, '') || 'Untitled Project'
 }
 
 export function parentFolderName(path: string): string {

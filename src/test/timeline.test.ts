@@ -53,6 +53,15 @@ describe('V2 timeline foundation', () => {
     expect(evaluateTimeline(document, 48)[actor.id].position).toEqual([24, 0, -12])
   })
 
+  it('does not resurrect a deleted Actor from orphaned Timeline tracks', () => {
+    const actor = createActorDocument('actor-deleted', 'Deleted Actor', [0, 0, 0])
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 0, [0, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 24, [4, 0, -2])
+    const documentWithoutActor = { ...createEmptySceneDocument(), timeline }
+    expect(evaluateTimeline(documentWithoutActor, 12)[actor.id]).toBeUndefined()
+  })
+
   it('evaluates Actor heading and Camera focal length/rotation without changing base values', () => {
     const definition = CAMERA_DATABASE[0]
     const camera = createCameraDocument('camera-01', 'Camera 01', [0, 1, 5], [0, 0, 0], definition.id, definition.captureModes[0].id)

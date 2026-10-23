@@ -1,3 +1,5 @@
+import type { Object3D } from 'three'
+
 /**
  * Pure bookkeeping for the production-camera render scene.
  *
@@ -25,6 +27,12 @@ export function sceneScopeChanged(previousSceneId: string | null, nextSceneId: s
 export function staleRuntimeEntityIds(runtimeIds: Iterable<string>, authoritativeIds: Iterable<string>): string[] {
   const authoritative = new Set(authoritativeIds)
   return Array.from(runtimeIds).filter((id) => !authoritative.has(id))
+}
+
+/** Detach a Camera View runtime root from whichever Three.js parent owns it. */
+export function detachCameraViewRuntimeRoot(root: Object3D): boolean {
+  root.parent?.remove(root)
+  return root.parent === null
 }
 
 export function cameraViewEntityCollections(

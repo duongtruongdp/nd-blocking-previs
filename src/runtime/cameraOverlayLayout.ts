@@ -13,20 +13,13 @@ export type OverlayLabelPlacement = {
 }
 
 export type CompactPreviewOverlayPolicy = {
-  showCameraLabel: true
   showDeliveryLabel: false
   showGuideLabels: false
 }
 
-/** The small Blocking View monitor deliberately carries only its camera badge. */
+/** The small Blocking View monitor deliberately carries no camera metadata. */
 export function compactPreviewOverlayPolicy(): CompactPreviewOverlayPolicy {
-  return { showCameraLabel: true, showDeliveryLabel: false, showGuideLabels: false }
-}
-
-export function previewCameraLabel(cameraName: string, focalLengthMm: number, previewWidth: number): string {
-  const fullLabel = `${cameraName} · ${focalLengthMm}mm`
-  const availableCharacters = Math.max(8, Math.floor((previewWidth - 58) / 6.2))
-  return fullLabel.length <= availableCharacters ? fullLabel : cameraName
+  return { showDeliveryLabel: false, showGuideLabels: false }
 }
 
 export function fullCameraInfoLines(focalLengthMm: number, cameraModel?: string, captureMode?: string): [string, string] {

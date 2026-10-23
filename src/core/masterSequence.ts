@@ -32,13 +32,54 @@ export type MasterMusicClipDocument = {
   sourceEndSeconds: number
 }
 
+export type MasterGraphicsTrackDocument = {
+  id: string
+  name: string
+  order: number
+  visible: boolean
+  locked?: boolean
+}
+
+export type MasterImageAssetDocument = {
+  id: string
+  fileName: string
+  mimeType: string
+  sizeBytes: number
+  lastModified: number | null
+  width: number
+  height: number
+  /** Legacy files may be normalized before their sidecar image metadata is decoded. */
+  metadataPending?: boolean
+}
+
+export type MasterImageClipDocument = {
+  id: string
+  trackId: string
+  assetId: string
+  startMasterFrame: number
+  durationFrames: number
+  positionX: number
+  positionY: number
+  scale: number
+  rotation: number
+  opacity: number
+  fadeInFrames: number
+  fadeOutFrames: number
+}
+
 export type MasterSequenceDocument = {
   clips: MasterClipDocument[]
   /** Optional for source compatibility with pre-M4B serialized callers; normalized documents always carry null. */
   musicClip?: MasterMusicClipDocument | null
+  /** Project-level presence of the optional Music lane. Legacy documents omit this and migrate to true. */
+  musicTrackPresent?: boolean
   /** Master-frame render/review marks. Older callers may omit them; normalized documents carry null. */
   markInFrame?: number | null
   markOutFrame?: number | null
+  /** Graphics are project-level Master overlays; older documents omit these arrays. */
+  graphicsTracks?: MasterGraphicsTrackDocument[]
+  imageAssets?: MasterImageAssetDocument[]
+  imageClips?: MasterImageClipDocument[]
 }
 
 /** Master ranges are frame-domain, start-inclusive and end-exclusive. */
@@ -62,7 +103,7 @@ export const MASTER_SHOT_DRAG_TYPE = 'application/x-nd-blocking-shot-id'
 export const MASTER_CLIP_DRAG_TYPE = 'application/x-nd-blocking-master-clip-id'
 
 export function createMasterSequenceDocument(): MasterSequenceDocument {
-  return { clips: [], musicClip: null, markInFrame: null, markOutFrame: null }
+  return { clips: [], musicClip: null, musicTrackPresent: true, markInFrame: null, markOutFrame: null }
 }
 
 export function createMasterClipId(existingIds: ReadonlySet<string> = new Set()): string {
@@ -96,7 +137,13 @@ export function normalizeMasterSequence(value: unknown): MasterSequenceDocument 
   })
   const ordered = clips.map((clip, index) => ({ ...clip, order: index }))
   const marks = normalizeMasterMarks(value.markInFrame, value.markOutFrame, masterSequenceDurationFrames({ clips: ordered }))
-  return { clips: ordered, musicClip: normalizeMusicClip(value.musicClip), ...marks }
+  const normalizedGraphics = normalizeGraphics(value)
+  const musicClip = normalizeMusicClip(value.musicClip)
+  return { clips: ordered, musicClip, musicTrackPresent: musicClip ? true : typeof value.musicTrackPresent === 'boolean' ? value.musicTrackPresent : true, ...marks, ...normalizedGraphics }
+}
+
+export function masterMusicTrackPresent(sequence: MasterSequenceDocument): boolean {
+  return sequence.musicTrackPresent !== false
 }
 
 export function orderedMasterClips(sequence: MasterSequenceDocument): MasterClipDocument[] {
@@ -112,6 +159,15 @@ export function masterSequenceDurationFrames(sequence: MasterSequenceDocument): 
 }
 
 /**
+ * Master Timeline has N rendered samples but N + 1 valid edit/cursor boundaries.
+ * Keep boundary clamping separate from render-sample clamping at call sites.
+ */
+export function clampMasterTimelineBoundary(frame: number, durationFrames: number): number {
+  const duration = Math.max(0, Math.round(Number.isFinite(durationFrames) ? durationFrames : 0))
+  return Math.max(0, Math.min(duration, Math.round(Number.isFinite(frame) ? frame : 0)))
+}
+
+/**
  * The Master render/review range intentionally ends at Shot content, not at a
  * possible music-only tail. This is the future M4C source-frame contract.
  */
@@ -123,6 +179,16 @@ export function effectiveMasterRenderRange(sequence: MasterSequenceDocument): Ma
     startFrame: marks.markInFrame ?? 0,
     endFrame: marks.markOutFrame ?? videoEnd,
   }
+}
+
+export function masterPlaybackFrameAt(rawFrame: number, range: MasterRenderRange, looping: boolean): number {
+  if (range.endFrame <= range.startFrame) return range.startFrame
+  if (looping) {
+    const span = range.endFrame - range.startFrame
+    const elapsed = Math.round(Number.isFinite(rawFrame) ? rawFrame : range.startFrame) - range.startFrame
+    return range.startFrame + ((elapsed % span) + span) % span
+  }
+  return clampMasterTimelineBoundary(rawFrame, range.endFrame)
 }
 
 /** Applies Scene-consistent mark adjustment while guaranteeing a non-empty Master range. */
@@ -151,13 +217,15 @@ export function resolveMasterFrame(sequence: MasterSequenceDocument, shots: read
   const clips = orderedMasterClips(sequence)
   const total = masterSequenceDurationFrames(sequence)
   if (clips.length === 0 || total <= 0) return null
-  const frame = Math.max(0, Math.min(total - 1, Math.round(masterFrame)))
+  const frame = Math.round(Number.isFinite(masterFrame) ? masterFrame : 0)
+  if (frame >= total) return null
+  const sampleFrame = Math.max(0, frame)
   let cursor = 0
   for (const clip of clips) {
     const duration = masterClipDurationFrames(clip)
-    if (frame < cursor + duration) {
+    if (sampleFrame < cursor + duration) {
       const shot = shots.find((candidate) => candidate.id === clip.shotId)
-      const localClipFrame = frame - cursor
+      const localClipFrame = sampleFrame - cursor
       return {
         clipId: clip.id,
         shotId: clip.shotId,
@@ -308,8 +376,41 @@ function normalizeMusicClip(value: unknown): MasterMusicClipDocument | null {
   }
 }
 
+function normalizeGraphics(value: Record<string, unknown>): Pick<MasterSequenceDocument, 'graphicsTracks' | 'imageAssets' | 'imageClips'> {
+  const tracks = Array.isArray(value.graphicsTracks) ? value.graphicsTracks.flatMap((candidate, index) => {
+    if (!isRecord(candidate) || typeof candidate.id !== 'string' || !candidate.id.trim()) return []
+    return [{ id: candidate.id, name: typeof candidate.name === 'string' && candidate.name.trim() ? candidate.name : `Graphics ${String(index + 1).padStart(2, '0')}`, order: index, visible: candidate.visible !== false, locked: candidate.locked === true }]
+  }) : []
+  const trackIds = new Set(tracks.map((track) => track.id))
+  const assets = Array.isArray(value.imageAssets) ? value.imageAssets.flatMap((candidate) => {
+    if (!isRecord(candidate) || typeof candidate.id !== 'string' || !candidate.id.trim() || typeof candidate.fileName !== 'string' || typeof candidate.mimeType !== 'string' || !finiteNonNegative(candidate.sizeBytes)) return []
+    const hasDimensions = finitePositive(candidate.width) && finitePositive(candidate.height)
+    return [{ id: candidate.id, fileName: candidate.fileName, mimeType: candidate.mimeType, sizeBytes: Math.round(Number(candidate.sizeBytes)), lastModified: typeof candidate.lastModified === 'number' && Number.isFinite(candidate.lastModified) ? candidate.lastModified : null, width: hasDimensions ? Math.round(Number(candidate.width)) : 1920, height: hasDimensions ? Math.round(Number(candidate.height)) : 1080, ...(hasDimensions ? {} : { metadataPending: true }) }]
+  }) : []
+  const assetIds = new Set(assets.map((asset) => asset.id))
+  const clips = Array.isArray(value.imageClips) ? value.imageClips.flatMap((candidate) => {
+    if (!isRecord(candidate) || typeof candidate.id !== 'string' || !candidate.id.trim() || typeof candidate.trackId !== 'string' || !trackIds.has(candidate.trackId) || typeof candidate.assetId !== 'string' || !assetIds.has(candidate.assetId)) return []
+    const durationFrames = finitePositive(candidate.durationFrames) ? Math.max(1, Math.round(Number(candidate.durationFrames))) : 1
+    return [{ id: candidate.id, trackId: candidate.trackId, assetId: candidate.assetId, startMasterFrame: finiteNonNegative(candidate.startMasterFrame) ? Math.round(Number(candidate.startMasterFrame)) : 0, durationFrames, positionX: finiteNumber(candidate.positionX) ? clampNumber(Number(candidate.positionX), 0, 1) : 0.5, positionY: finiteNumber(candidate.positionY) ? clampNumber(Number(candidate.positionY), 0, 1) : 0.5, scale: finitePositive(candidate.scale) ? clampNumber(Number(candidate.scale), 0.01, 10) : 1, rotation: finiteNumber(candidate.rotation) ? Number(candidate.rotation) : 0, opacity: finiteNumber(candidate.opacity) ? clampNumber(Number(candidate.opacity), 0, 1) : 1, fadeInFrames: finiteNonNegative(candidate.fadeInFrames) ? Math.min(durationFrames, Math.round(Number(candidate.fadeInFrames))) : 0, fadeOutFrames: finiteNonNegative(candidate.fadeOutFrames) ? Math.min(durationFrames, Math.round(Number(candidate.fadeOutFrames))) : 0 }]
+  }).map((clip) => ({ ...clip, fadeOutFrames: Math.min(clip.fadeOutFrames, Math.max(0, clip.durationFrames - clip.fadeInFrames)) })) : []
+  if (!Array.isArray(value.graphicsTracks) && !Array.isArray(value.imageAssets) && !Array.isArray(value.imageClips)) return {}
+  return { graphicsTracks: tracks, imageAssets: assets, imageClips: clips }
+}
+
 function finiteNonNegative(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+function finitePositive(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+
+function finiteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function clampNumber(value: number, minimum: number, maximum: number): number {
+  return Math.max(minimum, Math.min(maximum, value))
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -2,6 +2,7 @@ import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react
 import * as THREE from 'three'
 import { stageViewCubeDragStarted, type StageViewMode, type StageViewOrientation, type StageViewSelection } from '../stage-engine'
 import { viewCubeFaceLabel, viewCubeOrthoHalfHeight, viewCubeProjectedBounds } from '../runtime/viewCubeMath'
+import { registerWebGLRenderer } from '../runtime/webglDiagnostics'
 
 type FaceMode = Exclude<StageViewMode, 'perspective'>
 
@@ -43,6 +44,7 @@ type CubeResources = {
   edgeGeometry: THREE.EdgesGeometry
   cubeMaterial: THREE.MeshBasicMaterial
   edgeMaterial: THREE.LineBasicMaterial
+  webglDiagnosticsDispose: () => void
 }
 
 type CubeDrag = {
@@ -92,6 +94,8 @@ function createResources(mount: HTMLDivElement): CubeResources {
   renderer.outputColorSpace = THREE.SRGBColorSpace
   renderer.domElement.className = 'v2-stage-viewcube-canvas'
   renderer.domElement.setAttribute('aria-hidden', 'true')
+  renderer.domElement.dataset.webglIdentity = 'view-cube'
+  const webglDiagnosticsDispose = registerWebGLRenderer(renderer, 'interactive:view-cube')
   mount.appendChild(renderer.domElement)
 
   const scene = new THREE.Scene()
@@ -149,7 +153,7 @@ function createResources(mount: HTMLDivElement): CubeResources {
   })
   scene.add(cube)
 
-  return { renderer, camera, scene, cube, raycaster: new THREE.Raycaster(), faceMeshes, faceMaterials, labelMeshes, labelMaterials, labelTextures, cubeGeometry, faceGeometry, edgeGeometry, cubeMaterial, edgeMaterial }
+  return { renderer, camera, scene, cube, raycaster: new THREE.Raycaster(), faceMeshes, faceMaterials, labelMeshes, labelMaterials, labelTextures, cubeGeometry, faceGeometry, edgeGeometry, cubeMaterial, edgeMaterial, webglDiagnosticsDispose }
 }
 
 function frameCamera(resources: CubeResources, width: number, height: number): void {
@@ -226,6 +230,7 @@ export function StageViewCube({ selection, orientation, onSelect, onOrbitDrag }:
       resources.cubeMaterial.dispose()
       resources.edgeMaterial.dispose()
       resources.renderer.dispose()
+      resources.webglDiagnosticsDispose()
       resources.renderer.domElement.remove()
       resourcesRef.current = null
     }

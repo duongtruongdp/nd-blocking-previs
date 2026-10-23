@@ -4,7 +4,7 @@ import { createProjectDocument } from '../core/projectDocument'
 import { createShotDocument } from '../core/shotDocument'
 import { parseProjectFile, serializeProject } from '../core/projectPersistence'
 import { creativeProjectFingerprint } from '../core/projectDirty'
-import { createMasterClip, createMasterSequenceDocument, createMusicClip, duplicateMasterClip, effectiveMasterRenderRange, insertMasterClipAt, masterClipDurationFrames, masterClipStartFrame, masterSequenceDurationFrames, masterSequenceFrameRate, masterSequenceVisualDurationFrames, moveMasterClip, normalizeMasterSequence, removeMasterClip, reorderMasterClip, resolveMasterFrame, resolveMasterMusicTime, sameFrameRate, setMasterSequenceMark, sourceRangeWithinShot, updateMasterClipRange } from '../core/masterSequence'
+import { clampMasterTimelineBoundary, createMasterClip, createMasterSequenceDocument, createMusicClip, duplicateMasterClip, effectiveMasterRenderRange, insertMasterClipAt, masterClipDurationFrames, masterClipStartFrame, masterPlaybackFrameAt, masterSequenceDurationFrames, masterSequenceFrameRate, masterSequenceVisualDurationFrames, moveMasterClip, normalizeMasterSequence, removeMasterClip, reorderMasterClip, resolveMasterFrame, resolveMasterMusicTime, sameFrameRate, setMasterSequenceMark, sourceRangeWithinShot, updateMasterClipRange } from '../core/masterSequence'
 
 function shot(id: string, sceneId: string, startFrame = 10, endFrame = 20) {
   return createShotDocument({ id, name: id, sceneId, cameraId: `camera-${id}`, startFrame, endFrame, order: 0, notes: '', thumbnail: null })
@@ -46,7 +46,29 @@ describe('master sequence foundation', () => {
     expect(resolveMasterFrame(sequence, [first, second], 0)).toMatchObject({ clipId: 'clip-a', sourceFrame: 10, localClipFrame: 0, sceneId: 'scene-a' })
     expect(resolveMasterFrame(sequence, [first, second], 2)).toMatchObject({ clipId: 'clip-a', sourceFrame: 12 })
     expect(resolveMasterFrame(sequence, [first, second], 3)).toMatchObject({ clipId: 'clip-b', sourceFrame: 51, localClipFrame: 0, cameraId: 'camera-shot-b' })
-    expect(resolveMasterFrame(sequence, [first, second], 99)).toMatchObject({ clipId: 'clip-b', sourceFrame: 53, localClipFrame: 2 })
+    expect(resolveMasterFrame(sequence, [first, second], 5)).toMatchObject({ clipId: 'clip-b', sourceFrame: 53, localClipFrame: 2 })
+    expect(resolveMasterFrame(sequence, [first, second], 6)).toBeNull()
+    expect(clampMasterTimelineBoundary(6, 6)).toBe(6)
+    expect(clampMasterTimelineBoundary(99, 7)).toBe(7)
+  })
+
+  it('keeps the exact Master end boundary separate from renderable samples', () => {
+    const source = shot('shot-a', 'scene-a', 10, 15)
+    const sequence = { clips: [{ id: 'clip-a', shotId: source.id, sourceStartFrame: 10, sourceEndFrame: 15, order: 0 }] }
+    expect(masterSequenceDurationFrames(sequence)).toBe(5)
+    expect(resolveMasterFrame(sequence, [source], 4)?.sourceFrame).toBe(14)
+    expect(resolveMasterFrame(sequence, [source], 5)).toBeNull()
+    expect(clampMasterTimelineBoundary(-4, 5)).toBe(0)
+    expect(clampMasterTimelineBoundary(5, 5)).toBe(5)
+  })
+
+  it('finishes non-loop playback at Out while keeping loop playback half-open', () => {
+    const range = { startFrame: 3, endFrame: 8 }
+    expect(masterPlaybackFrameAt(7, range, false)).toBe(7)
+    expect(masterPlaybackFrameAt(8, range, false)).toBe(8)
+    expect(masterPlaybackFrameAt(99, range, false)).toBe(8)
+    expect(masterPlaybackFrameAt(8, range, true)).toBe(3)
+    expect(masterPlaybackFrameAt(7, range, true)).toBe(7)
   })
 
   it('enforces trim bounds without changing the Shot range', () => {
@@ -78,8 +100,8 @@ describe('master sequence foundation', () => {
   })
 
   it('normalizes older or malformed sequence data safely', () => {
-    expect(normalizeMasterSequence(undefined)).toEqual({ clips: [], musicClip: null, markInFrame: null, markOutFrame: null })
-    expect(normalizeMasterSequence({ clips: [{ id: 'clip-a', shotId: 'shot-a', sourceStartFrame: 2, sourceEndFrame: 1, order: 0 }, { id: 'clip-a', shotId: 'shot-b', sourceStartFrame: 4, sourceEndFrame: 6, order: 1 }] })).toEqual({ clips: [{ id: 'clip-a', shotId: 'shot-b', sourceStartFrame: 4, sourceEndFrame: 6, order: 0 }], musicClip: null, markInFrame: null, markOutFrame: null })
+    expect(normalizeMasterSequence(undefined)).toEqual({ clips: [], musicClip: null, musicTrackPresent: true, markInFrame: null, markOutFrame: null })
+    expect(normalizeMasterSequence({ clips: [{ id: 'clip-a', shotId: 'shot-a', sourceStartFrame: 2, sourceEndFrame: 1, order: 0 }, { id: 'clip-a', shotId: 'shot-b', sourceStartFrame: 4, sourceEndFrame: 6, order: 1 }] })).toEqual({ clips: [{ id: 'clip-a', shotId: 'shot-b', sourceStartFrame: 4, sourceEndFrame: 6, order: 0 }], musicClip: null, musicTrackPresent: true, markInFrame: null, markOutFrame: null })
   })
 
   it('stores Master marks in Master coordinates and constrains them to video content', () => {
@@ -122,6 +144,9 @@ describe('master sequence foundation', () => {
     const migrated = parseProjectFile(JSON.stringify(oldFile))
     expect(migrated.masterSequence.clips).toEqual([])
     expect(migrated.masterSequence).toMatchObject({ markInFrame: null, markOutFrame: null })
+    expect(migrated.masterSequence.musicTrackPresent).toBe(true)
+    const absent = parseProjectFile(serializeProject({ ...project, masterSequence: { ...createMasterSequenceDocument(), musicTrackPresent: false } }))
+    expect(absent.masterSequence.musicTrackPresent).toBe(false)
   })
 
   it('includes sequence edits in the project dirty fingerprint', () => {

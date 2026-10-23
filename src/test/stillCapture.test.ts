@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { CAMERA_DATABASE } from '../core/cameraDatabase'
 import { createCameraDocument, createEmptySceneDocument } from '../core/sceneDocument'
 import { activeCameraForStill, cameraStillFilename, stillDimensionsForCamera } from '../runtime/stillCapture'
-import { cameraOverlayMode, compactPreviewOverlayPolicy, fullCameraInfoLines, layoutOverlayLabels, previewCameraLabel } from '../runtime/cameraOverlayLayout'
+import { cameraOverlayMode, compactPreviewOverlayPolicy, fullCameraInfoLines, layoutOverlayLabels } from '../runtime/cameraOverlayLayout'
 
 describe('V2 camera still capture planning', () => {
   const definition = CAMERA_DATABASE[0]
@@ -28,10 +28,8 @@ describe('V2 camera still capture planning', () => {
     expect(cameraOverlayMode(480)).toBe('compact')
   })
 
-  it('keeps the small Camera Preview to a camera badge and frame lines', () => {
-    expect(compactPreviewOverlayPolicy()).toEqual({ showCameraLabel: true, showDeliveryLabel: false, showGuideLabels: false })
-    expect(previewCameraLabel('Camera 01', 35, 420)).toBe('Camera 01 · 35mm')
-    expect(previewCameraLabel('Camera With A Very Long Name', 35, 260)).toBe('Camera With A Very Long Name')
+  it('keeps the small Camera Preview free of camera metadata', () => {
+    expect(compactPreviewOverlayPolicy()).toEqual({ showDeliveryLabel: false, showGuideLabels: false })
   })
 
   it('formats one full Camera View info box without the Camera name', () => {

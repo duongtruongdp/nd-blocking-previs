@@ -20,6 +20,15 @@ describe('master timeline geometry', () => {
     }
   })
 
+  it('maps the final timeline pixel to the inclusive end boundary', () => {
+    const duration = 100
+    const scale = 4
+    const finalPixel = masterFrameToPixel(duration, scale)
+    expect(pixelToMasterFrame(finalPixel, scale, duration)).toBe(duration)
+    expect(masterFrameToPixel(duration, scale)).toBe(finalPixel)
+    expect(pixelToMasterFrame(finalPixel - scale, scale, duration)).toBe(duration - 1)
+  })
+
   it('generates chronological ruler marks from the same scale', () => {
     const marks = masterRulerFrames(240, 3, rate)
     expect(marks[0]).toBe(0)

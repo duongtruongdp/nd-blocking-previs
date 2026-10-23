@@ -5,6 +5,7 @@ import { canExportMp4 } from './formatSupport'
 import { mediaRecorderErrorMessage, selectWebmMimeType } from './mediaRecorder'
 import { VideoExportRenderer } from './exportRenderer'
 import type { VideoExportProgressHandler, VideoExportRequest } from './exportTypes'
+import { createExportTracker } from './exportDiagnostics'
 
 export class ExportCancelledError extends Error {
   constructor() {
@@ -81,11 +82,11 @@ async function recordCanvas(canvas: HTMLCanvasElement, frames: readonly number[]
   }
 }
 
-export async function exportWebm({ document, settings, signal, onProgress }: VideoExportRequest): Promise<Blob> {
+export async function exportWebm({ document, project, settings, signal, onProgress }: VideoExportRequest): Promise<Blob> {
   const validationError = validateExportRequest(document, settings.cameraId, settings.markIn, settings.markOut)
   if (validationError) throw new Error(validationError)
   const frames = exportFrameRange(settings.markIn, settings.markOut)
-  const renderer = new VideoExportRenderer(document, settings)
+  const renderer = new VideoExportRenderer(document, settings, { shotInfoProject: project, shotInfoProjectName: project?.name })
   try {
     return await recordCanvas(renderer.canvas, frames, settings.frameRate, (frame) => renderer.renderFrame(frame), signal, onProgress)
   } finally {
@@ -93,14 +94,17 @@ export async function exportWebm({ document, settings, signal, onProgress }: Vid
   }
 }
 
-async function exportMp4({ document, settings, signal, onProgress }: VideoExportRequest): Promise<Blob> {
+async function exportMp4({ document, project, settings, signal, onProgress, onStage }: VideoExportRequest): Promise<Blob> {
+  const request = { settings, onStage }
   const validationError = validateExportRequest(document, settings.cameraId, settings.markIn, settings.markOut)
   if (validationError) throw new Error(validationError)
   const outputDimensions = dimensionsForDeliveryAspect(settings.width, deliveryAspectForCamera(settings.deliveryAspectRatio, settings.cameraId, document))
   if (!(await canExportMp4(outputDimensions, settings.frameRate))) throw new Error('MP4 unavailable in this browser.')
 
   const frames = exportFrameRange(settings.markIn, settings.markOut)
-  const renderer = new VideoExportRenderer(document, settings)
+  const tracker = createExportTracker(request, frames.length)
+  tracker.report('preparing')
+  const renderer = new VideoExportRenderer(document, settings, { shotInfoProject: project, shotInfoProjectName: project?.name })
   const target = new BufferTarget()
   const output = new Output({ format: new Mp4OutputFormat(), target })
   const frameRate = settings.frameRate.numerator / settings.frameRate.denominator
@@ -115,16 +119,22 @@ async function exportMp4({ document, settings, signal, onProgress }: VideoExport
     for (let index = 0; index < frames.length; index += 1) {
       throwIfAborted(signal)
       renderer.renderFrame(frames[index])
+      tracker.markRendered()
+      tracker.report('encoding')
       await source.add(frameTimestampSeconds(index, settings.frameRate), duration)
-      onProgress?.({ completedFrames: index + 1, totalFrames: frames.length, currentFrame: frames[index] })
+      tracker.markSubmitted()
+      onProgress?.({ completedFrames: index + 1, totalFrames: frames.length, currentFrame: frames[index], phase: 'encoding', renderedFrames: tracker.snapshot().renderedFrames, submittedFrames: tracker.snapshot().submittedFrames })
     }
     throwIfAborted(signal)
+    tracker.report('finalizing')
     await output.finalize()
     if (!target.buffer) throw new Error('The browser did not produce an MP4 file.')
+    tracker.setOutputBytes(target.buffer.byteLength)
+    tracker.report('finalizing', `MP4 buffer ready (${target.buffer.byteLength} bytes)`)
     return new Blob([target.buffer], { type: 'video/mp4' })
   } catch (error) {
     if (signal?.aborted) throw new ExportCancelledError()
-    throw error
+    throw tracker.fail(error)
   } finally {
     signal?.removeEventListener('abort', abortHandler)
     if (output.state !== 'finalized' && output.state !== 'canceled') await output.cancel().catch(() => {})

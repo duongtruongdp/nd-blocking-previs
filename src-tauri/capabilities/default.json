@@ -43,7 +43,7 @@
     "fs:scope-applocaldata-recursive",
     "fs:scope-appcache-recursive",
     {
-      "identifier": "shell:allow-execute",
+      "identifier": "shell:allow-spawn",
       "allow": [
         {
           "name": "binaries/ffmpeg",
@@ -52,6 +52,7 @@
         }
       ]
     },
+    "shell:allow-kill",
     "store:default"
   ]
 }

@@ -6,6 +6,7 @@ import { scaleFromPointer, type ScaleAxis } from './stageEngineScaleMath'
 import { distributeOffsets, snapAngle } from './arrangeMath'
 import { normalizeSelection, toggleSelection } from './selectionMath'
 import type { CameraPathKeyframe, CameraPathSegmentSelection } from '../timeline/cameraPath'
+import { registerWebGLRenderer } from '../runtime/webglDiagnostics'
 
 const MAX_PIXEL_RATIO = 2
 const SELECTION_COLOR = '#f0a032'
@@ -188,6 +189,7 @@ export class StageEngine {
   private readonly orthographicCamera: THREE.OrthographicCamera
   private editorCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera
   private readonly renderer: THREE.WebGLRenderer
+  private readonly webglDiagnosticsDispose: () => void
   private readonly raycaster = new THREE.Raycaster()
   private readonly orbitTarget = new THREE.Vector3(0, 1, 0)
   private readonly selectableRoots: THREE.Group[] = []
@@ -220,6 +222,7 @@ export class StageEngine {
   private frameRequest: number | null = null
   private resizeObserver: ResizeObserver | null = null
   private disposed = false
+  private lastRenderSucceeded = false
   private selectedId: string | null = null
   private selectedIds: string[] = []
   private tool: StageTool = 'select'
@@ -256,11 +259,13 @@ export class StageEngine {
     this.canvas.className = 'v2-stage-canvas'
     this.canvas.setAttribute('aria-label', 'V2 Blocking Stage')
     this.canvas.dataset.stageOwnership = 'v2-stage-engine'
+    this.canvas.dataset.webglIdentity = 'stage'
     this.canvas.tabIndex = 0
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, powerPreference: 'high-performance' })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO))
     this.renderer.setClearColor('#d9deef', 1)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
+    this.webglDiagnosticsDispose = registerWebGLRenderer(this.renderer, 'interactive:stage')
     container.appendChild(this.canvas)
 
     this.createStageEnvironment()
@@ -663,6 +668,7 @@ export class StageEngine {
     this.clearCameraPathOverlay()
     this.resources.forEach((resource) => resource.dispose())
     this.renderer.dispose()
+    this.webglDiagnosticsDispose()
     this.canvas.remove()
   }
 
@@ -1596,8 +1602,23 @@ export class StageEngine {
     if (this.disposed || this.frameRequest !== null) return
     this.frameRequest = window.requestAnimationFrame(() => {
       this.frameRequest = null
-      this.renderer.render(this.scene, this.editorCamera)
+      try {
+        this.renderer.render(this.scene, this.editorCamera)
+        this.lastRenderSucceeded = true
+      } catch (error) {
+        this.lastRenderSucceeded = false
+        if (import.meta.env.DEV) console.error('[webgl diagnostics] interactive Stage render failed', error)
+      }
     })
+  }
+
+  beginRendererRecovery(): void {
+    this.lastRenderSucceeded = false
+    this.requestRender()
+  }
+
+  isRendererAvailable(): boolean {
+    return !this.disposed && this.lastRenderSucceeded && !this.renderer.getContext().isContextLost()
   }
 
   private createStageEnvironment(): void {

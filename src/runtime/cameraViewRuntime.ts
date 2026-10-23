@@ -12,8 +12,9 @@ import { ProceduralCameraRuntime } from './cameraRuntime'
 import { createScenicVisual, scenicGeometrySignature, type ScenicDefinition, type ScenicVisual } from './scenicRuntime'
 import { resolveOpeningAgainstWalls } from '../architecture/wallMath'
 import { sunAnglesFromHelperPosition } from './sunMapping'
-import { cameraViewEntityCollections, cameraViewRenderableEntityIds, sceneScopeChanged, staleRuntimeEntityIds } from './cameraViewReconciliation'
+import { cameraViewEntityCollections, cameraViewRenderableEntityIds, detachCameraViewRuntimeRoot, sceneScopeChanged, staleRuntimeEntityIds } from './cameraViewReconciliation'
 import type { CameraPoseSnapshot } from '../phoneCamera/cameraPoseComposition'
+import { registerWebGLRenderer } from './webglDiagnostics'
 
 const MAX_PIXEL_RATIO = 2
 
@@ -31,6 +32,8 @@ export class CameraViewRuntime {
   private readonly renderer: THREE.WebGLRenderer
   private readonly previewCanvas = document.createElement('canvas')
   private readonly previewRenderer: THREE.WebGLRenderer
+  private readonly webglDiagnosticsDispose: () => void
+  private readonly previewWebglDiagnosticsDispose: () => void
   private readonly actorRuntimes = new Map<string, ActorRuntime>()
   private readonly actorDocuments = new Map<string, ActorDocument>()
   private readonly scenicRuntimes = new Map<string, ScenicVisual>()
@@ -46,6 +49,7 @@ export class CameraViewRuntime {
   private activeSceneId: string | null = null
   private lastSceneRevision = ''
   private disposed = false
+  private lastRenderSucceeded = false
   private readonly onRender?: () => void
 
   constructor(container: HTMLElement, options: { onRender?: () => void } = {}) {
@@ -54,20 +58,24 @@ export class CameraViewRuntime {
     this.canvas.className = 'v2-camera-view-canvas'
     this.canvas.setAttribute('aria-label', 'Camera View')
     this.canvas.dataset.stageOwnership = 'v2-camera-view'
+    this.canvas.dataset.webglIdentity = 'camera-view'
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, powerPreference: 'high-performance' })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO))
     this.renderer.setClearColor('#111721', 1)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
+    this.webglDiagnosticsDispose = registerWebGLRenderer(this.renderer, 'interactive:camera-view')
     container.appendChild(this.canvas)
     this.previewElement.className = 'v2-camera-preview-frame'
     this.previewElement.setAttribute('aria-hidden', 'true')
     this.previewElement.style.display = 'none'
     this.previewElement.appendChild(this.previewCanvas)
     this.previewCanvas.className = 'v2-camera-preview-canvas'
+    this.previewCanvas.dataset.webglIdentity = 'camera-preview'
     this.previewRenderer = new THREE.WebGLRenderer({ canvas: this.previewCanvas, antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' })
     this.previewRenderer.setPixelRatio(1)
     this.previewRenderer.setClearColor('#111721', 1)
     this.previewRenderer.outputColorSpace = THREE.SRGBColorSpace
+    this.previewWebglDiagnosticsDispose = registerWebGLRenderer(this.previewRenderer, 'interactive:camera-preview')
     container.appendChild(this.previewElement)
     this.createEnvironment()
 
@@ -123,7 +131,12 @@ export class CameraViewRuntime {
     const scenic = [...scene.props, ...scene.walls, ...scene.openings.map((opening) => resolveOpeningAgainstWalls(opening, scene.walls)), ...scene.lights]
     // The current evaluated collections are the Camera View existence
     // contract. Runtime maps are caches and must not retain absent IDs.
-    cameraViewRenderableEntityIds(scene.actors, scenic, scene.camera)
+    const desired = cameraViewRenderableEntityIds(scene.actors, scenic, scene.camera)
+    const removedActors = staleRuntimeEntityIds(this.actorRuntimes.keys(), desired.actorIds)
+    const removedScenic = staleRuntimeEntityIds(this.scenicRuntimes.keys(), desired.scenicIds)
+    if (import.meta.env.DEV) {
+      console.debug(`[camera-view reconcile] scene=${scene.sceneId} desired actors=${desired.actorIds.length} runtime actors=${this.actorRuntimes.size} removed actors=${removedActors.length} desired scenic=${desired.scenicIds.length} runtime scenic=${this.scenicRuntimes.size} removed scenic=${removedScenic.length} camera=${desired.cameraId ?? 'none'}`)
+    }
     this.syncActors(scene.actors)
     this.syncScenic(scenic)
     this.syncCamera(scene.camera)
@@ -218,6 +231,8 @@ export class CameraViewRuntime {
     this.resources.forEach((resource) => resource.dispose())
     this.renderer.dispose()
     this.previewRenderer.dispose()
+    this.webglDiagnosticsDispose()
+    this.previewWebglDiagnosticsDispose()
     this.canvas.remove()
     this.previewElement.remove()
   }
@@ -229,6 +244,8 @@ export class CameraViewRuntime {
     staleRuntimeEntityIds(this.actorRuntimes.keys(), actorIds).forEach((id) => {
       const runtime = this.actorRuntimes.get(id)
       if (!runtime) return
+      if (import.meta.env.DEV) console.debug(`[camera-view remove] type=actor id=${id}`)
+      detachCameraViewRuntimeRoot(runtime.root)
       runtime.dispose()
       this.actorRuntimes.delete(id)
       this.actorDocuments.delete(id)
@@ -258,7 +275,8 @@ export class CameraViewRuntime {
     staleRuntimeEntityIds(this.scenicRuntimes.keys(), scenicIds).forEach((id) => {
       const runtime = this.scenicRuntimes.get(id)
       if (!runtime) return
-      runtime.root.removeFromParent()
+      if (import.meta.env.DEV) console.debug(`[camera-view remove] type=scenic id=${id}`)
+      detachCameraViewRuntimeRoot(runtime.root)
       runtime.dispose()
       this.scenicRuntimes.delete(id)
       this.scenicDefinitions.delete(id)
@@ -290,6 +308,7 @@ export class CameraViewRuntime {
 
   private syncCamera(camera: CameraDocument | null): void {
     if (!camera) {
+      if (this.cameraRuntime && import.meta.env.DEV) console.debug(`[camera-view remove] type=camera id=${this.currentCamera?.id ?? 'none'}`)
       this.currentCamera = null
       this.cameraRuntime?.dispose()
       this.cameraRuntime = null
@@ -316,13 +335,13 @@ export class CameraViewRuntime {
 
   private resetSceneRuntime(): void {
     this.actorRuntimes.forEach((runtime) => {
-      runtime.root.removeFromParent()
+      detachCameraViewRuntimeRoot(runtime.root)
       runtime.dispose()
     })
     this.actorRuntimes.clear()
     this.actorDocuments.clear()
     this.scenicRuntimes.forEach((runtime) => {
-      runtime.root.removeFromParent()
+      detachCameraViewRuntimeRoot(runtime.root)
       runtime.dispose()
     })
     this.scenicRuntimes.clear()
@@ -362,7 +381,7 @@ export class CameraViewRuntime {
     if (this.displayMode !== 'hidden') this.render()
   }
 
-  private render(): void {
+  render(): void {
     if (this.disposed || this.displayMode === 'hidden' || !this.cameraRuntime) return
     this.onRender?.()
     if (this.displayMode === 'preview') {
@@ -380,8 +399,24 @@ export class CameraViewRuntime {
     this.renderer.setScissorTest(true)
     this.renderer.setScissor(frame.x, Math.max(0, rect.height - frame.y - frame.height), frame.width, frame.height)
     this.renderer.setViewport(frame.x, Math.max(0, rect.height - frame.y - frame.height), frame.width, frame.height)
-    this.renderer.render(this.scene, camera)
-    this.renderer.setScissorTest(false)
+    try {
+      this.renderer.render(this.scene, camera)
+      this.lastRenderSucceeded = true
+    } catch (error) {
+      this.lastRenderSucceeded = false
+      if (import.meta.env.DEV) console.error('[webgl diagnostics] Camera View render failed', error)
+    } finally {
+      this.renderer.setScissorTest(false)
+    }
+  }
+
+  beginRendererRecovery(): void {
+    this.lastRenderSucceeded = false
+  }
+
+  isRendererAvailable(): boolean {
+    const contextsAvailable = !this.disposed && !this.renderer.getContext().isContextLost() && !this.previewRenderer.getContext().isContextLost()
+    return contextsAvailable && (this.displayMode === 'hidden' || this.lastRenderSucceeded)
   }
 
   private renderPreview(): void {
@@ -394,7 +429,13 @@ export class CameraViewRuntime {
     this.previewRenderer.setScissorTest(false)
     this.previewRenderer.setViewport(0, 0, sourceWidth, sourceHeight)
     this.previewRenderer.clear()
-    this.previewRenderer.render(this.scene, this.cameraRuntime.productionCamera)
+    try {
+      this.previewRenderer.render(this.scene, this.cameraRuntime.productionCamera)
+      this.lastRenderSucceeded = true
+    } catch (error) {
+      this.lastRenderSucceeded = false
+      if (import.meta.env.DEV) console.error('[webgl diagnostics] Camera Preview render failed', error)
+    }
     this.updatePreviewCanvasLayout()
   }
 

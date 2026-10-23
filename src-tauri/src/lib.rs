@@ -6,7 +6,8 @@ fn startup_project_path() -> Option<String> {
 }
 
 fn is_project_path(path: &str) -> bool {
-    path.to_ascii_lowercase().ends_with(".ndblock")
+    let path = path.to_ascii_lowercase();
+    path.ends_with(".ndblock") || path.ends_with(".ndpack")
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

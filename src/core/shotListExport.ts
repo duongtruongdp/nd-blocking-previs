@@ -114,7 +114,7 @@ export function buildShotListCsv(project: ProjectDocument, settings: ShotListSet
   return `\uFEFF${header}${body ? `\r\n${body}` : ''}\r\n`
 }
 
-export function shotListExportFilename(projectName: string, extension: 'csv' | 'xlsx'): string {
+export function shotListExportFilename(projectName: string, extension: 'csv' | 'xlsx' | 'pdf'): string {
   return `${sanitizeExportFilename(projectName.trim() || 'Untitled Project')}_Shot_List.${extension}`
 }
 

@@ -1,6 +1,7 @@
 import { parseRecentProjects, type RecentProjectEntry } from './projectLibrary'
 import type { ShortcutPreferences } from '../core/shortcutRegistry'
 import { parseRecoveryEntries, recoverySnapshotFilename, type RecoveryEntry, type RecoverySettings, type RecoveryWriteResult } from './recovery'
+import { isProjectPackageName } from '../core/projectPackage'
 
 export type PlatformKind = 'web' | 'desktop'
 
@@ -10,10 +11,12 @@ export type PlatformFile = {
   readonly path: string | null
   readonly name: string
   readonly text: string
+  readonly data?: Uint8Array
 }
 
 export type PlatformFileStat = {
   readonly modifiedAt: string | null
+  readonly byteLength?: number
 }
 
 export type DesktopDropEvent =
@@ -42,10 +45,33 @@ export type UpdatePreferences = {
 export type NativeExportRuntime = {
   prepareWorkspace: (jobId: string) => Promise<{ workspace: string; workspaceAbsolute: string; inputPattern: string; partialRelativePath: string; partialAbsolutePath: string }>
   writeFrame: (workspace: string, fileName: string, data: Uint8Array) => Promise<void>
-  verifyPartial: (path: string) => Promise<number>
-  finalizePartial: (path: string, destinationPath: string) => Promise<void>
-  runFfmpeg: (args: readonly string[], signal: AbortSignal | undefined, onStdoutLine: (line: string) => void) => Promise<void>
+  verifyPartial: (path: string) => Promise<NativeOutputVerification>
+  finalizePartial: (path: string, destinationPath: string) => Promise<NativeOutputVerification>
+  runFfmpeg: (args: readonly string[], signal: AbortSignal | undefined, onStdoutLine: (line: string) => void) => Promise<NativeEncoderResult>
   cleanupWorkspace: (workspace: string) => Promise<void>
+}
+
+export const NATIVE_FFMPEG_COMMAND_ID = 'binaries/ffmpeg'
+
+export type NativeOutputVerification = {
+  readonly exists: boolean
+  readonly byteLength: number
+}
+
+export type NativeEncoderResult = {
+  readonly commandId: typeof NATIVE_FFMPEG_COMMAND_ID
+  readonly started: boolean
+  readonly exitCode: number | null
+}
+
+export class NativeEncoderError extends Error {
+  readonly result: NativeEncoderResult
+
+  constructor(message: string, result: NativeEncoderResult, options?: { cause?: unknown }) {
+    super(message, options)
+    this.name = result.started ? 'NativeEncoderError' : 'NativeEncoderStartError'
+    this.result = result
+  }
 }
 
 export function closeDecisionForUnsavedChoice(choice: UnsavedCloseChoice, saveSucceeded = true): CloseDecision {
@@ -68,6 +94,7 @@ export type PlatformAdapter = {
   locateProjectFile: () => Promise<PlatformFile | null>
   saveProjectFile: (text: string, fileName: string, currentPath?: string | null) => Promise<PlatformSaveResult>
   saveProjectFileAs: (text: string, fileName: string) => Promise<PlatformSaveResult>
+  saveProjectPackage: (data: Uint8Array, fileName: string) => Promise<PlatformSaveResult>
   openSceneFile: () => Promise<PlatformFile | null>
   saveSceneFile: (text: string, fileName: string) => Promise<PlatformSaveResult>
   chooseExportLocation: (fileName: string, extension: string) => Promise<string | null>
@@ -79,6 +106,8 @@ export type PlatformAdapter = {
   deleteProjectFile: (path: string) => Promise<void>
   revealProjectFile: (path: string) => Promise<void>
   readonly revealProjectLabel: string
+  revealFile: (path: string) => Promise<void>
+  readonly revealFileLabel: string
   initialProjectPath: () => Promise<string | null>
   subscribeProjectOpen: (handler: (path: string) => void) => Promise<() => void>
   subscribeProjectDrop: (handler: (event: DesktopDropEvent) => void) => Promise<() => void>
@@ -111,14 +140,18 @@ function browserFilePicker(kind: PlatformFileKind): Promise<PlatformFile | null>
   return new Promise((resolve) => {
     const input = window.document.createElement('input')
     input.type = 'file'
-    input.accept = kind === 'project' ? '.ndblock,application/json' : '.ndscene,application/json'
+    input.accept = kind === 'project' ? '.ndblock,.ndpack,application/json,application/zip' : '.ndscene,application/json'
     input.onchange = () => {
       const file = input.files?.[0]
       if (!file) {
         resolve(null)
         return
       }
-      void file.text().then((text) => resolve({ path: null, name: file.name, text })).catch(() => resolve(null))
+      if (kind === 'project' && isProjectPackageName(file.name)) {
+        void file.arrayBuffer().then((buffer) => resolve({ path: null, name: file.name, text: '', data: new Uint8Array(buffer) })).catch(() => resolve(null))
+      } else {
+        void file.text().then((text) => resolve({ path: null, name: file.name, text })).catch(() => resolve(null))
+      }
     }
     input.click()
   })
@@ -157,6 +190,10 @@ export const webPlatformAdapter: PlatformAdapter = {
     browserDownload(text, fileName)
     return { cancelled: false, path: null }
   },
+  saveProjectPackage: async (data, fileName) => {
+    browserDownloadBytes(data, fileName)
+    return { cancelled: false, path: null }
+  },
   openSceneFile: () => browserFilePicker('scene'),
   saveSceneFile: async (text, fileName) => {
     browserDownload(text, fileName)
@@ -173,6 +210,8 @@ export const webPlatformAdapter: PlatformAdapter = {
   deleteProjectFile: async () => { throw new PlatformFileError('Project file operations are available in the desktop app.') },
   revealProjectFile: async () => { throw new PlatformFileError('Project file operations are available in the desktop app.') },
   revealProjectLabel: 'Show in Finder',
+  revealFile: async () => { throw new PlatformFileError('File reveal is available in the desktop app.') },
+  revealFileLabel: 'Show in Finder',
   initialProjectPath: async () => null,
   subscribeProjectOpen: async () => () => {},
   subscribeProjectDrop: async () => () => {},
@@ -217,6 +256,7 @@ function createTauriPlatformAdapter(): PlatformAdapter {
     locateProjectFile: () => nativeOpenFile('project'),
     saveProjectFile: (text, fileName, currentPath) => currentPath ? nativeWriteText(currentPath, text, 'Project') : nativeSaveAs(text, fileName, 'project'),
     saveProjectFileAs: (text, fileName) => nativeSaveAs(text, fileName, 'project'),
+    saveProjectPackage: (data, fileName) => nativeSaveBytesAs(data, fileName, 'ndpack'),
     openSceneFile: () => nativeOpenFile('scene'),
     saveSceneFile: (text, fileName) => nativeSaveAs(text, fileName, 'scene'),
     chooseExportLocation: nativeChooseExportLocation,
@@ -228,6 +268,8 @@ function createTauriPlatformAdapter(): PlatformAdapter {
     deleteProjectFile: nativeDeleteProjectFile,
     revealProjectFile: nativeRevealProjectFile,
     revealProjectLabel: typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent) ? 'Show in Explorer' : 'Show in Finder',
+    revealFile: nativeRevealExportFile,
+    revealFileLabel: typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent) ? 'Show in Folder' : 'Show in Finder',
     initialProjectPath: nativeInitialProjectPath,
     subscribeProjectOpen: nativeSubscribeProjectOpen,
     subscribeProjectDrop: nativeSubscribeProjectDrop,
@@ -282,19 +324,29 @@ function nativeExportRuntime(): NativeExportRuntime {
     },
     verifyPartial: async (path) => {
       const { BaseDirectory, stat } = await import('@tauri-apps/plugin-fs')
-      const info = await stat(path, { baseDir: BaseDirectory.AppCache })
-      if (!info.isFile || info.size < 16) throw new Error('FFmpeg produced an empty or invalid output file.')
-      return info.size
+      try {
+        const info = await stat(path, { baseDir: BaseDirectory.AppCache })
+        return { exists: Boolean(info.isFile), byteLength: info.isFile ? info.size : 0 }
+      } catch {
+        return { exists: false, byteLength: 0 }
+      }
     },
     finalizePartial: async (path, destinationPath) => {
-      const { BaseDirectory, rename } = await import('@tauri-apps/plugin-fs')
+      const { BaseDirectory, rename, stat } = await import('@tauri-apps/plugin-fs')
       await rename(path, destinationPath, { oldPathBaseDir: BaseDirectory.AppCache })
+      try {
+        const info = await stat(destinationPath)
+        return { exists: Boolean(info.isFile), byteLength: info.isFile ? info.size : 0 }
+      } catch {
+        return { exists: false, byteLength: 0 }
+      }
     },
     runFfmpeg: async (args, signal, onStdoutLine) => {
       const { Command } = await import('@tauri-apps/plugin-shell')
-      const command = Command.sidecar('binaries/ffmpeg', [...args])
+      const command = Command.sidecar(NATIVE_FFMPEG_COMMAND_ID, [...args])
       let stderr = ''
       let child: Awaited<ReturnType<typeof command.spawn>> | null = null
+      let started = false
       let resolveClose: ((code: number | null) => void) | null = null
       let rejectClose: ((error: Error) => void) | null = null
       const closed = new Promise<number | null>((resolve, reject) => { resolveClose = resolve; rejectClose = reject })
@@ -310,14 +362,28 @@ function nativeExportRuntime(): NativeExportRuntime {
           error.name = 'ExportCancelledError'
           throw error
         }
-        child = await command.spawn()
+        try {
+          child = await command.spawn()
+          started = true
+        } catch (error: unknown) {
+          const result: NativeEncoderResult = { commandId: NATIVE_FFMPEG_COMMAND_ID, started: false, exitCode: null }
+          const detail = error instanceof Error ? error.message : String(error)
+          throw new NativeEncoderError(`FFmpeg command ${NATIVE_FFMPEG_COMMAND_ID} failed to start: ${detail}`, result, { cause: error })
+        }
         const code = await closed
         if (signal?.aborted) {
           const error = new Error('Export cancelled.')
           error.name = 'ExportCancelledError'
           throw error
         }
-        if (code !== 0) throw new Error(stderr.trim() || `FFmpeg exited with code ${code ?? 'unknown'}.`)
+        const result: NativeEncoderResult = { commandId: NATIVE_FFMPEG_COMMAND_ID, started: true, exitCode: code }
+        if (code !== 0) throw new NativeEncoderError(stderr.trim() || `FFmpeg exited with code ${code ?? 'unknown'}.`, result)
+        return result
+      } catch (error: unknown) {
+        if (error instanceof NativeEncoderError || (error instanceof Error && error.name === 'ExportCancelledError')) throw error
+        const result: NativeEncoderResult = { commandId: NATIVE_FFMPEG_COMMAND_ID, started, exitCode: null }
+        const detail = error instanceof Error ? error.message : String(error)
+        throw new NativeEncoderError(`FFmpeg command ${NATIVE_FFMPEG_COMMAND_ID} failed: ${detail}`, result, { cause: error })
       } finally {
         signal?.removeEventListener('abort', abortHandler)
       }
@@ -331,7 +397,7 @@ function nativeExportRuntime(): NativeExportRuntime {
 
 async function nativeOpenFile(kind: PlatformFileKind): Promise<PlatformFile | null> {
   try {
-    const [{ open }, { readTextFile }] = await Promise.all([
+    const [{ open }, fs] = await Promise.all([
       import('@tauri-apps/plugin-dialog'),
       import('@tauri-apps/plugin-fs'),
     ])
@@ -339,10 +405,12 @@ async function nativeOpenFile(kind: PlatformFileKind): Promise<PlatformFile | nu
       multiple: false,
       directory: false,
       title: kind === 'project' ? 'Open Project' : 'Import Scene',
-      filters: [{ name: kind === 'project' ? 'ND Blocking Project' : 'ND Scene', extensions: [kind === 'project' ? 'ndblock' : 'ndscene'] }],
+      filters: [{ name: kind === 'project' ? 'ND Blocking Project' : 'ND Scene', extensions: kind === 'project' ? ['ndblock', 'ndpack'] : ['ndscene'] }],
     })
     if (!selected || Array.isArray(selected)) return null
-    return { path: selected, name: selected.split(/[\\/]/).pop() ?? selected, text: await readTextFile(selected) }
+    const name = selected.split(/[\\/]/).pop() ?? selected
+    if (kind === 'project' && isProjectPackageName(name)) return { path: selected, name, text: '', data: await fs.readFile(selected) }
+    return { path: selected, name, text: await fs.readTextFile(selected) }
   } catch (error: unknown) {
     throw nativeFileError(kind === 'project' ? 'Project could not be opened.' : 'Scene could not be imported.', error)
   }
@@ -350,8 +418,10 @@ async function nativeOpenFile(kind: PlatformFileKind): Promise<PlatformFile | nu
 
 async function nativeOpenProjectFileAt(path: string): Promise<PlatformFile | null> {
   try {
-    const { readTextFile } = await import('@tauri-apps/plugin-fs')
-    return { path, name: path.split(/[\\/]/).pop() ?? path, text: await readTextFile(path) }
+    const { readFile, readTextFile } = await import('@tauri-apps/plugin-fs')
+    const name = path.split(/[\\/]/).pop() ?? path
+    if (isProjectPackageName(name)) return { path, name, text: '', data: await readFile(path) }
+    return { path, name, text: await readTextFile(path) }
   } catch (error: unknown) {
     throw nativeFileError('This Project file could not be opened.', error)
   }
@@ -388,6 +458,22 @@ async function nativeSaveAs(text: string, fileName: string, kind: PlatformFileKi
   }
 }
 
+async function nativeSaveBytesAs(data: Uint8Array, fileName: string, extension: string): Promise<PlatformSaveResult> {
+  try {
+    const [{ save }, { writeFile }] = await Promise.all([
+      import('@tauri-apps/plugin-dialog'),
+      import('@tauri-apps/plugin-fs'),
+    ])
+    const selected = await save({ title: 'Export Project Package', defaultPath: fileName, filters: [{ name: 'ND Project Package', extensions: [extension] }] })
+    if (!selected) return { cancelled: true, path: null }
+    const path = ensureExtension(selected, extension)
+    await writeFile(path, data)
+    return { cancelled: false, path }
+  } catch (error: unknown) {
+    throw nativeFileError('The Project Package could not be saved.', error)
+  }
+}
+
 async function nativeChooseExportLocation(fileName: string, extension: string): Promise<string | null> {
   try {
     const { save } = await import('@tauri-apps/plugin-dialog')
@@ -421,7 +507,7 @@ async function nativeStatFile(path: string): Promise<PlatformFileStat | null> {
   try {
     const { stat } = await import('@tauri-apps/plugin-fs')
     const info = await stat(path)
-    return { modifiedAt: info.mtime?.toISOString() ?? null }
+    return { modifiedAt: info.mtime?.toISOString() ?? null, byteLength: info.isFile ? info.size : 0 }
   } catch (error: unknown) {
     if (import.meta.env.DEV) console.error('[ND Blocking & Previs] File stat failed', error)
     return null
@@ -461,6 +547,15 @@ async function nativeRevealProjectFile(path: string): Promise<void> {
     await revealItemInDir(path)
   } catch (error: unknown) {
     throw nativeFileError('The Project could not be revealed in Finder or Explorer.', error)
+  }
+}
+
+async function nativeRevealExportFile(path: string): Promise<void> {
+  try {
+    const { revealItemInDir } = await import('@tauri-apps/plugin-opener')
+    await revealItemInDir(path)
+  } catch (error: unknown) {
+    throw nativeFileError('The exported video could not be revealed in Finder or Explorer.', error)
   }
 }
 
@@ -752,12 +847,27 @@ async function nativeRegisterCloseGuard(handler: () => Promise<CloseDecision>): 
   const { getCurrentWindow } = await import('@tauri-apps/api/window')
   const currentWindow = getCurrentWindow()
   let approvingClose = false
+  let handlingClose = false
   const unlisten = await currentWindow.onCloseRequested(async (event) => {
     if (approvingClose) return
     event.preventDefault()
-    if (await handler() === 'close') {
-      approvingClose = true
-      await currentWindow.close()
+    if (handlingClose) return
+    handlingClose = true
+    try {
+      if (await handler() === 'close') {
+        approvingClose = true
+        try {
+          await currentWindow.close()
+        } catch (error: unknown) {
+          approvingClose = false
+          if (import.meta.env.DEV) console.error('[ND Blocking & Previs] Approved close request failed', error)
+        }
+        // If the host rejects the programmatic close, do not leave a stale
+        // bypass flag that could allow a later unsaved close through.
+        window.setTimeout(() => { approvingClose = false }, 1500)
+      }
+    } finally {
+      handlingClose = false
     }
   })
   return unlisten

@@ -1,6 +1,6 @@
 const DATABASE_NAME = 'nd-blocking-previs-assets'
 const STORE_NAME = 'music'
-const DATABASE_VERSION = 1
+const DATABASE_VERSION = 2
 
 type StoredMusicAsset = {
   key: string
@@ -19,6 +19,7 @@ function openDatabase(): Promise<IDBDatabase | null> {
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION)
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(STORE_NAME)) request.result.createObjectStore(STORE_NAME, { keyPath: 'key' })
+      if (!request.result.objectStoreNames.contains('images')) request.result.createObjectStore('images', { keyPath: 'key' })
     }
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error ?? new Error('Music asset storage could not be opened.'))

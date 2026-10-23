@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { EditorHistory } from '../core/editorHistory'
+import { editorShortcutForKey } from '../core/editorShortcuts'
 import { createEmptySceneDocument } from '../core/sceneDocument'
 
 function snapshot(value: number) {
@@ -9,6 +10,15 @@ function snapshot(value: number) {
 }
 
 describe('V2 editor history', () => {
+  it('interprets project undo/redo shortcuts once and ignores editable text', () => {
+    expect(editorShortcutForKey({ key: 'z', metaKey: true, ctrlKey: false, shiftKey: false })).toBe('undo')
+    expect(editorShortcutForKey({ key: 'z', metaKey: false, ctrlKey: true, shiftKey: false })).toBe('undo')
+    expect(editorShortcutForKey({ key: 'z', metaKey: true, ctrlKey: false, shiftKey: true })).toBe('redo')
+    expect(editorShortcutForKey({ key: 'z', metaKey: false, ctrlKey: true, shiftKey: true })).toBe('redo')
+    expect(editorShortcutForKey({ key: 'y', metaKey: false, ctrlKey: true, shiftKey: false })).toBe('redo')
+    expect(editorShortcutForKey({ key: 'z', metaKey: false, ctrlKey: false, shiftKey: false })).toBeNull()
+  })
+
   it('undoes and redoes one transform transaction as one entry', () => {
     const history = new EditorHistory()
     history.record({ label: 'Move Actor 01', before: snapshot(0), after: snapshot(12) })

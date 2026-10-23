@@ -8,6 +8,7 @@ import { rationalFrameDuration, frameTimestampSeconds } from './exportMath'
 import type { ProjectDocument } from '../core/projectDocument'
 import type { VideoExportProgressHandler, VideoExportRequest } from './exportTypes'
 import { ExportCancelledError } from './videoExporter'
+import { createExportTracker } from './exportDiagnostics'
 
 function mediabunnyQuality(quality: VideoExportRequest['settings']['quality']): 'low' | 'medium' | 'high' {
   return quality === 'high' ? 'high' : quality === 'small' ? 'low' : 'medium'
@@ -25,24 +26,27 @@ export async function exportMasterVideo(request: VideoExportRequest & { project:
   const settings = { ...request.settings, source: 'master' as const, cameraId: null }
   const plan = request.masterPlan ?? buildMasterRenderPlan(request.project, { width: settings.width, deliveryAspectRatio: settings.deliveryAspectRatio, includeMusic: settings.includeMusic === true })
   if (settings.includeMusic === true && plan.musicOverlap && !request.musicBlob) throw new Error('Master Music is missing. Re-import the Music asset or export without Music.')
-  const renderer = new MasterExportRenderer(request.project, plan, settings)
+  const renderer = new MasterExportRenderer(request.project, plan, settings, request.masterImageAssets)
   try {
     const musicBuffer = settings.includeMusic === true && plan.musicOverlap && request.musicBlob ? await decodeMasterMusicForExport(request.musicBlob, plan) : null
     return settings.format === 'mp4'
-      ? await encodeMasterMp4(renderer, plan, settings.quality, musicBuffer, request.signal, request.onProgress)
+      ? await encodeMasterMp4(renderer, plan, settings.quality, musicBuffer, request.signal, request.onProgress, request.onStage)
       : await encodeMasterWebm(renderer, plan, musicBuffer, request.signal, request.onProgress)
   } finally {
     renderer.dispose()
   }
 }
 
-async function encodeMasterMp4(renderer: MasterExportRenderer, plan: ReturnType<typeof buildMasterRenderPlan>, quality: VideoExportRequest['settings']['quality'], musicBuffer: AudioBuffer | null, signal: AbortSignal | undefined, onProgress: VideoExportProgressHandler | undefined): Promise<Blob> {
+async function encodeMasterMp4(renderer: MasterExportRenderer, plan: ReturnType<typeof buildMasterRenderPlan>, quality: VideoExportRequest['settings']['quality'], musicBuffer: AudioBuffer | null, signal: AbortSignal | undefined, onProgress: VideoExportProgressHandler | undefined, onStage: VideoExportRequest['onStage']): Promise<Blob> {
   if (!(await canExportMp4(plan.dimensions, plan.frameRate))) throw new Error('MP4 unavailable in this browser.')
   const target = new BufferTarget()
   const output = new Output({ format: new Mp4OutputFormat(), target })
   const videoSource = new CanvasSource(renderer.canvas, { codec: 'avc', quality: new Quality(mediabunnyQuality(quality)) })
   output.addVideoTrack(videoSource, { frameRate: plan.frameRate.numerator / plan.frameRate.denominator })
   const audioSource = musicBuffer ? new AudioBufferSource({ codec: 'aac', quality: new Quality('medium') }) : null
+  const request = { settings: { source: 'master' as const }, onStage }
+  const tracker = createExportTracker(request, plan.frameCount)
+  tracker.report('preparing')
   if (audioSource) output.addAudioTrack(audioSource)
   const abortHandler = () => { void output.cancel() }
   signal?.addEventListener('abort', abortHandler, { once: true })
@@ -54,17 +58,23 @@ async function encodeMasterMp4(renderer: MasterExportRenderer, plan: ReturnType<
       throwIfAborted(signal)
       const masterFrame = plan.startFrame + index
       renderer.renderFrame(masterFrame)
+      tracker.markRendered()
+      tracker.report('encoding')
       await videoSource.add(frameTimestampSeconds(index, plan.frameRate), duration)
-      onProgress?.({ completedFrames: index + 1, totalFrames: plan.frameCount, currentFrame: masterFrame, phase: 'rendering' })
+      tracker.markSubmitted()
+      onProgress?.({ completedFrames: index + 1, totalFrames: plan.frameCount, currentFrame: masterFrame, phase: 'encoding', renderedFrames: tracker.snapshot().renderedFrames, submittedFrames: tracker.snapshot().submittedFrames })
     }
     if (audioSource && musicBuffer) await audioSource.add(musicBuffer)
     throwIfAborted(signal)
+    tracker.report('finalizing')
     await output.finalize()
     if (!target.buffer) throw new Error('The browser did not produce an MP4 file.')
+    tracker.setOutputBytes(target.buffer.byteLength)
+    tracker.report('finalizing', `MP4 buffer ready (${target.buffer.byteLength} bytes)`)
     return new Blob([target.buffer], { type: 'video/mp4' })
   } catch (error) {
     if (signal?.aborted) throw new ExportCancelledError()
-    throw error
+    throw tracker.fail(error)
   } finally {
     signal?.removeEventListener('abort', abortHandler)
     if (output.state !== 'finalized' && output.state !== 'canceled') await output.cancel().catch(() => {})

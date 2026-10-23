@@ -321,7 +321,7 @@ The Stage environment uses a finite 24-meter ground plane, a subtle 20-meter ref
 
 ## Failure and disposal
 
-Renderer initialization errors are logged for development and translated into a product-facing `Stage unavailable` message. Raw browser/WebGL diagnostics are not shown in the normal UI.
+Renderer initialization errors are logged for development and translated into a product-facing `Stage unavailable` message. If an interactive graphics context is lost, the recovery notice retains `Reload App`; development builds and packaged Tauri desktop builds also expose `Copy Diagnostics`. The bounded report contains renderer identities, lifecycle/context events, timestamps, export stage, canvas dimensions, memory counters, and active renderer counts, but no project contents, image bytes, or filesystem paths.
 
 On unmount, the runtime cancels pending frames, removes listeners and observers,
 disposes transform controls, disposes geometry/materials, disposes the renderer,

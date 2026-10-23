@@ -38,7 +38,9 @@ describe('platform adapter foundation', () => {
 
   it('keeps desktop-only library features inert in the browser adapter', async () => {
     expect(webPlatformAdapter.revealProjectLabel).toBe('Show in Finder')
+    expect(webPlatformAdapter.revealFileLabel).toBe('Show in Finder')
     expect(webPlatformAdapter.nativeExportRuntime).toBeUndefined()
+    await expect(webPlatformAdapter.revealFile('/tmp/export.mp4')).rejects.toThrow('desktop app')
     await expect(webPlatformAdapter.loadRecentProjects()).resolves.toEqual([])
     await expect(webPlatformAdapter.loadRecoveryEntries()).resolves.toEqual([])
     await expect(webPlatformAdapter.loadUpdatePreferences()).resolves.toEqual({ autoCheck: true })

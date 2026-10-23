@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState, type PointerEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from 'react'
 import type { RationalFrameRate, TimelineDocument, TimelineEasingMode, TimelineProperty, TimelineTrack } from '../core/sceneDocument'
+import type { TimelineWorkspaceViewPatch, TimelineWorkspaceViewState } from '../core/timelineWorkspaceSession'
 import { DEFAULT_TIMELINE_PIXELS_PER_SECOND, MAX_TIMELINE_PIXELS_PER_SECOND, MIN_TIMELINE_PIXELS_PER_SECOND, TIMELINE_FRAME_RATES, TIMELINE_ZOOM_LEVELS, clampTimelineKeyframeDelta, frameRateLabel, frameToTimecode, timelineCanvasModel, timelineCanvasModelForViewport, timelineCanvasXToFrame, timelineDurationEndX, timelineDurationFrames, timelineEasingMode, timelineFitPixelsPerSecond, timelineFrameToCanvasX, timecodeToFrame, type TimelineKeyframeSelection } from '../timeline/timelineMath'
 import { groupTimelineTracks, type TimelineEntityDescriptor } from '../timeline/timelineGroups'
 import { timelineRulerLabelAlignment } from '../timeline/timelinePresentation'
 import { keyframeGlyphLabel, keyframeGlyphMode } from '../timeline/keyframeGlyph'
 import { KeyframeGlyph } from './KeyframeGlyph'
+import type { TimelineZoomShortcutHandler } from '../core/editorShortcuts'
 
 type V2TimelineProps = {
   timeline: TimelineDocument
@@ -36,6 +38,9 @@ type V2TimelineProps = {
   onScrubEnd: () => void
   onSwitchToScene: () => void
   onSwitchToMaster: () => void
+  initialWorkspaceState?: TimelineWorkspaceViewState
+  onWorkspaceStateChange?: (patch: TimelineWorkspaceViewPatch) => void
+  onRegisterZoomShortcut?: (handler: TimelineZoomShortcutHandler | null) => void
 }
 
 type KeyframeDrag = { selection: readonly TimelineKeyframeSelection[]; anchor: TimelineKeyframeSelection; sourceFrame: number; deltaFrames: number }
@@ -81,7 +86,7 @@ function zoomLevelIndex(pixelsPerSecond: number): number {
   return TIMELINE_ZOOM_LEVELS.reduce((closest, level, index) => Math.abs(level.pixelsPerSecond - pixelsPerSecond) < Math.abs(TIMELINE_ZOOM_LEVELS[closest].pixelsPerSecond - pixelsPerSecond) ? index : closest, 0)
 }
 
-export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPlaying, isLooping, onFrameChange, onDurationChange, onFrameRateChange, onTogglePlayback, onStopPlayback, onMarkIn, onMarkOut, onToggleLoop, onMoveKeyframes, onKeyframeInterpolationChange, canEditKeyframe, canEditTimelineStructure = true, canEditTimelineInterpolation = true, onKeyframeEditStart, onKeyframeEditActivity, onKeyframeEditEnd, selectedKeyframes, onKeyframeSelect, onEntitySelect, onScrubStart, onScrubEnd, onSwitchToScene, onSwitchToMaster }: V2TimelineProps) {
+export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPlaying, isLooping, onFrameChange, onDurationChange, onFrameRateChange, onTogglePlayback, onStopPlayback, onMarkIn, onMarkOut, onToggleLoop, onMoveKeyframes, onKeyframeInterpolationChange, canEditKeyframe, canEditTimelineStructure = true, canEditTimelineInterpolation = true, onKeyframeEditStart, onKeyframeEditActivity, onKeyframeEditEnd, selectedKeyframes, onKeyframeSelect, onEntitySelect, onScrubStart, onScrubEnd, onSwitchToScene, onSwitchToMaster, initialWorkspaceState, onWorkspaceStateChange, onRegisterZoomShortcut }: V2TimelineProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const labelsRef = useRef<HTMLDivElement>(null)
   const rulerRef = useRef<HTMLDivElement>(null)
@@ -90,9 +95,11 @@ export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPla
   const zoomAnchorRef = useRef<{ screenX: number } | null>(null)
   const frameInputRef = useRef<HTMLInputElement>(null)
   const durationInputRef = useRef<HTMLInputElement>(null)
+  const horizontalScrollRef = useRef(Math.max(0, initialWorkspaceState?.horizontalScroll ?? 0))
+  const verticalScrollRef = useRef(Math.max(0, initialWorkspaceState?.verticalScroll ?? 0))
   const [timelineViewportWidth, setTimelineViewportWidth] = useState(0)
-  const [timelineScrollTop, setTimelineScrollTop] = useState(0)
-  const [pixelsPerSecond, setPixelsPerSecond] = useState(DEFAULT_TIMELINE_PIXELS_PER_SECOND)
+  const [timelineScrollTop, setTimelineScrollTop] = useState(Math.max(0, initialWorkspaceState?.verticalScroll ?? 0))
+  const [pixelsPerSecond, setPixelsPerSecond] = useState(initialWorkspaceState?.pixelsPerSecond ?? DEFAULT_TIMELINE_PIXELS_PER_SECOND)
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
   const [draggingGroup, setDraggingGroup] = useState<KeyframeDrag | null>(null)
   const [marquee, setMarquee] = useState<MarqueeDrag | null>(null)
@@ -122,6 +129,25 @@ export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPla
     if (viewport.scrollLeft > maxScrollLeft) viewport.scrollLeft = maxScrollLeft
   }, [timelineCanvasWidth])
 
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const maxScrollLeft = Math.max(0, viewport.scrollWidth - viewport.clientWidth)
+    const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
+    const nextScrollLeft = Math.min(maxScrollLeft, horizontalScrollRef.current)
+    const nextScrollTop = Math.min(maxScrollTop, verticalScrollRef.current)
+    viewport.scrollLeft = nextScrollLeft
+    viewport.scrollTop = nextScrollTop
+    horizontalScrollRef.current = nextScrollLeft
+    verticalScrollRef.current = nextScrollTop
+    setTimelineScrollTop(nextScrollTop)
+    onWorkspaceStateChange?.({ horizontalScroll: nextScrollLeft, verticalScroll: nextScrollTop })
+  }, [timelineCanvasWidth, timelineViewportWidth, onWorkspaceStateChange])
+
+  useEffect(() => {
+    onWorkspaceStateChange?.({ pixelsPerSecond })
+  }, [onWorkspaceStateChange, pixelsPerSecond])
+
   useEffect(() => {
     const anchor = zoomAnchorRef.current
     const viewport = viewportRef.current
@@ -129,9 +155,12 @@ export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPla
     const nextModel = timelineCanvasModel(timeline, pixelsPerSecond)
     const nextFrameX = timelineFrameToCanvasX(timeline.currentFrame, timeline, nextModel)
     const maxScrollLeft = Math.max(0, nextModel.contentWidth - viewport.clientWidth)
-    viewport.scrollLeft = Math.min(maxScrollLeft, Math.max(0, nextFrameX - anchor.screenX))
+    const nextScrollLeft = Math.min(maxScrollLeft, Math.max(0, nextFrameX - anchor.screenX))
+    viewport.scrollLeft = nextScrollLeft
+    horizontalScrollRef.current = nextScrollLeft
+    onWorkspaceStateChange?.({ horizontalScroll: nextScrollLeft })
     zoomAnchorRef.current = null
-  }, [pixelsPerSecond, timeline])
+  }, [onWorkspaceStateChange, pixelsPerSecond, timeline])
 
   useEffect(() => {
     if (document.activeElement !== frameInputRef.current && frameInputRef.current) frameInputRef.current.value = frameToTimecode(timeline.currentFrame, timeline.frameRate)
@@ -169,25 +198,33 @@ export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPla
     return () => { window.removeEventListener('pointerdown', dismiss); window.removeEventListener('keydown', escape) }
   }, [contextMenu])
 
-  const setZoomKeepingPlayhead = (nextValue: number) => {
+  const setZoomKeepingPlayhead = useCallback((nextValue: number) => {
     const next = clampPixelsPerSecond(nextValue)
     if (next === pixelsPerSecond) return
     const viewport = viewportRef.current
-    if (viewport) zoomAnchorRef.current = { screenX: frameX(timeline.currentFrame) - viewport.scrollLeft }
+    if (viewport) zoomAnchorRef.current = { screenX: timelineFrameToCanvasX(timeline.currentFrame, timeline, timelineCanvasModelForViewport(timeline, pixelsPerSecond, timelineViewportWidth)) - viewport.scrollLeft }
     setPixelsPerSecond(next)
-  }
+  }, [pixelsPerSecond, timeline, timelineViewportWidth])
 
-  const stepZoom = (direction: -1 | 1) => {
+  const stepZoom = useCallback((direction: -1 | 1) => {
     const currentIndex = zoomLevelIndex(pixelsPerSecond)
     const nextIndex = Math.min(TIMELINE_ZOOM_LEVELS.length - 1, Math.max(0, currentIndex + direction))
     setZoomKeepingPlayhead(TIMELINE_ZOOM_LEVELS[nextIndex].pixelsPerSecond)
-  }
+  }, [pixelsPerSecond, setZoomKeepingPlayhead])
 
   const fitTimeline = () => {
     const viewportWidth = Math.max(1, timelineViewportWidth || viewportRef.current?.clientWidth || 1)
     setPixelsPerSecond(clampPixelsPerSecond(timelineFitPixelsPerSecond(viewportWidth, timeline)))
     if (viewportRef.current) viewportRef.current.scrollLeft = 0
+    horizontalScrollRef.current = 0
+    onWorkspaceStateChange?.({ horizontalScroll: 0 })
   }
+
+  useEffect(() => {
+    if (!onRegisterZoomShortcut) return
+    onRegisterZoomShortcut((direction) => stepZoom(direction))
+    return () => onRegisterZoomShortcut(null)
+  }, [onRegisterZoomShortcut, stepZoom])
 
   const commitFrameDraft = () => {
     const draft = frameInputRef.current?.value ?? ''
@@ -204,7 +241,11 @@ export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPla
 
   const handleScroll = () => {
     const viewport = viewportRef.current
-    if (viewport) setTimelineScrollTop(viewport.scrollTop)
+    if (!viewport) return
+    horizontalScrollRef.current = viewport.scrollLeft
+    verticalScrollRef.current = viewport.scrollTop
+    setTimelineScrollTop(viewport.scrollTop)
+    onWorkspaceStateChange?.({ horizontalScroll: viewport.scrollLeft, verticalScroll: viewport.scrollTop })
   }
 
   const handleRulerPointerDown = (event: PointerEvent<HTMLDivElement>) => {

@@ -9,6 +9,8 @@ import { frameToTimecode } from '../timeline/timelineMath'
 type ShotListView = 'grid' | 'list'
 type OptionField = 'shotSizeOptions' | 'angleOptions' | 'movementOptions' | 'equipmentOptions'
 type ShotListExportFormat = 'csv' | 'xlsx'
+type ShotListPdfExportStage = 'preparing' | 'saving'
+type ShotListPdfExportResult = { cancelled: boolean; path: string | null; byteLength: number }
 
 const COLUMN_LABELS: Record<ShotListColumn, string> = { thumbnail: 'Thumbnail', scene: 'Scene', shot: 'Shot', camera: 'Camera', lens: 'Lens', shotSize: 'Shot Size', angle: 'Angle', movement: 'Movement', equipment: 'Equipment', duration: 'Duration', notes: 'Notes' }
 const OPTION_LABELS: Record<OptionField, string> = { shotSizeOptions: 'Shot Size', angleOptions: 'Angle', movementOptions: 'Movement', equipmentOptions: 'Equipment' }
@@ -33,6 +35,10 @@ type V2ShotListWorkspaceProps = {
   onReorderShot: (id: string, targetIndex: number) => void
   onShotListSettingsChange: (settings: ShotListSettings) => void
   onExportShotList: (format: ShotListExportFormat, scope: ShotListExportScope) => void
+  onExportShotListPdf: (scope: ShotListExportScope, layout: ShotListPrintLayout, onStage: (stage: ShotListPdfExportStage) => void) => Promise<ShotListPdfExportResult>
+  onRevealShotListPdf: (path: string) => Promise<void>
+  shotListPdfRevealLabel: string
+  desktop: boolean
   onOpenBlocking: () => void
   controlledView?: ShotListView
   controlledSceneFilter?: string | null
@@ -40,7 +46,7 @@ type V2ShotListWorkspaceProps = {
   onSceneFilterChange?: (sceneId: string | null) => void
 }
 
-export function V2ShotListWorkspace({ project, selectedShotId, presentation, onSelectShot, onPresentationChange, onOpenShot, onPreviewShot, onCaptureThumbnail, onRenameShot, onNotesChange, onShotMetadataChange, onShotCameraChange, canEditShotCamera, shotCameraEditDisabledReason, onDuplicateShot, onDeleteShot, onReorderShot, onShotListSettingsChange, onExportShotList, onOpenBlocking, controlledView, controlledSceneFilter, onViewChange, onSceneFilterChange }: V2ShotListWorkspaceProps) {
+export function V2ShotListWorkspace({ project, selectedShotId, presentation, onSelectShot, onPresentationChange, onOpenShot, onPreviewShot, onCaptureThumbnail, onRenameShot, onNotesChange, onShotMetadataChange, onShotCameraChange, canEditShotCamera, shotCameraEditDisabledReason, onDuplicateShot, onDeleteShot, onReorderShot, onShotListSettingsChange, onExportShotList, onExportShotListPdf, onRevealShotListPdf, shotListPdfRevealLabel, desktop, onOpenBlocking, controlledView, controlledSceneFilter, onViewChange, onSceneFilterChange }: V2ShotListWorkspaceProps) {
   const [viewState, setViewState] = useState<ShotListView>('grid')
   const [sceneFilterState, setSceneFilterState] = useState<string | null>(null)
   const view = controlledView ?? viewState
@@ -79,7 +85,7 @@ export function V2ShotListWorkspace({ project, selectedShotId, presentation, onS
     {!presentation ? <ShotInspector card={selectedCard} settings={settings} onOpen={onOpenShot} onPreview={onPreviewShot} onCapture={onCaptureThumbnail} onRename={onRenameShot} onNotesChange={onNotesChange} onShotMetadataChange={onShotMetadataChange} onShotCameraChange={onShotCameraChange} canEditShotCamera={canEditShotCamera} shotCameraEditDisabledReason={shotCameraEditDisabledReason} onDuplicate={onDuplicateShot} onDelete={onDeleteShot} /> : null}
     {printPayload ? <ShotListPrintLayout payload={printPayload} /> : null}
     </section>
-    {exportOpen ? <ShotListExportDialog defaultLayout={defaultShotListPrintLayout(view)} currentSceneId={sceneFilter} currentSceneName={sceneFilter ? project.scenes.find((scene) => scene.id === sceneFilter)?.name ?? null : null} onClose={() => setExportOpen(false)} onPrint={printShotList} onFileExport={(format, scope) => { setExportOpen(false); onExportShotList(format, scope) }} /> : null}
+    {exportOpen ? <ShotListExportDialog desktop={desktop} revealLabel={shotListPdfRevealLabel} defaultLayout={defaultShotListPrintLayout(view)} currentSceneId={sceneFilter} currentSceneName={sceneFilter ? project.scenes.find((scene) => scene.id === sceneFilter)?.name ?? null : null} onClose={() => setExportOpen(false)} onPrint={printShotList} onFileExport={(format, scope) => { setExportOpen(false); onExportShotList(format, scope) }} onPdfExport={onExportShotListPdf} onRevealPdf={onRevealShotListPdf} /> : null}
   </>
 }
 
@@ -92,12 +98,35 @@ function ShotCard({ card, selected, visibleColumns, presentation, onSelect, onOp
   return <article className={`v2-shot-card${selected ? ' is-selected' : ''}`} draggable={!presentation} onDragStart={() => onDragStart(card.shot.id)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => onDrop(event, card)}><button className="v2-shot-card-select" onClick={() => onSelect(card.shot.id)} type="button">{columns.has('thumbnail') ? <div className="v2-shot-card-thumbnail">{card.shot.thumbnail ? <img src={card.shot.thumbnail.dataUrl} alt={`${card.shot.name} thumbnail`} /> : <span>No thumbnail</span>}</div> : null}<div className="v2-shot-card-heading"><span className="v2-shot-number">{identity.heading}</span>{!presentation && card.masterUseCount > 0 ? <span className="v2-shot-master-status">Master ×{card.masterUseCount}</span> : null}</div>{!identity.isDefaultName ? <strong className="v2-shot-card-name">{card.shot.name}</strong> : null}<div className="v2-shot-card-meta">{columns.has('scene') ? <span>{card.sceneName}</span> : null}{cameraLabel ? <span>{cameraLabel}</span> : null}{framingLabel ? <span>{framingLabel}</span> : null}{rigLabel ? <span>{rigLabel}</span> : null}{columns.has('duration') ? <span>{card.durationLabel}</span> : null}</div>{columns.has('notes') ? <p>{card.shot.notes.trim() || 'No notes'}</p> : null}</button>{!presentation ? <div className="v2-shot-card-actions"><button onClick={() => onOpen(card.shot.id)} type="button">Open Shot</button><button onClick={() => onPreview(card.shot.id)} type="button">Preview</button><button onClick={() => onCapture(card.shot.id)} type="button">Capture</button></div> : null}</article>
 }
 
-function ShotListExportDialog({ defaultLayout, currentSceneId, currentSceneName, onClose, onPrint, onFileExport }: { defaultLayout: ShotListPrintLayout; currentSceneId: string | null; currentSceneName: string | null; onClose: () => void; onPrint: (scope: ShotListExportScope, layout: ShotListPrintLayout) => void; onFileExport: (format: ShotListExportFormat, scope: ShotListExportScope) => void }) {
+function ShotListExportDialog({ desktop, revealLabel, defaultLayout, currentSceneId, currentSceneName, onClose, onPrint, onFileExport, onPdfExport, onRevealPdf }: { desktop: boolean; revealLabel: string; defaultLayout: ShotListPrintLayout; currentSceneId: string | null; currentSceneName: string | null; onClose: () => void; onPrint: (scope: ShotListExportScope, layout: ShotListPrintLayout) => void; onFileExport: (format: ShotListExportFormat, scope: ShotListExportScope) => void; onPdfExport: (scope: ShotListExportScope, layout: ShotListPrintLayout, onStage: (stage: ShotListPdfExportStage) => void) => Promise<ShotListPdfExportResult>; onRevealPdf: (path: string) => Promise<void> }) {
   const [format, setFormat] = useState<'print' | ShotListExportFormat>('print')
   const [scopeKind, setScopeKind] = useState<'all' | 'currentView'>('all')
   const [printLayout, setPrintLayout] = useState<ShotListPrintLayout>(defaultLayout)
+  const [pdfStatus, setPdfStatus] = useState<'idle' | 'preparing' | 'saving' | 'success' | 'error'>('idle')
+  const [pdfError, setPdfError] = useState<string | null>(null)
+  const [pdfPath, setPdfPath] = useState<string | null>(null)
+  const [pdfRevealError, setPdfRevealError] = useState<string | null>(null)
   const exportScope: ShotListExportScope = scopeKind === 'currentView' ? { kind: 'currentView', sceneId: currentSceneId } : { kind: 'all' }
-  return <div className="v2-modal-backdrop" role="presentation"><div className="v2-shot-export-dialog" role="dialog" aria-modal="true" aria-labelledby="v2-shot-export-title"><div className="v2-modal-heading"><div><span className="v2-eyebrow">Shot List</span><h2 id="v2-shot-export-title">Export Shot List</h2></div><button className="v2-modal-close" onClick={onClose} type="button" aria-label="Close export dialog">×</button></div><fieldset><legend>Format</legend><label><input type="radio" name="shot-list-export-format" checked={format === 'print'} onChange={() => setFormat('print')} /> PDF / Print</label><label><input type="radio" name="shot-list-export-format" checked={format === 'xlsx'} onChange={() => setFormat('xlsx')} /> Excel (.xlsx)</label><label><input type="radio" name="shot-list-export-format" checked={format === 'csv'} onChange={() => setFormat('csv')} /> CSV (.csv)</label></fieldset>{format === 'print' ? <fieldset><legend>Layout</legend><label><input type="radio" name="shot-list-print-layout" checked={printLayout === 'storyboard'} onChange={() => setPrintLayout('storyboard')} /> Storyboard</label><label><input type="radio" name="shot-list-print-layout" checked={printLayout === 'list'} onChange={() => setPrintLayout('list')} /> Shot List</label></fieldset> : null}<fieldset><legend>Scope</legend><label><input type="radio" name="shot-list-export-scope" checked={scopeKind === 'all'} onChange={() => setScopeKind('all')} /> All Shots</label><label><input type="radio" name="shot-list-export-scope" checked={scopeKind === 'currentView'} onChange={() => setScopeKind('currentView')} /> Current View{currentSceneName ? ` · ${currentSceneName}` : ' · All Scenes'}</label></fieldset><div className="v2-modal-actions"><button className="v2-button" onClick={onClose} type="button">Cancel</button><button className="v2-button v2-button-primary" onClick={() => format === 'print' ? onPrint(exportScope, printLayout) : onFileExport(format, exportScope)} type="button">Export</button></div></div></div>
+  const startPdfExport = () => {
+    setPdfStatus('preparing')
+    setPdfError(null)
+    setPdfPath(null)
+    setPdfRevealError(null)
+    void onPdfExport(exportScope, printLayout, (stage) => setPdfStatus(stage)).then((result) => {
+      if (result.cancelled) { setPdfStatus('idle'); return }
+      setPdfPath(result.path)
+      setPdfStatus('success')
+    }).catch((error: unknown) => {
+      setPdfError(error instanceof Error ? error.message : 'The PDF could not be exported.')
+      setPdfStatus('error')
+    })
+  }
+  const revealPdf = () => {
+    if (!pdfPath) return
+    void onRevealPdf(pdfPath).catch((error: unknown) => setPdfRevealError(error instanceof Error ? error.message : 'The PDF could not be revealed.'))
+  }
+  const busy = pdfStatus === 'preparing' || pdfStatus === 'saving'
+  return <div className="v2-modal-backdrop" role="presentation"><div className="v2-shot-export-dialog" role="dialog" aria-modal="true" aria-labelledby="v2-shot-export-title"><div className="v2-modal-heading"><div><span className="v2-eyebrow">Shot List</span><h2 id="v2-shot-export-title">Export Shot List</h2></div><button className="v2-modal-close" onClick={onClose} type="button" aria-label="Close export dialog" disabled={busy}>×</button></div><fieldset disabled={busy || pdfStatus === 'success'}><legend>Format</legend><label><input type="radio" name="shot-list-export-format" checked={format === 'print'} onChange={() => { setFormat('print'); setPdfStatus('idle') }} /> PDF / Print</label><label><input type="radio" name="shot-list-export-format" checked={format === 'xlsx'} onChange={() => { setFormat('xlsx'); setPdfStatus('idle') }} /> Excel (.xlsx)</label><label><input type="radio" name="shot-list-export-format" checked={format === 'csv'} onChange={() => { setFormat('csv'); setPdfStatus('idle') }} /> CSV (.csv)</label></fieldset>{format === 'print' ? <fieldset disabled={busy || pdfStatus === 'success'}><legend>Layout</legend><label><input type="radio" name="shot-list-print-layout" checked={printLayout === 'storyboard'} onChange={() => setPrintLayout('storyboard')} /> Storyboard</label><label><input type="radio" name="shot-list-print-layout" checked={printLayout === 'list'} onChange={() => setPrintLayout('list')} /> Shot List</label></fieldset> : null}<fieldset disabled={busy || pdfStatus === 'success'}><legend>Scope</legend><label><input type="radio" name="shot-list-export-scope" checked={scopeKind === 'all'} onChange={() => setScopeKind('all')} /> All Shots</label><label><input type="radio" name="shot-list-export-scope" checked={scopeKind === 'currentView'} onChange={() => setScopeKind('currentView')} /> Current View{currentSceneName ? ` · ${currentSceneName}` : ' · All Scenes'}</label></fieldset>{pdfStatus === 'preparing' ? <p className="v2-shot-export-status">Preparing PDF…</p> : null}{pdfStatus === 'saving' ? <p className="v2-shot-export-status">Saving PDF…</p> : null}{pdfStatus === 'success' ? <div className="v2-shot-export-success" role="status"><strong>PDF Exported</strong><span>Your Shot List PDF was saved successfully.</span>{pdfPath && desktop ? <button className="v2-button" onClick={revealPdf} type="button">{revealLabel}</button> : null}{pdfRevealError ? <small>{pdfRevealError}</small> : null}</div> : null}{pdfStatus === 'error' ? <p className="v2-shot-export-error" role="alert">Export Failed: {pdfError}</p> : null}<div className="v2-modal-actions"><button className="v2-button" onClick={onClose} type="button" disabled={busy}>{pdfStatus === 'success' ? 'Done' : 'Cancel'}</button>{pdfStatus !== 'success' ? <button className="v2-button v2-button-primary" onClick={() => format === 'print' ? desktop ? startPdfExport() : onPrint(exportScope, printLayout) : onFileExport(format, exportScope)} type="button" disabled={busy}>Export</button> : null}</div></div></div>
 }
 
 function ShotListPrintLayout({ payload }: { payload: ShotListPrintModel }) {

@@ -18,14 +18,16 @@ import { createScenicVisual, scenicGeometrySignature, type ScenicDefinition, typ
 import { WallDrawingController, type WallDrawingState } from '../architecture/wallDrawing'
 import { resolveOpeningAgainstWalls } from '../architecture/wallMath'
 import { STILL_CAPTURE_WIDTHS, type StillCaptureOptions, type StillCaptureWidth } from '../runtime/stillCapture'
-import { cameraOverlayMode, compactPreviewOverlayPolicy, fullCameraInfoLines, layoutOverlayLabels, previewCameraLabel, type OverlayLabelPlacement, type OverlayRect } from '../runtime/cameraOverlayLayout'
+import { cameraOverlayMode, compactPreviewOverlayPolicy, fullCameraInfoLines, layoutOverlayLabels, type OverlayLabelPlacement, type OverlayRect } from '../runtime/cameraOverlayLayout'
 import type { ShortcutBinding } from '../core/shortcutRegistry'
 import { createCameraPoseSnapshot, type CameraPose, type CameraPoseSnapshot, type PhoneCameraLiveLayer } from '../phoneCamera/cameraPoseComposition'
 import { CameraCompositionOverlay } from './CameraCompositionOverlay'
 import { cameraPathModel, cameraPathPlayheadPosition, type CameraPathKeyframe, type CameraPathSegmentSelection } from '../timeline/cameraPath'
 import type { MasterPreviewContext } from '../core/masterPreview'
+import { graphicsScaleFromPointerDelta, imageTransformForAsset } from '../core/masterGraphics'
 import { SHOT_THUMBNAIL_RENDER_WIDTH } from '../core/shotDocument'
 import type { LiveReviewPointer } from '../liveReview/protocol'
+import { formatWebGLDiagnostics, recordWebGLDiagnosticEvent, webGLDiagnosticsAvailable } from '../runtime/webglDiagnostics'
 
 export type V2TransformDebugState = {
   entityId: string
@@ -97,6 +99,10 @@ type V2StageProps = {
   phoneCameraLive: boolean
   shortcutBindings: Partial<Record<'select' | 'move' | 'rotate' | 'scale' | 'frameSelected', ShortcutBinding>>
   masterPreview: MasterPreviewContext | null
+  masterImageUrls?: Readonly<Record<string, string>>
+  activeMasterImageClipId?: string | null
+  onMasterImageSelect?: (clipId: string) => void
+  onMasterImageChange?: (patch: { positionX?: number; positionY?: number; scale?: number; rotation?: number }) => void
   readOnly?: boolean
   livePointer?: LiveReviewPointer | null
   livePointerActive?: boolean
@@ -226,7 +232,7 @@ function deliveryAspect(camera: CameraDocument): number {
   return deliveryAspectValue(camera.deliveryAspectRatio, cameraDisplayAspect(camera))
 }
 
-export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, walls, openings, lights, cameras, groups, activeCameraId, selectedEntityId, selectedEntityIds, tool, onSelectionChange, onMarqueeChange, onBeginEntityRename, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onTransformBatchStart, onTransformBatchEnd, onTransformBatchPreview, canTransformEntity, canTransformGroup, onTransformPermissionRequest, onCaptureFrameReady, cameraPreview, onCameraPreviewChange, onOpenCameraView, wallDrawing, wallDrawState, onWallDrawCommit, onWallDrawState, onWallDrawExit, snapPreviewWallId, evaluatedEntities, sceneRevision, isPlaying, transformingEntityId, suspendedTimelineEntityIds, suspendedTimelineProperties, runtimeSceneRef, timeline, isScrubbing, lastTransformDebug, selectedFrameGuideId, selectedTimelineKeyframes, cameraPathVisible, onCameraPathKeyframeSelect, selectedCameraPathSegment, onCameraPathSegmentSelect, onCameraPathPointMoveStart, onCameraPathPointMovePreview, onCameraPathPointMoveEnd, thumbnailCaptureRef, phoneCameraLiveApplyRef, phoneCameraLive, shortcutBindings, masterPreview, readOnly = false, livePointer = null, livePointerActive = false, onLivePointerMove }: V2StageProps) {
+export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, walls, openings, lights, cameras, groups, activeCameraId, selectedEntityId, selectedEntityIds, tool, onSelectionChange, onMarqueeChange, onBeginEntityRename, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onTransformBatchStart, onTransformBatchEnd, onTransformBatchPreview, canTransformEntity, canTransformGroup, onTransformPermissionRequest, onCaptureFrameReady, cameraPreview, onCameraPreviewChange, onOpenCameraView, wallDrawing, wallDrawState, onWallDrawCommit, onWallDrawState, onWallDrawExit, snapPreviewWallId, evaluatedEntities, sceneRevision, isPlaying, transformingEntityId, suspendedTimelineEntityIds, suspendedTimelineProperties, runtimeSceneRef, timeline, isScrubbing, lastTransformDebug, selectedFrameGuideId, selectedTimelineKeyframes, cameraPathVisible, onCameraPathKeyframeSelect, selectedCameraPathSegment, onCameraPathSegmentSelect, onCameraPathPointMoveStart, onCameraPathPointMovePreview, onCameraPathPointMoveEnd, thumbnailCaptureRef, phoneCameraLiveApplyRef, phoneCameraLive, shortcutBindings, masterPreview, masterImageUrls = {}, activeMasterImageClipId = null, onMasterImageSelect = () => {}, onMasterImageChange = () => {}, readOnly = false, livePointer = null, livePointerActive = false, onLivePointerMove }: V2StageProps) {
   const stageRef = useRef<HTMLDivElement>(null)
   const engineRef = useRef<StageEngine | null>(null)
   const cameraViewRef = useRef<CameraViewRuntime | null>(null)
@@ -266,6 +272,7 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
   const [includeCaptureGuides, setIncludeCaptureGuides] = useState(false)
   const [captureError, setCaptureError] = useState<string | null>(null)
   const [graphicsContextMessage, setGraphicsContextMessage] = useState<string | null>(null)
+  const [diagnosticsCopied, setDiagnosticsCopied] = useState(false)
   const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number; additive: boolean } | null>(null)
   const [stageContextMenu, setStageContextMenu] = useState<{ entityId: string; x: number; y: number } | null>(null)
   const [stageViewSelection, setStageViewSelection] = useState<StageViewSelection>('perspective')
@@ -538,11 +545,39 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
       onRender: () => { if (import.meta.env.DEV) composeDiagnosticsRef.current.cameraViewRenderCount += 1 },
     })
     cameraViewRef.current = cameraView
+    let recoveryFrame: number | null = null
     const handleContextLost = (event: Event) => {
+      const identity = (event.target as HTMLCanvasElement | null)?.dataset.webglIdentity
+      if (identity !== 'stage' && identity !== 'camera-view' && identity !== 'camera-preview') return
       event.preventDefault()
+      if (recoveryFrame !== null) window.cancelAnimationFrame(recoveryFrame)
+      recoveryFrame = null
       setGraphicsContextMessage('The graphics context was lost. Reload the app to continue safely.')
     }
-    const handleContextRestored = () => setGraphicsContextMessage('Graphics were restored. Reload the app before continuing.')
+    const handleContextRestored = (event: Event) => {
+      const identity = (event.target as HTMLCanvasElement | null)?.dataset.webglIdentity
+      if (identity !== 'stage' && identity !== 'camera-view' && identity !== 'camera-preview') return
+      setGraphicsContextMessage('Graphics were restored. Verifying the Stage…')
+      engine.beginRendererRecovery()
+      cameraView.beginRendererRecovery()
+      cameraView.render()
+      // Three.js rebuilds its GPU state during restoration. Wait for the
+      // scheduled Stage render to run before clearing the recovery warning.
+      const verify = (remainingFrames: number): void => {
+        recoveryFrame = window.requestAnimationFrame(() => {
+          if (remainingFrames > 1) {
+            verify(remainingFrames - 1)
+            return
+          }
+          recoveryFrame = null
+          if (engine.isRendererAvailable() && cameraView.isRendererAvailable()) {
+            recordWebGLDiagnosticEvent({ type: 'interactive-render-resumed', renderer: identity, canRenderAfterRestoration: true })
+            setGraphicsContextMessage(null)
+          } else setGraphicsContextMessage('The graphics context could not be restored. Reload the app to continue safely.')
+        })
+      }
+      verify(2)
+    }
     stageElement.addEventListener('webglcontextlost', handleContextLost, true)
     stageElement.addEventListener('webglcontextrestored', handleContextRestored, true)
     const removeSelectionListener = engine.onSelectionChanged((selection) => callbacksRef.current.onSelectionChange(selection))
@@ -572,6 +607,8 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
       baseCameraPoses.clear()
       if (composeFrameRef.current !== null) window.cancelAnimationFrame(composeFrameRef.current)
       composeFrameRef.current = null
+      if (recoveryFrame !== null) window.cancelAnimationFrame(recoveryFrame)
+      recoveryFrame = null
       removeSelectionListener()
       engineRef.current = null
       cameraViewRef.current = null
@@ -589,6 +626,27 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
       applyGroupPreviewRef.current = () => {}
     }
   }, [phoneCameraLiveApplyRef, thumbnailCaptureRef])
+
+  const copyGraphicsDiagnostics = async (): Promise<void> => {
+    const text = formatWebGLDiagnostics()
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text)
+      else {
+        const textarea = document.createElement('textarea')
+        textarea.value = text
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        textarea.remove()
+      }
+      setDiagnosticsCopied(true)
+      window.setTimeout(() => setDiagnosticsCopied(false), 1600)
+    } catch {
+      setDiagnosticsCopied(false)
+    }
+  }
 
   useEffect(() => {
     const updateSize = () => {
@@ -875,7 +933,6 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
   const imageAspect = displayCamera ? cameraDisplayAspect(displayCamera) : 16 / 9
   const imageRect = letterboxRect(viewportSize.width, viewportSize.height, imageAspect)
   const imageStyle = { left: `${(imageRect.x / viewportSize.width) * 100}%`, top: `${(imageRect.y / viewportSize.height) * 100}%`, width: `${(imageRect.width / viewportSize.width) * 100}%`, height: `${(imageRect.height / viewportSize.height) * 100}%` }
-  const previewWidth = Math.min(Math.max(260, viewportSize.width * 0.3), 420)
   const captureFrame = () => {
     const runtime = cameraViewRef.current
     if (!runtime) return
@@ -921,7 +978,7 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
     <section className="v2-stage-panel" aria-label="Stage">
       <div className={`v2-stage-viewport v2-view-${view}`} ref={stageRef} onPointerMove={(event) => emitLivePointer(event, true)} onPointerLeave={(event) => emitLivePointer(event, false)}>
         {marqueeRect ? <div className={`v2-stage-marquee${marqueeRect.additive ? ' is-additive' : ''}`} style={{ left: `${marqueeRect.left}px`, top: `${marqueeRect.top}px`, width: `${marqueeRect.width}px`, height: `${marqueeRect.height}px` }} aria-hidden="true" /> : null}
-        {graphicsContextMessage ? <div className="v2-runtime-notice" role="alert"><strong>Graphics unavailable</strong><span>{graphicsContextMessage}</span><button className="v2-button v2-button-primary" onClick={() => window.location.reload()} type="button">Reload App</button></div> : null}
+        {graphicsContextMessage ? <div className="v2-runtime-notice" role="alert"><strong>Graphics unavailable</strong><span>{graphicsContextMessage}</span><div className="v2-runtime-notice-actions">{webGLDiagnosticsAvailable() ? <button className="v2-button" onClick={() => void copyGraphicsDiagnostics()} type="button">{diagnosticsCopied ? 'Diagnostics Copied' : 'Copy Diagnostics'}</button> : null}<button className="v2-button v2-button-primary" onClick={() => window.location.reload()} type="button">Reload App</button></div></div> : null}
         {view === 'blocking' ? <div className="v2-stage-header">
           <button className={`v2-camera-preview-toggle${cameraPreview ? ' is-active' : ''}`} onClick={() => onCameraPreviewChange(!cameraPreview)} type="button">{cameraPreview ? 'Hide Camera Preview' : 'Camera Preview'}</button>
           <span>Stage</span>
@@ -966,15 +1023,7 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
             {stageContextMenu ? <div className="v2-entity-context-menu v2-stage-entity-context-menu" role="menu" style={{ left: stageContextMenu.x, top: stageContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { onBeginEntityRename(stageContextMenu.entityId); setStageContextMenu(null) }} type="button">Rename</button></div> : null}
             {axisLock ? <div className="v2-stage-axis-lock" aria-live="polite">Axis Lock · {axisLock.toUpperCase()}</div> : null}
             {wallDrawing ? <div className="v2-wall-draw-status"><strong>DRAW WALL</strong><span>{wallDrawState.start ? wallDrawState.end ? `${wallDrawState.length.toFixed(2)} m · Click to commit next segment` : 'Move to set wall length' : 'Click a ground point to start'}</span><small>Shift 45° · Ctrl/Cmd grid · Esc cancel</small></div> : null}
-            {cameraPreview ? <div className="v2-camera-preview-ui" style={{ aspectRatio: displayCamera ? deliveryAspect(displayCamera) : 16 / 9 }} onClick={() => { if (displayCamera) onOpenCameraView() }} role={displayCamera ? 'button' : undefined} tabIndex={displayCamera ? 0 : undefined}>
-              {displayCamera ? <>
-                <div className="v2-camera-preview-label" aria-label={previewCameraLabel(displayCamera.name, displayCamera.focalLengthMm, previewWidth)}><strong>{previewCameraLabel(displayCamera.name, displayCamera.focalLengthMm, previewWidth)}</strong></div>
-                <button className="v2-camera-preview-close" onClick={(event) => { event.stopPropagation(); onCameraPreviewChange(false) }} type="button" aria-label="Close Camera Preview">×</button>
-                <div className="v2-camera-preview-guides" aria-hidden="true">
-                  <CameraPreviewOverlays camera={displayCamera} sourceAspect={imageAspect} actor={displayActors.find((actor) => actor.id === displayCamera.targetEntityId) ?? null} />
-                </div>
-              </> : <div className="v2-camera-preview-empty">{masterPreview?.status === 'missing-shot' ? 'Missing Shot' : masterPreview?.status === 'missing-scene' ? 'Missing Scene' : masterPreview?.status === 'missing-camera' ? 'Missing Camera' : 'No active camera'}<button className="v2-camera-preview-close" onClick={(event) => { event.stopPropagation(); onCameraPreviewChange(false) }} type="button" aria-label="Close Camera Preview">×</button></div>}
-            </div> : null}
+            {cameraPreview ? <CameraPreviewOverlay displayCamera={displayCamera} displayActors={displayActors} imageAspect={imageAspect} masterPreview={masterPreview} masterImageUrls={masterImageUrls} activeMasterImageClipId={activeMasterImageClipId} readOnly={readOnly} onMasterImageSelect={onMasterImageSelect} onMasterImageChange={onMasterImageChange} onOpenCameraView={onOpenCameraView} onCameraPreviewChange={onCameraPreviewChange} /> : null}
           </>
         ) : displayCamera ? (
           <div className="v2-camera-view-overlay">
@@ -982,6 +1031,7 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
             <div className="v2-camera-image-area" style={imageStyle}>
               <CameraCompositionOverlay camera={displayCamera} sourceAspect={imageAspect} actor={displayActors.find((actor) => actor.id === displayCamera.targetEntityId) ?? null} />
               <CameraFrameOverlays camera={displayCamera} sourceAspect={imageAspect} imageRect={imageRect} selectedFrameGuideId={selectedFrameGuideId} compact={cameraOverlayMode(viewportSize.width) === 'compact'} />
+              {masterPreview ? <MasterGraphicsOverlay preview={masterPreview} imageUrls={masterImageUrls} aspect={imageAspect} activeClipId={activeMasterImageClipId} editable={!readOnly} onSelect={onMasterImageSelect} onChange={onMasterImageChange} /> : null}
             </div>
             <div className="v2-camera-view-controls" aria-label="Camera View controls">
               <label>Still <select className="v2-select" value={captureWidth} onChange={(event) => setCaptureWidth(Number(event.target.value) as StillCaptureWidth)}>{STILL_CAPTURE_WIDTHS.map((width) => <option key={width} value={width}>{width}px</option>)}</select></label>
@@ -1023,6 +1073,64 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
       </div>
     </section>
   )
+}
+
+export function CameraPreviewOverlay({ displayCamera, displayActors, imageAspect, masterPreview, masterImageUrls, activeMasterImageClipId, readOnly, onMasterImageSelect = () => {}, onMasterImageChange = () => {}, onOpenCameraView, onCameraPreviewChange }: { displayCamera: CameraDocument | null; displayActors: readonly ActorDocument[]; imageAspect: number; masterPreview: MasterPreviewContext | null; masterImageUrls: Readonly<Record<string, string>>; activeMasterImageClipId: string | null; readOnly: boolean; onMasterImageSelect?: (clipId: string) => void; onMasterImageChange?: (patch: { positionX?: number; positionY?: number; scale?: number; rotation?: number }) => void; onOpenCameraView: () => void; onCameraPreviewChange: (visible: boolean) => void }) {
+  const previewAspect = displayCamera ? deliveryAspect(displayCamera) : 16 / 9
+  return <div className="v2-camera-preview-ui" style={{ aspectRatio: previewAspect }} onClick={() => { if (displayCamera) onOpenCameraView() }} role={displayCamera ? 'button' : undefined} tabIndex={displayCamera ? 0 : undefined}>
+    {displayCamera ? <>
+      <button className="v2-camera-preview-close" onClick={(event) => { event.stopPropagation(); onCameraPreviewChange(false) }} type="button" aria-label="Close Camera Preview">×</button>
+      <div className="v2-camera-preview-guides" aria-hidden="true">
+        <CameraPreviewOverlays camera={displayCamera} sourceAspect={imageAspect} actor={displayActors.find((actor) => actor.id === displayCamera.targetEntityId) ?? null} />
+      </div>
+      {masterPreview ? <MasterGraphicsOverlay preview={masterPreview} imageUrls={masterImageUrls} aspect={previewAspect} activeClipId={activeMasterImageClipId} editable={!readOnly} onSelect={onMasterImageSelect} onChange={onMasterImageChange} /> : null}
+    </> : <div className="v2-camera-preview-empty">{masterPreview?.status === 'missing-shot' ? 'Missing Shot' : masterPreview?.status === 'missing-scene' ? 'Missing Scene' : masterPreview?.status === 'missing-camera' ? 'Missing Camera' : 'No active camera'}<button className="v2-camera-preview-close" onClick={(event) => { event.stopPropagation(); onCameraPreviewChange(false) }} type="button" aria-label="Close Camera Preview">×</button></div>}
+  </div>
+}
+
+function MasterGraphicsOverlay({ preview, imageUrls, aspect, activeClipId, editable, onSelect = () => {}, onChange }: { preview: MasterPreviewContext; imageUrls: Readonly<Record<string, string>>; aspect: number; activeClipId: string | null; editable: boolean; onSelect?: (clipId: string) => void; onChange: (patch: { positionX?: number; positionY?: number; scale?: number; rotation?: number }) => void }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [drafts, setDrafts] = useState<Record<string, { positionX?: number; positionY?: number; scale?: number; rotation?: number }>>({})
+  const dragRef = useRef<{ mode: 'move' | 'scale' | 'rotate'; clipId: string; pointerId: number; startX: number; startY: number; startPositionX: number; startPositionY: number; startScale: number; startRotation: number; centerX: number; centerY: number; startAngle: number; moved: boolean } | null>(null)
+  const begin = (event: ReactPointerEvent<HTMLElement>, clipId: string, mode: 'move' | 'scale' | 'rotate', clip: MasterPreviewContext['graphics'][number]['clip']) => {
+    if (!editable) return
+    event.stopPropagation()
+    onSelect(clipId)
+    const bounds = containerRef.current?.getBoundingClientRect()
+    if (!bounds) return
+    const transform = imageTransformForAsset(clip, preview.graphics.find((item) => item.clip.id === clipId)?.asset ?? { id: '', fileName: '', mimeType: '', sizeBytes: 0, lastModified: null, width: 1, height: 1 }, aspect)
+    const centerX = bounds.left + transform.x * bounds.width
+    const centerY = bounds.top + transform.y * bounds.height
+    dragRef.current = { mode, clipId, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, startPositionX: clip.positionX, startPositionY: clip.positionY, startScale: clip.scale, startRotation: clip.rotation, centerX, centerY, startAngle: Math.atan2(event.clientY - centerY, event.clientX - centerX), moved: false }
+    containerRef.current?.setPointerCapture(event.pointerId)
+  }
+  const move = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current
+    const bounds = containerRef.current?.getBoundingClientRect()
+    if (!drag || drag.pointerId !== event.pointerId || !bounds) return
+    const deltaX = event.clientX - drag.startX
+    const deltaY = event.clientY - drag.startY
+    if (!drag.moved && Math.hypot(deltaX, deltaY) < 4) return
+    drag.moved = true
+    if (drag.mode === 'move') setDrafts((current) => ({ ...current, [drag.clipId]: { positionX: Math.max(0, Math.min(1, drag.startPositionX + deltaX / bounds.width)), positionY: Math.max(0, Math.min(1, drag.startPositionY + deltaY / bounds.height)) } }))
+    if (drag.mode === 'scale') setDrafts((current) => ({ ...current, [drag.clipId]: { scale: graphicsScaleFromPointerDelta({ startScale: drag.startScale, deltaX, deltaY, viewportWidth: bounds.width, viewportHeight: bounds.height }) } }))
+    if (drag.mode === 'rotate') setDrafts((current) => ({ ...current, [drag.clipId]: { rotation: drag.startRotation + (Math.atan2(event.clientY - drag.centerY, event.clientX - drag.centerX) - drag.startAngle) * 180 / Math.PI } }))
+  }
+  const end = (event: ReactPointerEvent<HTMLDivElement>, cancelled = false) => { const drag = dragRef.current; if (!drag || drag.pointerId !== event.pointerId) return; if (!cancelled && drag.moved) onChange(drafts[drag.clipId] ?? {}); if (containerRef.current?.hasPointerCapture(event.pointerId)) containerRef.current.releasePointerCapture(event.pointerId); setDrafts((current) => { const next = { ...current }; delete next[drag.clipId]; return next }); dragRef.current = null }
+  const cancel = () => { const drag = dragRef.current; if (!drag) return; if (containerRef.current?.hasPointerCapture(drag.pointerId)) containerRef.current.releasePointerCapture(drag.pointerId); setDrafts((current) => { const next = { ...current }; delete next[drag.clipId]; return next }); dragRef.current = null }
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') cancel() }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => { window.removeEventListener('keydown', handleKeyDown); cancel() }
+  }, [])
+  useEffect(() => { if (dragRef.current && !preview.graphics.some((item) => item.clip.id === dragRef.current?.clipId)) cancel() }, [preview.graphics])
+  return <div className="v2-master-graphics-overlay" ref={containerRef} aria-label="Master Graphics" onPointerMove={move} onPointerUp={(event) => end(event)} onPointerCancel={(event) => end(event, true)} onLostPointerCapture={(event) => end(event, true)} style={{ pointerEvents: editable ? 'auto' : 'none' }}>{preview.graphics.map(({ clip, asset, opacity }) => {
+    const displayClip = { ...clip, ...(drafts[clip.id] ?? {}) }
+    const transform = imageTransformForAsset(displayClip, asset, aspect)
+    const selected = clip.id === activeClipId
+    const url = imageUrls[asset.id]
+    return <div key={clip.id} className={`v2-master-graphics-image${selected ? ' is-selected' : ''}${url ? '' : ' is-missing-media'}`} onPointerDown={(event) => begin(event, clip.id, 'move', clip)} style={{ left: `${transform.x * 100}%`, top: `${transform.y * 100}%`, width: `${transform.width * 100}%`, height: `${transform.height * 100}%`, opacity, transform: `translate(-50%, -50%) rotate(${transform.rotation}deg)` }}>{url ? <img src={url} alt="" draggable={false} /> : <span className="v2-master-graphics-missing">MISSING IMAGE<small>{asset.fileName}</small></span>}<>{selected ? <><span className="v2-master-graphics-handle is-scale" onPointerDown={(event) => begin(event, clip.id, 'scale', clip)} /><span className="v2-master-graphics-handle is-rotate" onPointerDown={(event) => begin(event, clip.id, 'rotate', clip)} /></> : null}</></div>
+  })}</div>
 }
 
 function CameraStatus({ camera, compact }: { camera: CameraDocument; compact: boolean }) {

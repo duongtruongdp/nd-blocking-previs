@@ -1,12 +1,13 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ProjectSceneEntry } from '../core/projectDocument'
 import type { MasterSequenceDocument } from '../core/masterSequence'
 import { masterClipDurationFrames, musicClipDurationSeconds } from '../core/masterSequence'
 import type { ShotDocument } from '../core/shotDocument'
 import { frameToTimecode, timecodeToFrame } from '../timeline/timelineMath'
 import { resolveShotCamera } from '../core/shotCameraResolver'
+import { imageFadeFramesToSeconds, imageFadeSecondsToFrames } from '../core/masterGraphics'
 
-export type MasterInspectorSelection = { kind: 'clip' | 'music'; id: string } | null
+export type MasterInspectorSelection = { kind: 'clip' | 'music' | 'image'; id: string } | null
 
 type V2MasterInspectorProps = {
   sequence: MasterSequenceDocument
@@ -20,11 +21,17 @@ type V2MasterInspectorProps = {
   onTrimClip: (clipId: string, start: number, end: number) => void
   onMusicChange: (patch: { startMasterFrame?: number; sourceStartSeconds?: number; sourceEndSeconds?: number }) => void
   onRemoveMusic: () => void
+  onImageChange: (patch: { positionX?: number; positionY?: number; scale?: number; rotation?: number; opacity?: number; fadeInFrames?: number; fadeOutFrames?: number }) => void
+  onRemoveImage: () => void
+  onDuplicateImage: () => void
+  onReplaceImageSource: (clipId: string) => void
+  onReplaceImageClip: (clipId: string) => void
 }
 
-export function V2MasterInspector({ sequence, shots, scenes, selection, rate, onOpenShot, onDuplicateClip, onRemoveClip, onTrimClip, onMusicChange, onRemoveMusic }: V2MasterInspectorProps) {
+export function V2MasterInspector({ sequence, shots, scenes, selection, rate, onOpenShot, onDuplicateClip, onRemoveClip, onTrimClip, onMusicChange, onRemoveMusic, onImageChange, onRemoveImage, onDuplicateImage, onReplaceImageSource, onReplaceImageClip }: V2MasterInspectorProps) {
   if (!selection) return <aside className="v2-panel v2-details-panel v2-master-inspector" aria-label="Master Inspector"><div className="v2-master-inspector-empty"><span className="v2-eyebrow">Master Inspector</span><strong>Select a clip in the Master Timeline.</strong><span>Shot details will appear here.</span></div></aside>
   if (selection.kind === 'music') return <MusicInspector sequence={sequence} selectionId={selection.id} rate={rate} onChange={onMusicChange} onRemove={onRemoveMusic} />
+  if (selection.kind === 'image') return <ImageInspector sequence={sequence} selectionId={selection.id} rate={rate} onChange={onImageChange} onRemove={onRemoveImage} onDuplicate={onDuplicateImage} onReplaceSource={onReplaceImageSource} onReplaceClip={onReplaceImageClip} />
   const clip = sequence.clips.find((candidate) => candidate.id === selection.id)
   if (!clip) return <aside className="v2-panel v2-details-panel v2-master-inspector" aria-label="Master Inspector"><div className="v2-master-inspector-empty"><strong>Missing Master Clip.</strong></div></aside>
   const shot = shots.find((candidate) => candidate.id === clip.shotId) ?? null
@@ -35,6 +42,18 @@ export function V2MasterInspector({ sequence, shots, scenes, selection, rate, on
     <div className="v2-master-inspector-fields"><InspectorValue label="Shot" value={shot?.name ?? 'Missing Shot'} /><InspectorValue label="Scene" value={scene?.name ?? 'Missing Scene'} /><InspectorValue label="Camera" value={camera?.name ?? 'Missing Camera'} /><InspectorValue label="Duration" value={frameToTimecode(masterClipDurationFrames(clip), scene?.scene.timeline.frameRate ?? rate)} /></div>
     {shot ? <div className="v2-master-inspector-range"><MasterTimecodeField label="Source Start" value={clip.sourceStartFrame} rate={scene?.scene.timeline.frameRate ?? rate} min={shot.startFrame} max={clip.sourceEndFrame - 1} onCommit={(value) => onTrimClip(clip.id, value, clip.sourceEndFrame)} /><MasterTimecodeField label="Source End" value={clip.sourceEndFrame} rate={scene?.scene.timeline.frameRate ?? rate} min={clip.sourceStartFrame + 1} max={shot.endFrame} onCommit={(value) => onTrimClip(clip.id, clip.sourceStartFrame, value)} /></div> : <p className="v2-master-inspector-error">This clip references a Shot that is no longer available.</p>}
     <div className="v2-master-inspector-actions"><button className="v2-small-action" type="button" disabled={!shot} onClick={() => onOpenShot(clip.id)}>Open Shot</button><button className="v2-small-action" type="button" disabled={!shot} onClick={() => onDuplicateClip(clip.id)}>Duplicate Clip</button><button className="v2-small-action is-muted" type="button" onClick={() => onRemoveClip(clip.id)}>Remove from Master</button></div>
+  </aside>
+}
+
+function ImageInspector({ sequence, selectionId, rate, onChange, onRemove, onDuplicate, onReplaceSource, onReplaceClip }: { sequence: MasterSequenceDocument; selectionId: string; rate: { numerator: number; denominator: number }; onChange: (patch: { positionX?: number; positionY?: number; scale?: number; rotation?: number; opacity?: number; fadeInFrames?: number; fadeOutFrames?: number }) => void; onRemove: () => void; onDuplicate: () => void; onReplaceSource: (clipId: string) => void; onReplaceClip: (clipId: string) => void }) {
+  const clip = (sequence.imageClips ?? []).find((candidate) => candidate.id === selectionId)
+  const asset = clip ? (sequence.imageAssets ?? []).find((candidate) => candidate.id === clip.assetId) : null
+  if (!clip || !asset) return <aside className="v2-panel v2-details-panel v2-master-inspector" aria-label="Image Inspector"><div className="v2-master-inspector-empty"><strong>Missing Image Clip.</strong></div></aside>
+  return <aside className="v2-panel v2-details-panel v2-master-inspector" aria-label="Image Clip Inspector">
+    <div className="v2-panel-heading"><div><span className="v2-eyebrow">Graphics Image</span><h2>{asset.fileName}</h2></div></div>
+    <div className="v2-master-inspector-fields"><InspectorValue label="Track" value={(sequence.graphicsTracks ?? []).find((track) => track.id === clip.trackId)?.name ?? 'Missing Track'} /><InspectorValue label="Duration" value={frameToTimecode(clip.durationFrames, rate)} /><InspectorValue label="Asset" value={`${asset.width} × ${asset.height}`} /></div>
+    <div className="v2-master-inspector-range"><NumberField label="Position X" value={clip.positionX * 100} suffix="%" min={0} max={100} step={0.1} onCommit={(value) => onChange({ positionX: value / 100 })} /><NumberField label="Position Y" value={clip.positionY * 100} suffix="%" min={0} max={100} step={0.1} onCommit={(value) => onChange({ positionY: value / 100 })} /><NumberField label="Scale" value={clip.scale * 100} suffix="%" min={1} max={1000} step={1} onCommit={(value) => onChange({ scale: value / 100 })} /><NumberField label="Rotation" value={clip.rotation} suffix="°" step={1} onCommit={(value) => onChange({ rotation: value })} /><NumberField label="Opacity" value={clip.opacity * 100} suffix="%" min={0} max={100} step={1} onCommit={(value) => onChange({ opacity: value / 100 })} /><NumberField label="Fade In" value={imageFadeFramesToSeconds(clip.fadeInFrames, rate)} suffix="s" min={0} step={0.05} onCommit={(value) => onChange({ fadeInFrames: imageFadeSecondsToFrames(value, rate) })} /><NumberField label="Fade Out" value={imageFadeFramesToSeconds(clip.fadeOutFrames, rate)} suffix="s" min={0} step={0.05} onCommit={(value) => onChange({ fadeOutFrames: imageFadeSecondsToFrames(value, rate) })} /></div>
+    <div className="v2-master-inspector-actions"><button className="v2-small-action" type="button" onClick={() => onReplaceSource(clip.assetId)}>Replace Source Asset…</button><button className="v2-small-action" type="button" onClick={() => onReplaceClip(clip.id)}>Replace This Clip Only…</button><button className="v2-small-action" type="button" onClick={onDuplicate}>Duplicate Image</button><button className="v2-small-action is-muted" type="button" onClick={onRemove}>Remove Image</button></div>
   </aside>
 }
 
@@ -68,4 +87,11 @@ function MasterTimecodeField({ label, value, rate, min, max, onCommit }: { label
 
 function SecondsField({ label, value, min, max, onCommit }: { label: string; value: number; min: number; max: number; onCommit: (value: number) => void }) {
   return <label>{label}<input type="number" min={min} max={max} step="0.01" value={value.toFixed(2)} onChange={(event) => { const next = Number(event.target.value); if (Number.isFinite(next) && next >= min && next <= max) onCommit(next) }} /></label>
+}
+
+function NumberField({ label, value, suffix, min, max, step, onCommit }: { label: string; value: number; suffix: string; min?: number; max?: number; step: number; onCommit: (value: number) => void }) {
+  const [draft, setDraft] = useState(String(Number(value.toFixed(2))))
+  useEffect(() => setDraft(String(Number(value.toFixed(2)))), [value])
+  const commit = () => { const parsed = Number(draft); if (!Number.isFinite(parsed) || (min !== undefined && parsed < min) || (max !== undefined && parsed > max)) { setDraft(String(Number(value.toFixed(2)))); return } onCommit(parsed) }
+  return <label>{label}<span className="v2-master-number-field"><input type="number" value={draft} min={min} max={max} step={step} onChange={(event) => setDraft(event.target.value)} onBlur={commit} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commit(); event.currentTarget.blur() } }} /><small>{suffix}</small></span></label>
 }

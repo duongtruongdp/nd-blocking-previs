@@ -1,5 +1,6 @@
 import { normalizeSceneDocument, prepareSceneForSave, validateSceneDocument } from './scenePersistence'
-import type { ProjectDocument } from './projectDocument'
+import type { ProjectDocument, ProjectCameraDefaults } from './projectDocument'
+import { CAMERA_DATABASE, resolveCameraDefinition } from './cameraDatabase'
 import { normalizeShotDocuments } from './shotDocument'
 import { normalizeMasterSequence } from './masterSequence'
 import { normalizeShotListSettings } from './shotListSettings'
@@ -36,6 +37,7 @@ export function prepareProjectForSave(project: ProjectDocument, savedAt = new Da
     activeShotId: shots.some((shot) => shot.id === project.activeShotId) ? project.activeShotId : null,
     masterSequence: normalizeMasterSequence(project.masterSequence),
     settings,
+    cameraDefaults: normalizeCameraDefaults(project),
   }
 }
 
@@ -72,10 +74,11 @@ export function migrateProjectFile(value: unknown): NdblockFile {
   const masterSequence = normalizeMasterSequence(isRecord(project) ? project.masterSequence : undefined)
   const activeShotId = isRecord(project) && typeof project.activeShotId === 'string' && shots.some((shot) => shot.id === project.activeShotId) ? project.activeShotId : null
   const settings = isRecord(project) && isRecord(project.settings) ? { ...project.settings, shotList: normalizeShotListSettings(project.settings.shotList) } : { shotList: normalizeShotListSettings(undefined) }
+  const cameraDefaults = normalizeCameraDefaults(project)
   return {
     format: NDBLOCK_FORMAT,
     version: CURRENT_NDBLOCK_VERSION,
-    project: { ...project, shots, activeShotId, masterSequence, settings, scenes: Array.isArray(project.scenes) ? project.scenes.map((entry) => ({ ...entry, scene: normalizeSceneDocument(entry.scene) })) : project.scenes },
+    project: { ...project, shots, activeShotId, masterSequence, settings, cameraDefaults, scenes: Array.isArray(project.scenes) ? project.scenes.map((entry) => ({ ...entry, scene: normalizeSceneDocument(entry.scene) })) : project.scenes },
   }
 }
 
@@ -84,6 +87,7 @@ export function validateProjectDocument(value: unknown): string[] {
   if (!isRecord(value)) return ['Project data is missing.']
   if (!stringField(value.id) || !stringField(value.name) || !stringField(value.createdAt) || !stringField(value.updatedAt)) errors.push('Project metadata is incomplete.')
   if (!Array.isArray(value.scenes) || value.scenes.length === 0 || !stringField(value.activeSceneId) || !isRecord(value.settings)) errors.push('Project scenes or settings are incomplete.')
+  if (!isRecord(value.cameraDefaults) || !stringField(value.cameraDefaults.cameraModelId)) errors.push('Project Camera Defaults are incomplete.')
   if (errors.length > 0) return errors
   const scenes = value.scenes as unknown[]
   const sceneIds = scenes.map((entry) => isRecord(entry) ? entry.id : null)
@@ -103,6 +107,7 @@ export function validateProjectDocument(value: unknown): string[] {
     const clipIds = value.masterSequence.clips.map((clip) => isRecord(clip) ? clip.id : null)
     if (clipIds.some((id) => !stringField(id)) || new Set(clipIds.filter((id): id is string => typeof id === 'string')).size !== clipIds.length) errors.push('Master Clip IDs must be unique.')
     value.masterSequence.clips.forEach((clip, index) => validateMasterClip(clip, `masterSequence.clips[${index}]`, errors))
+    validateMasterGraphics(value.masterSequence, errors)
   }
   return errors
 }
@@ -131,6 +136,30 @@ function validateMasterClip(value: unknown, path: string, errors: string[]): voi
   if (!isRecord(value) || !stringField(value.id) || !stringField(value.shotId) || !finiteNumber(value.sourceStartFrame) || !finiteNumber(value.sourceEndFrame) || Number(value.sourceEndFrame) <= Number(value.sourceStartFrame) || !finiteNumber(value.order)) errors.push(`${path} is not a valid Master Clip.`)
 }
 
+function validateMasterGraphics(sequence: Record<string, unknown>, errors: string[]): void {
+  if (sequence.graphicsTracks !== undefined && !Array.isArray(sequence.graphicsTracks)) errors.push('Project Graphics Tracks are invalid.')
+  if (sequence.imageAssets !== undefined && !Array.isArray(sequence.imageAssets)) errors.push('Project Image Assets are invalid.')
+  if (sequence.imageClips !== undefined && !Array.isArray(sequence.imageClips)) errors.push('Project Image Clips are invalid.')
+  if (Array.isArray(sequence.graphicsTracks)) {
+    const ids = sequence.graphicsTracks.map((track) => isRecord(track) ? track.id : null)
+    if (ids.some((id) => !stringField(id)) || new Set(ids.filter((id): id is string => typeof id === 'string')).size !== ids.length) errors.push('Graphics Track IDs must be unique.')
+  }
+  if (Array.isArray(sequence.imageAssets)) {
+    const ids = sequence.imageAssets.map((asset) => isRecord(asset) ? asset.id : null)
+    if (ids.some((id) => !stringField(id)) || new Set(ids.filter((id): id is string => typeof id === 'string')).size !== ids.length) errors.push('Image Asset IDs must be unique.')
+    sequence.imageAssets.forEach((asset, index) => {
+      if (!isRecord(asset) || !stringField(asset.id) || !stringField(asset.fileName) || !stringField(asset.mimeType) || !finiteNumber(asset.sizeBytes) || !finiteNumber(asset.width) || !finiteNumber(asset.height) || Number(asset.width) <= 0 || Number(asset.height) <= 0) errors.push(`masterSequence.imageAssets[${index}] is not a valid Image Asset.`)
+    })
+  }
+  if (Array.isArray(sequence.imageClips)) {
+    const ids = sequence.imageClips.map((clip) => isRecord(clip) ? clip.id : null)
+    if (ids.some((id) => !stringField(id)) || new Set(ids.filter((id): id is string => typeof id === 'string')).size !== ids.length) errors.push('Image Clip IDs must be unique.')
+    sequence.imageClips.forEach((clip, index) => {
+      if (!isRecord(clip) || !stringField(clip.id) || !stringField(clip.trackId) || !stringField(clip.assetId) || !finiteNumber(clip.startMasterFrame) || !finiteNumber(clip.durationFrames) || Number(clip.durationFrames) <= 0 || !finiteNumber(clip.positionX) || !finiteNumber(clip.positionY) || !finiteNumber(clip.scale) || Number(clip.scale) <= 0 || !finiteNumber(clip.rotation) || !finiteNumber(clip.opacity) || !finiteNumber(clip.fadeInFrames) || !finiteNumber(clip.fadeOutFrames)) errors.push(`masterSequence.imageClips[${index}] is not a valid Image Clip.`)
+    })
+  }
+}
+
 function finiteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
@@ -141,4 +170,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringField(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0
+}
+
+/**
+ * Project defaults were added after the first .ndblock format. Resolve them
+ * at the persistence boundary so legacy and stale projects remain readable
+ * without rewriting any existing CameraDocument.
+ */
+export function normalizeCameraDefaults(project: unknown): ProjectCameraDefaults {
+  if (!isRecord(project)) return { cameraModelId: CAMERA_DATABASE[0]?.id ?? '' }
+  const requested = isRecord(project.cameraDefaults) && stringField(project.cameraDefaults.cameraModelId) ? project.cameraDefaults.cameraModelId : null
+  if (requested && resolveCameraDefinition(requested)) return { cameraModelId: requested }
+
+  const scenes = Array.isArray(project.scenes) ? project.scenes : []
+  const activeSceneId = stringField(project.activeSceneId) ? project.activeSceneId : null
+  const activeEntry = scenes.find((entry) => isRecord(entry) && entry.id === activeSceneId)
+  const orderedEntries = activeEntry ? [activeEntry, ...scenes.filter((entry) => entry !== activeEntry)] : scenes
+  for (const entry of orderedEntries) {
+    if (!isRecord(entry) || !isRecord(entry.scene) || !Array.isArray(entry.scene.cameras)) continue
+    const cameras = entry.scene.cameras
+    const activeCameraId = stringField(entry.scene.activeCameraId) ? entry.scene.activeCameraId : null
+    const primary = activeCameraId ? cameras.find((camera) => isRecord(camera) && camera.id === activeCameraId) : undefined
+    const candidates = primary ? [primary, ...cameras.filter((camera) => camera !== primary)] : cameras
+    const existing = candidates.find((camera) => isRecord(camera) && stringField(camera.cameraDefinitionId) && resolveCameraDefinition(camera.cameraDefinitionId))
+    if (existing && isRecord(existing) && stringField(existing.cameraDefinitionId)) return { cameraModelId: existing.cameraDefinitionId }
+  }
+  return { cameraModelId: CAMERA_DATABASE[0]?.id ?? '' }
 }

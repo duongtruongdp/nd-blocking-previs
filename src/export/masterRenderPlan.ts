@@ -1,7 +1,7 @@
 import type { CameraDeliveryFrame } from '../core/sceneDocument'
 import type { SceneDocument } from '../core/sceneDocument'
 import type { ProjectDocument } from '../core/projectDocument'
-import { effectiveMasterRenderRange, masterSequenceFrameRate, musicClipDurationSeconds, orderedMasterClips, sameFrameRate, sourceRangeWithinShot, type MasterRenderRange } from '../core/masterSequence'
+import { effectiveMasterRenderRange, masterSequenceDurationFrames, masterSequenceFrameRate, musicClipDurationSeconds, orderedMasterClips, sameFrameRate, sourceRangeWithinShot, type MasterRenderRange } from '../core/masterSequence'
 import { resolveMasterPreviewContext, type MasterPreviewContext } from '../core/masterPreview'
 import { cameraDisplayAspect } from '../runtime/cameraMath'
 import type { RationalFrameRate } from '../core/sceneDocument'
@@ -54,6 +54,10 @@ export type MasterRenderFrame = MasterPreviewContext & {
 }
 
 export function resolveMasterRenderFrame(project: ProjectDocument, masterFrame: number): MasterRenderFrame {
+  const duration = masterSequenceDurationFrames(project.masterSequence)
+  if (!Number.isFinite(masterFrame) || Math.round(masterFrame) < 0 || Math.round(masterFrame) >= duration) {
+    throw new Error('Master render frames must address renderable samples before the end boundary.')
+  }
   const context = resolveMasterPreviewContext(project, masterFrame)
   if (context.status !== 'resolved' || !context.scene || !context.evaluatedEntities || !context.sceneId || !context.cameraId || context.sourceFrame === null) {
     throw new Error(masterRenderContextError(context))

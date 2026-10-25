@@ -10,7 +10,7 @@ import { frameToTimelinePercent, upsertTimelineKeyframe } from '../timeline/time
 import { buildMasterRenderPlan, resolveMasterRenderFrame } from '../export/masterRenderPlan'
 import { createProjectDocument } from '../core/projectDocument'
 import { createShotDocument } from '../core/shotDocument'
-import { createMusicClip } from '../core/masterSequence'
+import { createMusicClip, resolveMasterFrame } from '../core/masterSequence'
 import { createExportTracker, ExportStageError } from '../export/exportDiagnostics'
 
 describe('V2.6 video export logic', () => {
@@ -157,6 +157,19 @@ describe('V2.6 video export logic', () => {
     expect(resolveMasterRenderFrame(fullProject, 0).evaluatedEntities).toBeDefined()
     expect(resolveMasterRenderFrame(fullProject, plan.endFrameExclusive - 1).sourceFrame).toBe(12)
     expect(() => resolveMasterRenderFrame(fullProject, plan.endFrameExclusive)).toThrow(/renderable samples/i)
+  })
+
+  it('keeps intentional Master gaps in the render range and resolves them as black frames', () => {
+    const camera = createCameraDocument('camera-gap', 'Camera Gap', [0, 2, 4], cameraRotationLookingAt([0, 2, 4], [0, 1, 0]), CAMERA_DATABASE[0].id, CAMERA_DATABASE[0].captureModes[0].id)
+    const scene = { ...createEmptySceneDocument(), metadata: { ...createEmptySceneDocument().metadata, id: 'scene-gap', name: 'Scene Gap' }, cameras: [camera], activeCameraId: camera.id }
+    const project = createProjectDocument('project-gap', 'Project Gap', scene)
+    const first = createShotDocument({ id: 'shot-gap-a', name: 'Shot Gap A', sceneId: scene.metadata.id, cameraId: camera.id, startFrame: 0, endFrame: 2, order: 0, notes: '', thumbnail: null })
+    const second = createShotDocument({ id: 'shot-gap-b', name: 'Shot Gap B', sceneId: scene.metadata.id, cameraId: camera.id, startFrame: 2, endFrame: 4, order: 1, notes: '', thumbnail: null })
+    const fullProject = { ...project, scenes: [{ id: scene.metadata.id, name: scene.metadata.name, scene }], shots: [first, second], masterSequence: { clips: [{ id: 'clip-gap-a', shotId: first.id, sourceStartFrame: 0, sourceEndFrame: 2, startMasterFrame: 0, order: 0 }, { id: 'clip-gap-b', shotId: second.id, sourceStartFrame: 2, sourceEndFrame: 4, startMasterFrame: 5, order: 1 }], musicClip: null, markInFrame: null, markOutFrame: null } }
+    const plan = buildMasterRenderPlan(fullProject, { width: 1920, deliveryAspectRatio: '16:9', includeMusic: false })
+    expect(plan).toMatchObject({ startFrame: 0, endFrameExclusive: 7, frameCount: 7 })
+    expect(plan.clipsUsed.map((clip) => [clip.startFrame, clip.endFrame])).toEqual([[0, 2], [5, 7]])
+    expect(resolveMasterFrame(fullProject.masterSequence, fullProject.shots, 3)).toBeNull()
   })
 
   it('rejects Master clips with source frames outside their Shot', () => {

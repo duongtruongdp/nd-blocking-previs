@@ -1,7 +1,7 @@
 import type { CameraDeliveryFrame } from '../core/sceneDocument'
 import type { SceneDocument } from '../core/sceneDocument'
 import type { ProjectDocument } from '../core/projectDocument'
-import { effectiveMasterRenderRange, masterSequenceDurationFrames, masterSequenceFrameRate, musicClipDurationSeconds, orderedMasterClips, sameFrameRate, sourceRangeWithinShot, type MasterRenderRange } from '../core/masterSequence'
+import { effectiveMasterRenderRange, masterClipDurationFrames, masterClipStartFrame, masterSequenceDurationFrames, masterSequenceFrameRate, masterSequenceVisualDurationFrames, musicClipDurationSeconds, orderedMasterClips, sameFrameRate, sourceRangeWithinShot, type MasterRenderRange } from '../core/masterSequence'
 import { resolveMasterPreviewContext, type MasterPreviewContext } from '../core/masterPreview'
 import { cameraDisplayAspect } from '../runtime/cameraMath'
 import type { RationalFrameRate } from '../core/sceneDocument'
@@ -58,7 +58,7 @@ export function resolveMasterRenderFrame(project: ProjectDocument, masterFrame: 
   if (!Number.isFinite(masterFrame) || Math.round(masterFrame) < 0 || Math.round(masterFrame) >= duration) {
     throw new Error('Master render frames must address renderable samples before the end boundary.')
   }
-  const context = resolveMasterPreviewContext(project, masterFrame)
+  const context = resolveMasterPreviewContext(project, masterFrame, false)
   if (context.status !== 'resolved' || !context.scene || !context.evaluatedEntities || !context.sceneId || !context.cameraId || context.sourceFrame === null) {
     throw new Error(masterRenderContextError(context))
   }
@@ -66,18 +66,18 @@ export function resolveMasterRenderFrame(project: ProjectDocument, masterFrame: 
 }
 
 export function buildMasterRenderPlan(project: ProjectDocument, options: MasterRenderPlanOptions): MasterRenderPlan {
-  const range = effectiveMasterRenderRange(project.masterSequence)
-  if (project.masterSequence.clips.length === 0 || range.endFrame <= range.startFrame) throw new Error('No shots in the Master Sequence.')
   const frameRateSource = masterSequenceFrameRate(project.masterSequence, project.shots, project.scenes, { numerator: 24, denominator: 1 })
   const frameRate = frameRateSource.rate
+  const range = effectiveMasterRenderRange(project.masterSequence, masterSequenceVisualDurationFrames(project.masterSequence, frameRate))
+  if (project.masterSequence.clips.length === 0 || range.endFrame <= range.startFrame) throw new Error('No shots in the Master Sequence.')
   validateMasterClipSources(project, frameRate)
-  const firstFrame = resolveMasterRenderFrame(project, range.startFrame)
-  const deliveryAspect = resolveMasterDeliveryAspect(firstFrame, options.deliveryAspectRatio)
+  const firstFrame = firstRenderableMasterFrame(project, range)
+  const deliveryAspect = firstFrame ? resolveMasterDeliveryAspect(firstFrame, options.deliveryAspectRatio) : 16 / 9
   const dimensions = dimensionsForDeliveryAspect(options.width, deliveryAspect)
   const contexts = new Map<string, MasterRenderFrame>()
   for (let masterFrame = range.startFrame; masterFrame < range.endFrame; masterFrame += 1) {
-    const context = resolveMasterRenderFrame(project, masterFrame)
-    contexts.set(context.clipId, context)
+    const context = resolveMasterPreviewContext(project, masterFrame, false)
+    if (context.status === 'resolved') contexts.set(context.clipId!, context as MasterRenderFrame)
   }
   const clipsUsed = clipsInRenderRange(project, range, contexts)
   const musicOverlap = options.includeMusic ? musicOverlapForRange(project, range, frameRate) : null
@@ -92,6 +92,14 @@ export function buildMasterRenderPlan(project: ProjectDocument, options: MasterR
     clipsUsed,
     musicOverlap,
   }
+}
+
+function firstRenderableMasterFrame(project: ProjectDocument, range: MasterRenderRange): MasterRenderFrame | null {
+  for (let frame = range.startFrame; frame < range.endFrame; frame += 1) {
+    const context = resolveMasterPreviewContext(project, frame, false)
+    if (context.status === 'resolved') return context as MasterRenderFrame
+  }
+  return null
 }
 
 function validateMasterClipSources(project: ProjectDocument, frameRate: RationalFrameRate): void {
@@ -117,18 +125,15 @@ function resolveMasterDeliveryAspect(frame: MasterRenderFrame, delivery: CameraD
 
 function clipsInRenderRange(project: ProjectDocument, range: MasterRenderRange, contexts: ReadonlyMap<string, MasterRenderFrame>): MasterRenderClip[] {
   const result: MasterRenderClip[] = []
-  let cursor = 0
   for (const clip of orderedMasterClips(project.masterSequence)) {
-    const duration = clip.sourceEndFrame - clip.sourceStartFrame
-    const clipStart = cursor
-    const clipEnd = cursor + duration
-    cursor = clipEnd
+    const duration = masterClipDurationFrames(clip)
+    const clipStart = masterClipStartFrame(project.masterSequence, clip.id) ?? 0
+    const clipEnd = clipStart + duration
     const startFrame = Math.max(range.startFrame, clipStart)
     const endFrame = Math.min(range.endFrame, clipEnd)
     if (startFrame >= endFrame) continue
     const context = contexts.get(clip.id)
-    if (!context) throw new Error(`Master clip ${clip.id} could not be resolved.`)
-    result.push({ clipId: clip.id, shotId: context.shotId!, sceneId: context.sceneId!, cameraId: context.cameraId!, startFrame, endFrame })
+    if (context) result.push({ clipId: clip.id, shotId: context.shotId!, sceneId: context.sceneId!, cameraId: context.cameraId!, startFrame, endFrame })
   }
   return result
 }

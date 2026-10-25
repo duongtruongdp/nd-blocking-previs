@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { masterTimelineInsertionIndex, previewMasterClipOrder } from '../core/masterTimelineDrag'
+import { masterShotPlacementIsValid, masterShotSnapTargets, masterTimelineInsertionIndex, previewMasterClipOrder, snapMasterFrame } from '../core/masterTimelineDrag'
 
 const clips = [
   { id: 'clip-a', shotId: 'a', sourceStartFrame: 0, sourceEndFrame: 100, order: 0 },
@@ -21,8 +21,31 @@ describe('Master Timeline magnetic insertion geometry', () => {
     expect(previewMasterClipOrder(clips, 'clip-d', 1).map((clip) => clip.id)).toEqual(['clip-a', 'clip-d', 'clip-b', 'clip-c'])
   })
 
+  it('keeps insertion thresholds on absolute boundaries at minimum zoom', () => {
+    const shortClips = clips.map((clip, index) => ({ ...clip, sourceEndFrame: index === 0 ? 1 : index === 1 ? 2 : index === 2 ? 1 : 3 }))
+    // The first two clips occupy 0–1 and 1–3 frames; the threshold after the
+    // second clip is still derived from frame 3, even below one pixel/frame.
+    expect(masterTimelineInsertionIndex(shortClips, 0.06, 0.02)).toBe(2)
+  })
+
   it('supports B between C and D and a no-op original insertion', () => {
     expect(previewMasterClipOrder(clips, 'clip-b', 2).map((clip) => clip.id)).toEqual(['clip-a', 'clip-c', 'clip-b', 'clip-d'])
     expect(previewMasterClipOrder(clips, 'clip-b', 1).map((clip) => clip.id)).toEqual(['clip-a', 'clip-b', 'clip-c', 'clip-d'])
+  })
+
+  it('snaps to absolute clip boundaries, playhead, and marks without ripple math', () => {
+    const placed = clips.map((clip, index) => ({ ...clip, startMasterFrame: index === 0 ? 0 : index === 1 ? 140 : index === 2 ? 200 : 520 }))
+    const sequence = { clips: placed, markInFrame: 300, markOutFrame: 480 }
+    const targets = masterShotSnapTargets(sequence, 'clip-a', 300, 300, 480)
+    expect(snapMasterFrame(137, targets, 5)).toBe(140)
+    expect(snapMasterFrame(302, targets, 5)).toBe(300)
+    expect(snapMasterFrame(151, targets, 5)).toBe(151)
+  })
+
+  it('reports overlap previews as invalid while allowing a gap placement', () => {
+    const placed = clips.slice(0, 2).map((clip, index) => ({ ...clip, startMasterFrame: index === 0 ? 0 : 140 }))
+    const sequence = { clips: placed }
+    expect(masterShotPlacementIsValid(sequence, 'clip-b', 60)).toBe(false)
+    expect(masterShotPlacementIsValid(sequence, 'clip-b', 110)).toBe(true)
   })
 })

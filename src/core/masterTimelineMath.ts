@@ -1,7 +1,28 @@
 import type { RationalFrameRate } from './sceneDocument'
 
+export type MasterTimelinePixelRange = {
+  startFrame: number
+  endFrame: number
+  startPx: number
+  endPx: number
+  widthPx: number
+}
+
 export function masterFrameToPixel(frame: number, pixelsPerFrame: number): number {
   return Math.max(0, frame) * Math.max(0.0001, pixelsPerFrame)
+}
+
+/**
+ * Converts one temporal range from its two canonical frame boundaries.
+ * Keeping both edges absolute avoids accumulating rounded pixel widths across
+ * adjacent clips at very low zoom.
+ */
+export function masterFrameRangeToPixels(startFrame: number, endFrame: number, pixelsPerFrame: number): MasterTimelinePixelRange {
+  const start = Math.max(0, Math.round(Number.isFinite(startFrame) ? startFrame : 0))
+  const end = Math.max(start, Math.round(Number.isFinite(endFrame) ? endFrame : start))
+  const startPx = masterFrameToPixel(start, pixelsPerFrame)
+  const endPx = masterFrameToPixel(end, pixelsPerFrame)
+  return { startFrame: start, endFrame: end, startPx, endPx, widthPx: Math.max(0.0001, endPx - startPx) }
 }
 
 export function pixelToMasterFrame(pixel: number, pixelsPerFrame: number, maxFrame: number): number {

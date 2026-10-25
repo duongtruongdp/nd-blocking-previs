@@ -12,6 +12,8 @@ export type MasterClipDocument = {
   shotId: string
   sourceStartFrame: number
   sourceEndFrame: number
+  /** Absolute Master placement. Legacy callers may omit this until normalized. */
+  startMasterFrame?: number
   order: number
 }
 
@@ -125,6 +127,7 @@ export function createMasterClip(shot: ShotDocument, existingIds: ReadonlySet<st
 export function normalizeMasterSequence(value: unknown): MasterSequenceDocument {
   if (!isRecord(value) || !Array.isArray(value.clips)) return createMasterSequenceDocument()
   const ids = new Set<string>()
+  let legacyCursor = 0
   const clips = value.clips.flatMap((candidate, index) => {
     if (!isRecord(candidate) || typeof candidate.shotId !== 'string' || !candidate.shotId.trim()) return []
     const sourceStartFrame = finiteFrame(candidate.sourceStartFrame)
@@ -133,7 +136,11 @@ export function normalizeMasterSequence(value: unknown): MasterSequenceDocument 
     let id = typeof candidate.id === 'string' && candidate.id.trim() ? candidate.id : `master-clip-${index + 1}`
     while (ids.has(id)) id = createMasterClipId(ids)
     ids.add(id)
-    return [{ id, shotId: candidate.shotId, sourceStartFrame, sourceEndFrame, order: index }]
+    const duration = sourceEndFrame - sourceStartFrame
+    const explicitStart = finiteFrame(candidate.startMasterFrame)
+    const startMasterFrame = explicitStart === null ? legacyCursor : Math.max(0, explicitStart)
+    legacyCursor = Math.max(legacyCursor, startMasterFrame + duration)
+    return [{ id, shotId: candidate.shotId, sourceStartFrame, sourceEndFrame, ...(explicitStart === null ? {} : { startMasterFrame }), order: index }]
   })
   const ordered = clips.map((clip, index) => ({ ...clip, order: index }))
   const marks = normalizeMasterMarks(value.markInFrame, value.markOutFrame, masterSequenceDurationFrames({ clips: ordered }))
@@ -155,7 +162,12 @@ export function masterClipDurationFrames(clip: MasterClipDocument): number {
 }
 
 export function masterSequenceDurationFrames(sequence: MasterSequenceDocument): number {
-  return orderedMasterClips(sequence).reduce((total, clip) => total + masterClipDurationFrames(clip), 0)
+  const starts = masterClipPlacementStarts(sequence)
+  return orderedMasterClips(sequence).reduce((total, clip) => Math.max(total, (starts.get(clip.id) ?? 0) + masterClipDurationFrames(clip)), 0)
+}
+
+export function masterClipEndFrame(clip: MasterClipDocument): number {
+  return masterClipStartFrameForClip(clip) + masterClipDurationFrames(clip)
 }
 
 /**
@@ -168,11 +180,12 @@ export function clampMasterTimelineBoundary(frame: number, durationFrames: numbe
 }
 
 /**
- * The Master render/review range intentionally ends at Shot content, not at a
- * possible music-only tail. This is the future M4C source-frame contract.
+ * The Master render/review range ends at the supplied content boundary. The
+ * default preserves legacy Shot-only callers; playback/export pass the full
+ * Shot/Graphics/Music content end explicitly.
  */
-export function effectiveMasterRenderRange(sequence: MasterSequenceDocument): MasterRenderRange {
-  const videoEnd = masterSequenceDurationFrames(sequence)
+export function effectiveMasterRenderRange(sequence: MasterSequenceDocument, contentEndFrame = masterSequenceDurationFrames(sequence)): MasterRenderRange {
+  const videoEnd = Math.max(masterSequenceDurationFrames(sequence), Math.round(Number.isFinite(contentEndFrame) ? contentEndFrame : 0))
   if (videoEnd <= 0) return { startFrame: 0, endFrame: 0 }
   const marks = normalizeMasterMarks(sequence.markInFrame, sequence.markOutFrame, videoEnd)
   return {
@@ -192,8 +205,8 @@ export function masterPlaybackFrameAt(rawFrame: number, range: MasterRenderRange
 }
 
 /** Applies Scene-consistent mark adjustment while guaranteeing a non-empty Master range. */
-export function setMasterSequenceMark(sequence: MasterSequenceDocument, kind: 'in' | 'out', frame: number): MasterSequenceDocument {
-  const videoEnd = masterSequenceDurationFrames(sequence)
+export function setMasterSequenceMark(sequence: MasterSequenceDocument, kind: 'in' | 'out', frame: number, contentEndFrame = masterSequenceDurationFrames(sequence)): MasterSequenceDocument {
+  const videoEnd = Math.max(masterSequenceDurationFrames(sequence), Math.round(Number.isFinite(contentEndFrame) ? contentEndFrame : 0))
   if (videoEnd <= 0) return { ...sequence, markInFrame: null, markOutFrame: null }
   const marks = normalizeMasterMarks(sequence.markInFrame, sequence.markOutFrame, videoEnd)
   if (kind === 'in') {
@@ -205,12 +218,23 @@ export function setMasterSequenceMark(sequence: MasterSequenceDocument, kind: 'i
 }
 
 export function masterClipStartFrame(sequence: MasterSequenceDocument, clipId: string): number | null {
-  let cursor = 0
-  for (const clip of orderedMasterClips(sequence)) {
-    if (clip.id === clipId) return cursor
-    cursor += masterClipDurationFrames(clip)
-  }
-  return null
+  return masterClipPlacementStarts(sequence).get(clipId) ?? null
+}
+
+/**
+ * Resolves legacy implicit placements once, without changing their editorial
+ * order or source ranges. This is intentionally an edit-time operation; merely
+ * opening an older project must not rewrite its serialized shape.
+ */
+export function materializeMasterClipPlacements(sequence: MasterSequenceDocument): MasterSequenceDocument {
+  const starts = masterClipPlacementStarts(sequence)
+  let changed = false
+  const clips = sequence.clips.map((clip) => {
+    if (clip.startMasterFrame !== undefined) return clip
+    changed = true
+    return { ...clip, startMasterFrame: starts.get(clip.id) ?? 0 }
+  })
+  return changed ? { ...sequence, clips } : sequence
 }
 
 export function resolveMasterFrame(sequence: MasterSequenceDocument, shots: readonly ShotDocument[], masterFrame: number): ResolvedMasterFrame | null {
@@ -220,12 +244,13 @@ export function resolveMasterFrame(sequence: MasterSequenceDocument, shots: read
   const frame = Math.round(Number.isFinite(masterFrame) ? masterFrame : 0)
   if (frame >= total) return null
   const sampleFrame = Math.max(0, frame)
-  let cursor = 0
+  const starts = masterClipPlacementStarts(sequence)
   for (const clip of clips) {
     const duration = masterClipDurationFrames(clip)
-    if (sampleFrame < cursor + duration) {
+    const start = starts.get(clip.id) ?? 0
+    if (sampleFrame >= start && sampleFrame < start + duration) {
       const shot = shots.find((candidate) => candidate.id === clip.shotId)
-      const localClipFrame = sampleFrame - cursor
+      const localClipFrame = sampleFrame - start
       return {
         clipId: clip.id,
         shotId: clip.shotId,
@@ -235,7 +260,6 @@ export function resolveMasterFrame(sequence: MasterSequenceDocument, shots: read
         localClipFrame,
       }
     }
-    cursor += duration
   }
   return null
 }
@@ -249,11 +273,29 @@ export function updateMasterClipRange(sequence: MasterSequenceDocument, clipId: 
   const end = Math.round(sourceEndFrame)
   if (!sourceRangeWithinShot(shot, start, end)) return null
   if (!sequence.clips.some((clip) => clip.id === clipId)) return null
-  return withNormalizedMasterMarks({ ...sequence, clips: sequence.clips.map((clip) => clip.id === clipId ? { ...clip, sourceStartFrame: start, sourceEndFrame: end } : clip) })
+  return { ...sequence, clips: sequence.clips.map((clip) => clip.id === clipId ? { ...clip, sourceStartFrame: start, sourceEndFrame: end } : clip) }
+}
+
+/** Updates source trim and, for a left trim, its absolute Master placement atomically. */
+export function trimMasterClipToRange(sequence: MasterSequenceDocument, clipId: string, shot: ShotDocument, sourceStartFrame: number, sourceEndFrame: number, startMasterFrame?: number): MasterSequenceDocument | null {
+  const updated = updateMasterClipRange(materializeMasterClipPlacements(sequence), clipId, shot, sourceStartFrame, sourceEndFrame)
+  if (!updated) return null
+  const clip = updated.clips.find((candidate) => candidate.id === clipId)
+  if (!clip) return null
+  const start = Math.max(0, Math.round(startMasterFrame ?? masterClipStartFrame(updated, clipId) ?? 0))
+  const end = start + masterClipDurationFrames(clip)
+  const overlaps = updated.clips.some((candidate) => {
+    if (candidate.id === clipId) return false
+    const candidateStart = masterClipStartFrame(updated, candidate.id) ?? 0
+    const candidateEnd = candidateStart + masterClipDurationFrames(candidate)
+    return start < candidateEnd && end > candidateStart
+  })
+  if (overlaps) return null
+  return { ...updated, clips: updated.clips.map((candidate) => candidate.id === clipId ? { ...candidate, startMasterFrame: start } : candidate) }
 }
 
 export function removeMasterClip(sequence: MasterSequenceDocument, clipId: string): MasterSequenceDocument {
-  return withNormalizedMasterMarks({ ...sequence, clips: orderedMasterClips(sequence).filter((clip) => clip.id !== clipId).map((clip, order) => ({ ...clip, order })) })
+  return { ...sequence, clips: orderedMasterClips(sequence).filter((clip) => clip.id !== clipId).map((clip, order) => ({ ...clip, order })) }
 }
 
 export function moveMasterClip(sequence: MasterSequenceDocument, clipId: string, direction: -1 | 1): MasterSequenceDocument {
@@ -263,7 +305,7 @@ export function moveMasterClip(sequence: MasterSequenceDocument, clipId: string,
   if (index < 0 || target < 0 || target >= clips.length) return sequence
   const [moved] = clips.splice(index, 1)
   clips.splice(target, 0, moved)
-  return withNormalizedMasterMarks({ ...sequence, clips: clips.map((clip, order) => ({ ...clip, order })) })
+  return { ...sequence, clips: clips.map((clip, order) => ({ ...clip, order })) }
 }
 
 export function duplicateMasterClip(sequence: MasterSequenceDocument, clipId: string, existingIds: ReadonlySet<string> = new Set(sequence.clips.map((clip) => clip.id))): MasterSequenceDocument | null {
@@ -271,17 +313,44 @@ export function duplicateMasterClip(sequence: MasterSequenceDocument, clipId: st
   const index = clips.findIndex((clip) => clip.id === clipId)
   if (index < 0) return null
   const source = clips[index]
-  const copy: MasterClipDocument = { ...source, id: createMasterClipId(existingIds), order: index + 1 }
+  const copy: MasterClipDocument = { ...source, id: createMasterClipId(existingIds), startMasterFrame: masterSequenceDurationFrames(sequence), order: index + 1 }
   clips.splice(index + 1, 0, copy)
-  return withNormalizedMasterMarks({ ...sequence, clips: clips.map((clip, order) => ({ ...clip, order })) })
+  return { ...sequence, clips: clips.map((clip, order) => ({ ...clip, order })) }
+}
+
+/** Moves one Shot without changing any other placement. Overlaps are rejected. */
+export function moveMasterClipToFrame(sequence: MasterSequenceDocument, clipId: string, startMasterFrame: number): MasterSequenceDocument | null {
+  const start = Math.max(0, Math.round(Number.isFinite(startMasterFrame) ? startMasterFrame : 0))
+  const materialized = materializeMasterClipPlacements(sequence)
+  const clip = materialized.clips.find((candidate) => candidate.id === clipId)
+  if (!clip) return null
+  const duration = masterClipDurationFrames(clip)
+  const proposedEnd = start + duration
+  const starts = masterClipPlacementStarts(materialized)
+  const overlaps = materialized.clips.some((candidate) => {
+    if (candidate.id === clipId) return false
+    const candidateStart = starts.get(candidate.id) ?? 0
+    const candidateEnd = candidateStart + masterClipDurationFrames(candidate)
+    return start < candidateEnd && proposedEnd > candidateStart
+  })
+  if (overlaps) return null
+  return { ...materialized, clips: materialized.clips.map((candidate) => candidate.id === clipId ? { ...candidate, startMasterFrame: start } : candidate) }
+}
+
+/** Adds a Shot at an absolute Master frame without shifting existing clips. */
+export function insertMasterClipAtFrame(sequence: MasterSequenceDocument, shot: ShotDocument, startMasterFrame: number, existingIds: ReadonlySet<string> = new Set(sequence.clips.map((clip) => clip.id))): MasterSequenceDocument | null {
+  const clip = { ...createMasterClip(shot, existingIds), startMasterFrame: Math.max(0, Math.round(Number.isFinite(startMasterFrame) ? startMasterFrame : 0)), order: sequence.clips.length }
+  const start = clip.startMasterFrame ?? 0
+  const end = start + masterClipDurationFrames(clip)
+  const starts = masterClipPlacementStarts(sequence)
+  if (sequence.clips.some((candidate) => { const candidateStart = starts.get(candidate.id) ?? 0; return start < candidateStart + masterClipDurationFrames(candidate) && end > candidateStart })) return null
+  return { ...sequence, clips: [...sequence.clips, clip].map((candidate, order) => ({ ...candidate, order })) }
 }
 
 export function insertMasterClipAt(sequence: MasterSequenceDocument, shot: ShotDocument, index: number, existingIds: ReadonlySet<string> = new Set(sequence.clips.map((clip) => clip.id))): MasterSequenceDocument {
-  const clips = orderedMasterClips(sequence)
-  const clip = createMasterClip(shot, existingIds)
-  const safeIndex = Math.max(0, Math.min(clips.length, Math.round(index)))
-  clips.splice(safeIndex, 0, { ...clip, order: safeIndex })
-  return withNormalizedMasterMarks({ ...sequence, clips: clips.map((item, order) => ({ ...item, order })) })
+  const inserted = insertMasterClipAtFrame(sequence, shot, masterSequenceDurationFrames(sequence), existingIds)
+  if (inserted) return inserted
+  return sequence
 }
 
 export function reorderMasterClip(sequence: MasterSequenceDocument, clipId: string, targetIndex: number): MasterSequenceDocument | null {
@@ -291,7 +360,7 @@ export function reorderMasterClip(sequence: MasterSequenceDocument, clipId: stri
   const [moved] = clips.splice(sourceIndex, 1)
   const safeIndex = Math.max(0, Math.min(clips.length, Math.round(targetIndex)))
   clips.splice(safeIndex, 0, moved)
-  return withNormalizedMasterMarks({ ...sequence, clips: clips.map((clip, order) => ({ ...clip, order })) })
+  return { ...sequence, clips: clips.map((clip, order) => ({ ...clip, order })) }
 }
 
 export function createMusicClip(file: { name: string; type: string; size: number; lastModified?: number }, durationSeconds: number, existingId = 'master-music-1'): MasterMusicClipDocument {
@@ -317,7 +386,8 @@ export function musicClipDurationFrames(clip: MasterMusicClipDocument, rate: Rat
 export function masterSequenceVisualDurationFrames(sequence: MasterSequenceDocument, rate: RationalFrameRate): number {
   const shotDuration = masterSequenceDurationFrames(sequence)
   const musicEnd = sequence.musicClip ? Math.round(sequence.musicClip.startMasterFrame + musicClipDurationFrames(sequence.musicClip, rate)) : 0
-  return Math.max(shotDuration, musicEnd)
+  const graphicsEnd = (sequence.imageClips ?? []).reduce((end, clip) => Math.max(end, Math.round(clip.startMasterFrame) + Math.max(0, Math.round(clip.durationFrames))), 0)
+  return Math.max(shotDuration, musicEnd, graphicsEnd)
 }
 
 export function resolveMasterMusicTime(sequence: MasterSequenceDocument, masterFrame: number, rate: RationalFrameRate): { musicClipId: string; sourceSeconds: number } | null {
@@ -356,8 +426,19 @@ function normalizeMasterMarks(markInValue: unknown, markOutValue: unknown, video
   return { markInFrame, markOutFrame }
 }
 
-function withNormalizedMasterMarks(sequence: MasterSequenceDocument): MasterSequenceDocument {
-  return { ...sequence, ...normalizeMasterMarks(sequence.markInFrame, sequence.markOutFrame, masterSequenceDurationFrames(sequence)) }
+function masterClipStartFrameForClip(clip: MasterClipDocument): number {
+  return Math.max(0, Math.round(Number.isFinite(clip.startMasterFrame) ? clip.startMasterFrame! : 0))
+}
+
+function masterClipPlacementStarts(sequence: MasterSequenceDocument): Map<string, number> {
+  const starts = new Map<string, number>()
+  let cursor = 0
+  for (const clip of orderedMasterClips(sequence)) {
+    const start = clip.startMasterFrame === undefined ? cursor : masterClipStartFrameForClip(clip)
+    starts.set(clip.id, start)
+    cursor = Math.max(cursor, start + masterClipDurationFrames(clip))
+  }
+  return starts
 }
 
 function clampMasterFrame(value: number, minimum: number, maximum: number): number {

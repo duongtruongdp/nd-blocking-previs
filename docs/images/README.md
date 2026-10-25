@@ -1,16 +1,18 @@
 # Documentation images
 
-No application screenshots are currently tracked in this repository. The
-README intentionally does not fabricate a hero image or gallery. Add manually
-reviewed, production-safe captures here when available, such as:
+This folder contains authentic screenshots captured from the macOS desktop
+application using the read-only `TECCO.ndblock` reference project. The
+reference project itself is not part of the repository or release assets.
 
-- `blocking-view.png` — Stage with Actors, Props, and a Camera selected;
-- `camera-view.png` — Camera View with delivery frame and camera information;
-- `timeline.png` — shot range, playhead, and movement keyframes; and
-- `desktop-library.png` — the macOS Project Library.
-- `shot-list.png` — Shot List / Storyboard workspace with real shot data.
-- `export-workflow.png` — export controls and completion state.
+Current gallery:
 
-Keep captures at a consistent display width and redact private production
-material before committing a real capture. Do not add generated, simulated, or
-externally hosted screenshots.
+- `hero-workspace.png` — Stage blocking workspace with Camera Preview and
+  timeline.
+- `stage-blocking.png` — Actors, architecture, camera placement, and spatial
+  blocking in the Stage.
+- `camera-view.png` — Camera View with delivery framing and capture data.
+- `master-timeline.png` — populated Master Timeline with multiple Shots and a
+  Graphics track.
+
+Keep future captures authentic, production-safe, and free of private project
+data or local filesystem paths. Do not add generated or simulated UI images.

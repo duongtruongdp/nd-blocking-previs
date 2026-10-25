@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deleteShortcutForKey, destructiveShortcutTarget, editorShortcutForKey, timelineMarkShortcutForKey, timelinePlayPauseShortcut, timelineZoomShortcutForKey } from '../core/editorShortcuts'
+import { deleteShortcutForKey, destructiveShortcutTarget, editorShortcutForKey, groupShortcutForKey, timelineMarkShortcutForKey, timelinePlayPauseShortcut, timelineZoomShortcutForKey } from '../core/editorShortcuts'
 import { shortcutMatches } from '../core/shortcutRegistry'
 
 describe('timeline play/pause shortcut', () => {
@@ -45,6 +45,13 @@ describe('entity editing shortcuts', () => {
   it('maps Cmd/Ctrl+D to duplicate', () => {
     expect(editorShortcutForKey({ key: 'd', metaKey: true, ctrlKey: false, shiftKey: false })).toBe('duplicate')
     expect(editorShortcutForKey({ key: 'D', metaKey: false, ctrlKey: true, shiftKey: false })).toBe('duplicate')
+  })
+
+  it('maps Cmd/Ctrl+G and Cmd/Ctrl+Shift+G to group commands', () => {
+    expect(groupShortcutForKey({ key: 'g', metaKey: true, ctrlKey: false, shiftKey: false })).toBe('group')
+    expect(groupShortcutForKey({ key: 'G', metaKey: false, ctrlKey: true, shiftKey: false })).toBe('group')
+    expect(groupShortcutForKey({ key: 'g', metaKey: true, ctrlKey: false, shiftKey: true })).toBe('ungroup')
+    expect(groupShortcutForKey({ key: 'g', metaKey: false, ctrlKey: false, shiftKey: false })).toBeNull()
   })
 
   it('keeps Delete and Backspace out of focused fields', () => {

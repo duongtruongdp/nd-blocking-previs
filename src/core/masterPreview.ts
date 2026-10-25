@@ -30,8 +30,18 @@ function emptyPreview(masterFrame: number, project?: ProjectDocument): MasterPre
   return { masterFrame, clipId: null, shotId: null, sceneId: null, sceneScopeId: null, cameraId: null, sourceFrame: null, scene: null, evaluatedEntities: null, graphics, status: 'empty' }
 }
 
-export function resolveMasterPreviewContext(project: ProjectDocument, masterFrame: number): MasterPreviewContext {
-  const resolved = resolveMasterFrame(project.masterSequence, project.shots, masterFrame) ?? resolveMasterPreviewSample(project, masterFrame)
+export function resolveMasterPreviewContext(project: ProjectDocument, masterFrame: number, allowEndBoundarySample = true): MasterPreviewContext {
+  const requestedFrame = Math.round(Number.isFinite(masterFrame) ? masterFrame : 0)
+  const duration = masterSequenceDurationFrames(project.masterSequence)
+  const hasIndependentContent = Boolean(project.masterSequence.musicClip || project.masterSequence.imageClips?.length)
+  // Keep the timeline's exact end boundary visually useful without making an
+  // interior gap borrow a neighboring Shot. Export never requests this
+  // boundary because its range is half-open. Once the Master contains
+  // independent Music/Graphics content, the same boundary can be a real
+  // content tail and must remain a neutral gap instead of sampling the last
+  // Shot.
+  const resolved = resolveMasterFrame(project.masterSequence, project.shots, requestedFrame)
+    ?? (allowEndBoundarySample && !hasIndependentContent && requestedFrame === duration && duration > 0 ? resolveMasterFrame(project.masterSequence, project.shots, duration - 1) : null)
   if (!resolved) return emptyPreview(masterFrame, project)
   const shot = project.shots.find((candidate) => candidate.id === resolved.shotId)
   if (!shot) return fromResolution(project, masterFrame, resolved, null, 'missing-shot')
@@ -40,13 +50,6 @@ export function resolveMasterPreviewContext(project: ProjectDocument, masterFram
   if (!sceneEntry) return fromResolution(project, masterFrame, resolved, null, 'missing-scene')
   if (!cameraResolution.camera || !cameraResolution.cameraId) return fromResolution(project, masterFrame, resolved, sceneEntry.scene, 'missing-camera')
   return fromResolution(project, masterFrame, { ...resolved, cameraId: cameraResolution.cameraId }, sceneEntry.scene, 'resolved')
-}
-
-function resolveMasterPreviewSample(project: ProjectDocument, masterFrame: number): ResolvedMasterFrame | null {
-  const duration = masterSequenceDurationFrames(project.masterSequence)
-  if (duration <= 0) return null
-  const boundary = Math.max(0, Math.round(Number.isFinite(masterFrame) ? masterFrame : 0))
-  return resolveMasterFrame(project.masterSequence, project.shots, Math.min(duration - 1, boundary))
 }
 
 function fromResolution(project: ProjectDocument, masterFrame: number, resolved: ResolvedMasterFrame, scene: SceneDocument | null, status: MasterPreviewStatus): MasterPreviewContext {

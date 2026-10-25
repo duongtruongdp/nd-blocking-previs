@@ -65,6 +65,38 @@ export function stageProjectToClient(point: THREE.Vector3, camera: THREE.Camera,
   )
 }
 
+/**
+ * Box-selection inclusion rule: the projected world-space visual bounds of an
+ * entity must intersect the client-space marquee. This uses the live editor
+ * camera and canvas rectangle, so perspective, viewport offsets, resizing,
+ * zoom, and device-pixel-ratio rendering all remain in the camera projection.
+ */
+export function stageProjectedBoundsIntersectMarquee(object: THREE.Object3D, camera: THREE.Camera, canvasRect: StageCanvasRect, marquee: { left: number; top: number; width: number; height: number }): boolean {
+  const bounds = new THREE.Box3().setFromObject(object)
+  if (bounds.isEmpty()) return false
+  const corners = [
+    new THREE.Vector3(bounds.min.x, bounds.min.y, bounds.min.z),
+    new THREE.Vector3(bounds.min.x, bounds.min.y, bounds.max.z),
+    new THREE.Vector3(bounds.min.x, bounds.max.y, bounds.min.z),
+    new THREE.Vector3(bounds.min.x, bounds.max.y, bounds.max.z),
+    new THREE.Vector3(bounds.max.x, bounds.min.y, bounds.min.z),
+    new THREE.Vector3(bounds.max.x, bounds.min.y, bounds.max.z),
+    new THREE.Vector3(bounds.max.x, bounds.max.y, bounds.min.z),
+    new THREE.Vector3(bounds.max.x, bounds.max.y, bounds.max.z),
+  ]
+  const projected = corners.map((corner) => corner.project(camera))
+  if (!projected.some((point) => point.z >= -1 && point.z <= 1)) return false
+  const clientX = (point: THREE.Vector3) => canvasRect.left + ((point.x + 1) * 0.5 * canvasRect.width)
+  const clientY = (point: THREE.Vector3) => canvasRect.top + ((1 - point.y) * 0.5 * canvasRect.height)
+  const left = Math.min(...projected.map(clientX))
+  const right = Math.max(...projected.map(clientX))
+  const top = Math.min(...projected.map(clientY))
+  const bottom = Math.max(...projected.map(clientY))
+  const marqueeRight = marquee.left + marquee.width
+  const marqueeBottom = marquee.top + marquee.height
+  return left <= marqueeRight && right >= marquee.left && top <= marqueeBottom && bottom >= marquee.top
+}
+
 export function stageProjectWorldAxisToScreen(camera: THREE.Camera, origin: THREE.Vector3, axis: THREE.Vector3, rect: StageCanvasRect, minimumPixels = 4): THREE.Vector2 | null {
   const originClient = stageProjectToClient(origin, camera, rect)
   const axisClient = stageProjectToClient(origin.clone().add(axis), camera, rect)
@@ -108,6 +140,43 @@ export function stageNdcFromEvent(event: StagePointerPoint, rect: StageCanvasRec
 
 export function stageMovedBeyondThreshold(startX: number, startY: number, clientX: number, clientY: number): boolean {
   return Math.hypot(clientX - startX, clientY - startY) >= 3
+}
+
+export type StageMarqueeSelectionMode = 'replace' | 'add' | 'subtract'
+
+export type StageMarqueeRect = {
+  left: number
+  top: number
+  width: number
+  height: number
+  additive: boolean
+  subtractive: boolean
+}
+
+/** Normalize a marquee in client coordinates without depending on drag direction. */
+export function stageMarqueeRect(startX: number, startY: number, clientX: number, clientY: number, mode: StageMarqueeSelectionMode = 'replace'): StageMarqueeRect {
+  return {
+    left: Math.min(startX, clientX),
+    top: Math.min(startY, clientY),
+    width: Math.abs(clientX - startX),
+    height: Math.abs(clientY - startY),
+    additive: mode === 'add',
+    subtractive: mode === 'subtract',
+  }
+}
+
+/** Apply a completed marquee to the canonical selection in one operation. */
+export function stageMarqueeSelection(previousIds: readonly string[], hits: readonly string[], previousPrimaryId: string | null, mode: StageMarqueeSelectionMode): { ids: string[]; primaryId: string | null } {
+  const uniqueHits = hits.filter((id, index, all) => all.indexOf(id) === index)
+  const ids = mode === 'subtract'
+    ? previousIds.filter((id) => !uniqueHits.includes(id))
+    : mode === 'add'
+      ? [...previousIds, ...uniqueHits].filter((id, index, all) => all.indexOf(id) === index)
+      : uniqueHits
+  const primaryId = mode === 'subtract'
+    ? (previousPrimaryId && ids.includes(previousPrimaryId) ? previousPrimaryId : ids[ids.length - 1] ?? null)
+    : uniqueHits[uniqueHits.length - 1] ?? (mode === 'add' ? previousPrimaryId : null)
+  return { ids, primaryId }
 }
 
 export function stageViewCubeDragStarted(startX: number, startY: number, clientX: number, clientY: number): boolean {

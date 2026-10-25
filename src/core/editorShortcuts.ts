@@ -1,4 +1,5 @@
 export type EditorShortcut = 'copy' | 'paste' | 'undo' | 'redo' | 'duplicate'
+export type GroupShortcut = 'group' | 'ungroup'
 
 export type EditorShortcutInput = {
   key: string
@@ -16,6 +17,12 @@ export function editorShortcutForKey(input: EditorShortcutInput): EditorShortcut
   if (key === 'z') return input.shiftKey ? 'redo' : 'undo'
   if (key === 'y' && input.ctrlKey && !input.metaKey && !input.shiftKey) return 'redo'
   return null
+}
+
+export function groupShortcutForKey(input: EditorShortcutInput): GroupShortcut | null {
+  if (!input.metaKey && !input.ctrlKey) return null
+  if (input.key.toLowerCase() !== 'g') return null
+  return input.shiftKey ? 'ungroup' : 'group'
 }
 
 export function deleteShortcutForKey(key: string, isTextEditing: boolean): boolean {

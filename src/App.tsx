@@ -25,7 +25,8 @@ import { createShotDocument, createShotId, duplicateShotName, nextShotName, reso
 import { normalizeShotListSettings, type ShotListSettings } from './core/shotListSettings'
 import { reorderShotDocuments } from './core/shotListModel'
 import { applyCollaborativePlanning, canEditCollaborativeShotCamera } from './core/collaborativePlanning'
-import { clampMasterTimelineBoundary, createMusicClip, duplicateMasterClip, effectiveMasterRenderRange, insertMasterClipAt, masterClipDurationFrames, masterPlaybackFrameAt, masterSequenceFrameRate, masterSequenceVisualDurationFrames, orderedMasterClips, removeMasterClip, reorderMasterClip, resolveMasterFrame, resolveMasterMusicTime, sameFrameRate, setMasterSequenceMark, updateMasterClipRange, type MasterGraphicsTrackDocument, type MasterImageClipDocument } from './core/masterSequence'
+import { clampMasterTimelineBoundary, createMusicClip, effectiveMasterRenderRange, insertMasterClipAtFrame, masterClipDurationFrames, masterClipStartFrame, masterPlaybackFrameAt, masterSequenceFrameRate, masterSequenceVisualDurationFrames, orderedMasterClips, removeMasterClip, resolveMasterFrame, resolveMasterMusicTime, sameFrameRate, setMasterSequenceMark, trimMasterClipToRange, type MasterGraphicsTrackDocument, type MasterImageClipDocument } from './core/masterSequence'
+import { duplicateMasterTimelineSelection, masterTimelineItemStart, moveMasterTimelineSelection, removeMasterTimelineSelection, type MasterTimelineItem } from './core/masterTimelineEditing'
 import { DEFAULT_IMAGE_CLIP_DURATION_FRAMES, clampFadeFrames } from './core/masterGraphics'
 import { createTimelineWorkspaceSessionState, getSceneTimelineWorkspace, pruneTimelineWorkspaceScenes, resetTimelineWorkspaceState, updateMasterTimelineWorkspace, updateSceneTimelineWorkspace, type TimelineWorkspaceSessionState } from './core/timelineWorkspaceSession'
 import { createWorkspaceSidebarState, updateWorkspaceSidebarSection, workspaceSidebarSessionKey, type WorkspaceSidebarSection, type WorkspaceSidebarSectionState } from './core/workspaceSidebarSession'
@@ -44,7 +45,7 @@ import { cameraPositionForActorFraming, type FramingPreset, type TargetAimPoint 
 import { createEditorClipboard, pasteEditorClipboard, type EditorClipboard } from './core/editorClipboard'
 import { type EditorHistorySnapshot } from './core/editorHistory'
 import { ProjectHistory } from './core/projectHistory'
-import { destructiveShortcutTarget, editorShortcutForKey, timelineZoomShortcutForKey, type TimelineZoomShortcutHandler } from './core/editorShortcuts'
+import { destructiveShortcutTarget, editorShortcutForKey, groupShortcutForKey, timelineZoomShortcutForKey, type TimelineZoomShortcutHandler } from './core/editorShortcuts'
 import { clampTimelineHeight, TIMELINE_HEIGHT_DEFAULT, timelineHeightBounds } from './core/workspaceLayout'
 import type { StageSelection, StageTool, StageTransform, StageTransformBatch } from './stage-engine'
 import { evaluateTimeline } from './timeline/timelineEvaluator'
@@ -91,6 +92,7 @@ import { LiveReviewPanel } from './components/LiveReviewPanel'
 import { LiveReviewTransport, type LiveReviewTransportStatus } from './liveReview/liveReviewTransport'
 import { buildLiveReviewInviteUrl, liveReviewRelayConfig, parseLiveReviewInviteSession } from './liveReview/liveReviewConfig'
 import { createLiveReviewSnapshot } from './liveReview/projectSnapshot'
+import { MASTER_TIMELINE_DIAGNOSTICS_TOGGLE_EVENT, SELECTION_DIAGNOSTICS_TOGGLE_EVENT } from './runtime/buildIdentity'
 import { defaultLiveReviewState, randomLiveReviewId, type LiveReviewChatMessage, type LiveReviewCollaborativeEntityType, type LiveReviewEditResult, type LiveReviewLease, type LiveReviewParticipant, type LiveReviewPlanningCommit, type LiveReviewPlanningDraft, type LiveReviewPointer, type LiveReviewRole, type LiveReviewServerMessage, type LiveReviewShotField, type LiveReviewState, type LiveReviewTimelineCommit, type LiveReviewTimelineProperty, type LiveReviewTransform, type LiveReviewTransformCommit } from './liveReview/protocol'
 
 function createDefaultV2Scene(id = 'scene-01', name = 'Scene 01', includeDefaultProps = true, cameraModelId = CAMERA_DATABASE[0]?.id ?? ''): SceneDocument {
@@ -249,6 +251,7 @@ function V2EditorApp() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [timelineMode, setTimelineMode] = useState<'scene' | 'master'>('scene')
   const [masterSelection, setMasterSelection] = useState<MasterInspectorSelection>(null)
+  const [masterTimelineSelection, setMasterTimelineSelection] = useState<MasterTimelineItem[]>([])
   const activeMasterClipId = masterSelection?.kind === 'clip' ? masterSelection.id : null
   const activeMasterImageClipId = masterSelection?.kind === 'image' ? masterSelection.id : null
   const [masterFrame, setMasterFrame] = useState(0)
@@ -428,6 +431,7 @@ function V2EditorApp() {
   const clipboardRef = useRef<EditorClipboard | null>(null)
   const keyframeClipboardRef = useRef<TimelineKeyframeClipboard | null>(null)
   const projectHistoryRef = useRef<ProjectHistory>(new ProjectHistory(100))
+  const groupCommandsRef = useRef<{ create: () => void; ungroup: () => void }>({ create: () => {}, ungroup: () => {} })
   const transformTransactionRef = useRef<{ before: SceneDocument; beforeSelection: string | null; beforeSelectionIds: string[] } | null>(null)
   const cameraPathTransactionRef = useRef<{ before: SceneDocument; cameraId: string; keyframe: CameraPathKeyframe } | null>(null)
   const playbackRef = useRef<PlaybackClock | null>(null)
@@ -469,6 +473,8 @@ function V2EditorApp() {
   const saveProjectAsRef = useRef<() => void>(() => {})
   const isPlayingRef = useRef(isPlaying)
   const masterFrameRef = useRef(masterFrame)
+  const masterTimelineSelectionRef = useRef<MasterTimelineItem[]>(masterTimelineSelection)
+  const masterTimelineFocusedRef = useRef(false)
   const sceneTimelineZoomShortcutRef = useRef<TimelineZoomShortcutHandler | null>(null)
   const masterTimelineZoomShortcutRef = useRef<TimelineZoomShortcutHandler | null>(null)
   const timelineModeRef = useRef(timelineMode)
@@ -541,8 +547,9 @@ function V2EditorApp() {
     workspaceModeRef.current = workspaceMode
     timelineModeRef.current = timelineMode
     masterFrameRef.current = masterFrame
+    masterTimelineSelectionRef.current = masterTimelineSelection
     recentProjectsRef.current = recentProjects
-  }, [projectDocument, sceneDocument, selectedEntityId, selectedEntityIds, selectedTimelineKeyframes, shortcutBindings, isDirty, workspaceMode, timelineMode, recentProjects, masterFrame])
+  }, [projectDocument, sceneDocument, selectedEntityId, selectedEntityIds, selectedTimelineKeyframes, shortcutBindings, isDirty, workspaceMode, timelineMode, recentProjects, masterFrame, masterTimelineSelection])
 
   // Keep the visible dirty indicator tied to the last confirmed save, rather
   // than to the timing of a button click. Fingerprint equality also allows an
@@ -1532,9 +1539,9 @@ function V2EditorApp() {
 
   const playMasterPlayback = () => {
     const current = projectDocumentRef.current
-    const range = effectiveMasterRenderRange(current.masterSequence)
-    if (range.endFrame <= range.startFrame) return
     const rate = masterSequenceFrameRate(current.masterSequence, current.shots, current.scenes, sceneDocumentRef.current.timeline.frameRate).rate
+    const range = effectiveMasterRenderRange(current.masterSequence, masterSequenceVisualDurationFrames(current.masterSequence, rate))
+    if (range.endFrame <= range.startFrame) return
     const currentFrame = playbackStartFrame(masterFrame, range.startFrame, range.endFrame)
     masterPlaybackStartRef.current = performance.now() - currentFrame * rate.denominator / rate.numerator * 1000
     setMasterFrame(currentFrame)
@@ -1562,8 +1569,8 @@ function V2EditorApp() {
     }
     const tick = (now: number) => {
       const current = projectDocumentRef.current
-      const range = effectiveMasterRenderRange(current.masterSequence)
       const rate = masterSequenceFrameRate(current.masterSequence, current.shots, current.scenes, sceneDocumentRef.current.timeline.frameRate).rate
+      const range = effectiveMasterRenderRange(current.masterSequence, masterSequenceVisualDurationFrames(current.masterSequence, rate))
       const start = masterPlaybackStartRef.current ?? now
       const rawFrame = Math.floor((now - start) / 1000 * rate.numerator / rate.denominator)
       if (range.endFrame <= range.startFrame) {
@@ -1814,6 +1821,7 @@ function V2EditorApp() {
     setShotReview(null)
     setTimelineMode('scene')
     setMasterSelection(null)
+    setMasterTimelineSelection([])
     setMasterFrame(0)
     setIsMasterLooping(false)
     setMasterMusicPeaks(null)
@@ -2521,7 +2529,7 @@ function V2EditorApp() {
     setIsDirty(true)
   }
 
-  const addShotToMaster = (shotId: string, index?: number) => {
+  const addShotToMaster = (shotId: string, preferredStartFrame?: number) => {
     if (isMasterPlaying) stopMasterPlayback(false)
     const current = projectDocumentRef.current
     const shot = current.shots.find((item) => item.id === shotId)
@@ -2536,25 +2544,86 @@ function V2EditorApp() {
       setSceneFileError('Master Sequence requires all Shots to use the same FPS.')
       return
     }
-    const nextSequence = insertMasterClipAt(current.masterSequence, shot, index ?? current.masterSequence.clips.length)
+    const duration = Math.max(1, shot.endFrame - shot.startFrame)
+    const starts = orderedMasterClips(current.masterSequence).map((clip) => ({ start: masterClipStartFrame(current.masterSequence, clip.id) ?? 0, end: (masterClipStartFrame(current.masterSequence, clip.id) ?? 0) + masterClipDurationFrames(clip) }))
+    const requestedStart = preferredStartFrame === undefined ? masterFrameRef.current : Math.round(preferredStartFrame)
+    const overlaps = (start: number) => starts.some((interval) => start < interval.end && start + duration > interval.start)
+    const start = Math.max(0, requestedStart) >= 0 && !overlaps(Math.max(0, requestedStart)) ? Math.max(0, requestedStart) : Math.max(0, ...starts.map((interval) => interval.end), 0)
+    const nextSequence = insertMasterClipAtFrame(current.masterSequence, shot, start)
+    if (!nextSequence) {
+      setSceneFileError('This Shot cannot be placed here because it would overlap another Master Shot.')
+      return
+    }
     const newClip = nextSequence.clips.find((clip) => !current.masterSequence.clips.some((existing) => existing.id === clip.id))
     const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: nextSequence }
     projectHistoryRef.current.record({ label: 'Add Master Clip', before: current, after: next })
     replaceProjectDocument(next)
-    if (newClip) setMasterSelection({ kind: 'clip', id: newClip.id })
+    if (newClip) { setMasterSelection({ kind: 'clip', id: newClip.id }); setMasterTimelineSelection([{ kind: 'clip', id: newClip.id }]) }
     switchTimelineMode('master')
     setSceneFileError(null)
     setIsDirty(true)
   }
 
-  const selectMasterClip = (clipId: string, frame: number) => {
-    setMasterSelection({ kind: 'clip', id: clipId })
+  const selectMasterClip = (clipId: string, frame: number, extend = false) => {
+    const item: MasterTimelineItem = { kind: 'clip', id: clipId }
+    const current = masterTimelineSelectionRef.current
+    const next = extend
+      ? current.some((candidate) => candidate.kind === item.kind && candidate.id === item.id) ? current.filter((candidate) => !(candidate.kind === item.kind && candidate.id === item.id)) : [...current, item]
+      : [item]
+    masterTimelineSelectionRef.current = next
+    setMasterTimelineSelection(next)
+    const inspector = next.at(-1) ?? null
+    setMasterSelection(inspector ? { kind: inspector.kind, id: inspector.id } : null)
     setMasterFrame(frame)
+  }
+
+  const selectMasterImageTimeline = (clipId: string, extend = false) => {
+    const item: MasterTimelineItem = { kind: 'image', id: clipId }
+    const clip = projectDocumentRef.current.masterSequence.imageClips?.find((candidate) => candidate.id === clipId)
+    if (!clip) return
+    const current = masterTimelineSelectionRef.current
+    const next = extend
+      ? current.some((candidate) => candidate.kind === item.kind && candidate.id === item.id) ? current.filter((candidate) => !(candidate.kind === item.kind && candidate.id === item.id)) : [...current, item]
+      : [item]
+    masterTimelineSelectionRef.current = next
+    setMasterTimelineSelection(next)
+    const inspector = next.at(-1) ?? null
+    setMasterSelection(inspector ? { kind: inspector.kind, id: inspector.id } : null)
+    setMasterFrame(clip.startMasterFrame)
+  }
+
+  const clearMasterTimelineSelection = () => {
+    masterTimelineSelectionRef.current = []
+    setMasterTimelineSelection([])
+    setMasterSelection(null)
+  }
+
+  const moveMasterTimelineSelectionAction = (anchor: MasterTimelineItem, startMasterFrame: number) => {
+    if (isMasterPlaying) stopMasterPlayback(false)
+    const current = projectDocumentRef.current
+    const selection = masterTimelineSelectionRef.current.some((item) => item.kind === anchor.kind && item.id === anchor.id) ? masterTimelineSelectionRef.current : [anchor]
+    const sequence = moveMasterTimelineSelection(current.masterSequence, selection, anchor, startMasterFrame)
+    if (!sequence) {
+      setSceneFileError('Master Shots cannot overlap. Move the selection into an empty interval.')
+      return
+    }
+    const beforeStarts = selection.map((item) => masterTimelineItemStart(current.masterSequence, item))
+    const afterStarts = selection.map((item) => masterTimelineItemStart(sequence, item))
+    if (beforeStarts.every((value, index) => value === afterStarts[index])) return
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: sequence }
+    projectHistoryRef.current.record({ label: selection.length > 1 ? 'Move Master Selection' : 'Move Master Clip', before: current, after: next })
+    replaceProjectDocument(next)
+    setSceneFileError(null)
+    setIsDirty(true)
+  }
+
+  const moveMasterClipAction = (clipId: string, startMasterFrame: number) => {
+    moveMasterTimelineSelectionAction({ kind: 'clip', id: clipId }, startMasterFrame)
   }
 
   const selectMasterMusic = () => {
     const musicClip = projectDocumentRef.current.masterSequence.musicClip
-    if (musicClip) setMasterSelection({ kind: 'music', id: musicClip.id })
+    if (musicClip) { masterTimelineSelectionRef.current = []; setMasterTimelineSelection([]); setMasterSelection({ kind: 'music', id: musicClip.id }) }
   }
 
   const setMasterPlayhead = (frame: number) => {
@@ -2586,7 +2655,8 @@ function V2EditorApp() {
 
   const changeMasterMark = (kind: 'in' | 'out') => {
     const current = projectDocumentRef.current
-    const masterSequence = setMasterSequenceMark(current.masterSequence, kind, masterFrameRef.current)
+    const rate = masterSequenceFrameRate(current.masterSequence, current.shots, current.scenes, sceneDocumentRef.current.timeline.frameRate).rate
+    const masterSequence = setMasterSequenceMark(current.masterSequence, kind, masterFrameRef.current, masterSequenceVisualDurationFrames(current.masterSequence, rate))
     if (masterSequence.markInFrame === current.masterSequence.markInFrame && masterSequence.markOutFrame === current.masterSequence.markOutFrame) return
     const next = { ...current, updatedAt: new Date().toISOString(), masterSequence }
     projectHistoryRef.current.record({ label: 'Change Master Mark', before: current, after: next })
@@ -2595,55 +2665,42 @@ function V2EditorApp() {
   }
 
   const duplicateMasterClipAction = (clipId: string) => {
-    if (isMasterPlaying) stopMasterPlayback(false)
-    const current = projectDocumentRef.current
-    const sequence = duplicateMasterClip(current.masterSequence, clipId)
-    if (!sequence) return
-    const newClip = sequence.clips.find((clip) => !current.masterSequence.clips.some((existing) => existing.id === clip.id))
-    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: sequence }
-    projectHistoryRef.current.record({ label: 'Duplicate Master Clip', before: current, after: next })
-    replaceProjectDocument(next)
-    if (newClip) setMasterSelection({ kind: 'clip', id: newClip.id })
-    setIsDirty(true)
+    setMasterTimelineSelection([{ kind: 'clip', id: clipId }])
+    masterTimelineSelectionRef.current = [{ kind: 'clip', id: clipId }]
+    duplicateMasterTimelineSelectionAction()
   }
 
   const removeMasterClipAction = (clipId: string) => {
     if (isMasterPlaying) stopMasterPlayback(false)
     const current = projectDocumentRef.current
     if (!current.masterSequence.clips.some((clip) => clip.id === clipId)) return
-    const masterSequence = removeMasterClip(current.masterSequence, clipId)
+    const masterSequence = removeMasterTimelineSelection(current.masterSequence, [{ kind: 'clip', id: clipId }])
     const next = { ...current, updatedAt: new Date().toISOString(), masterSequence }
     projectHistoryRef.current.record({ label: 'Remove Master Clip', before: current, after: next })
     replaceProjectDocument(next)
     const clampedFrame = clampMasterFrame(masterSequence, masterFrame)
     setMasterFrame(clampedFrame)
     syncMasterAudio(clampedFrame, false)
+    setMasterTimelineSelection((items) => items.filter((item) => !(item.kind === 'clip' && item.id === clipId)))
     if (masterSelection?.kind === 'clip' && masterSelection.id === clipId) setMasterSelection(null)
     setIsDirty(true)
   }
 
-  const reorderMasterClipAction = (clipId: string, index: number) => {
-    const current = projectDocumentRef.current
-    const next = reorderMasterClip(current.masterSequence, clipId, index)
-    if (!next) return
-    const previousOrder = current.masterSequence.clips.slice().sort((left, right) => left.order - right.order).map((clip) => clip.id)
-    const nextOrder = next.clips.slice().sort((left, right) => left.order - right.order).map((clip) => clip.id)
-    if (previousOrder.every((id, order) => id === nextOrder[order])) return
-    if (isMasterPlaying) stopMasterPlayback(false)
-    projectHistoryRef.current.record({ label: 'Reorder Master Clip', before: current, after: { ...current, updatedAt: new Date().toISOString(), masterSequence: next } })
-    replaceProjectDocument({ ...current, updatedAt: new Date().toISOString(), masterSequence: next })
-    setIsDirty(true)
-  }
-
-  const trimMasterClip = (clipId: string, sourceStartFrame: number, sourceEndFrame: number) => {
+  const trimMasterClip = (clipId: string, sourceStartFrame: number, sourceEndFrame: number, timelineStartFrame?: number) => {
     if (isMasterPlaying) stopMasterPlayback(false)
     const current = projectDocumentRef.current
     const clip = current.masterSequence.clips.find((item) => item.id === clipId)
     const shot = clip ? current.shots.find((item) => item.id === clip.shotId) : null
     if (!clip || !shot) return
-    const sequence = updateMasterClipRange(current.masterSequence, clipId, shot, sourceStartFrame, sourceEndFrame)
+    const sequence = trimMasterClipToRange(current.masterSequence, clipId, shot, sourceStartFrame, sourceEndFrame, timelineStartFrame)
     if (!sequence) {
       setSceneFileError('Master Clip trim must remain inside the source Shot range.')
+      return
+    }
+    const beforeClip = current.masterSequence.clips.find((item) => item.id === clipId)
+    const afterClip = sequence.clips.find((item) => item.id === clipId)
+    if (beforeClip && afterClip && beforeClip.sourceStartFrame === afterClip.sourceStartFrame && beforeClip.sourceEndFrame === afterClip.sourceEndFrame && (beforeClip.startMasterFrame ?? 0) === (afterClip.startMasterFrame ?? 0)) {
+      setSceneFileError(null)
       return
     }
     const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: sequence }
@@ -2654,6 +2711,50 @@ function V2EditorApp() {
     syncMasterAudio(clampedFrame, false)
     setSceneFileError(null)
     setIsDirty(true)
+  }
+
+  const duplicateMasterTimelineSelectionAction = () => {
+    if (isMasterPlaying) stopMasterPlayback(false)
+    const current = projectDocumentRef.current
+    const selection = masterTimelineSelectionRef.current
+    const result = duplicateMasterTimelineSelection(current.masterSequence, selection)
+    if (!result) return false
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: result.sequence }
+    projectHistoryRef.current.record({ label: result.selection.length > 1 ? 'Duplicate Master Selection' : 'Duplicate Master Clip', before: current, after: next })
+    replaceProjectDocument(next)
+    masterTimelineSelectionRef.current = result.selection
+    setMasterTimelineSelection(result.selection)
+    const last = result.selection.at(-1)
+    setMasterSelection(last ? { kind: last.kind, id: last.id } : null)
+    setIsDirty(true)
+    return true
+  }
+
+  const removeMasterTimelineSelectionAction = () => {
+    if (isMasterPlaying) stopMasterPlayback(false)
+    const current = projectDocumentRef.current
+    const selection = masterTimelineSelectionRef.current
+    if (selection.length === 0) return false
+    const removedImageAssetIds = new Set((current.masterSequence.imageClips ?? []).filter((clip) => selection.some((item) => item.kind === 'image' && item.id === clip.id)).map((clip) => clip.assetId))
+    const remainingImageClips = removeMasterTimelineSelection(current.masterSequence, selection).imageClips ?? []
+    const stillUsedAssetIds = new Set(remainingImageClips.map((clip) => clip.assetId))
+    const deletedAssetIds = [...removedImageAssetIds].filter((assetId) => !stillUsedAssetIds.has(assetId))
+    const removedSequence = removeMasterTimelineSelection(current.masterSequence, selection)
+    const masterSequence = deletedAssetIds.length > 0 ? { ...removedSequence, imageAssets: (removedSequence.imageAssets ?? []).filter((asset) => !deletedAssetIds.includes(asset.id)) } : removedSequence
+    if (masterSequence.clips.length === current.masterSequence.clips.length && masterSequence.imageClips?.length === current.masterSequence.imageClips?.length) return false
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence }
+    projectHistoryRef.current.record({ label: selection.length > 1 ? 'Delete Master Selection' : 'Delete Master Clip', before: current, after: next })
+    replaceProjectDocument(next)
+    masterTimelineSelectionRef.current = []
+    setMasterTimelineSelection([])
+    setMasterSelection(null)
+    const clampedFrame = clampMasterFrame(masterSequence, masterFrame)
+    setMasterFrame(clampedFrame)
+    syncMasterAudio(clampedFrame, false)
+    deletedAssetIds.forEach((assetId) => { const url = masterImageUrls[assetId]; if (url) URL.revokeObjectURL(url) })
+    if (deletedAssetIds.length > 0) setMasterImageUrls((urls) => { const nextUrls = { ...urls }; deletedAssetIds.forEach((assetId) => delete nextUrls[assetId]); return nextUrls })
+    setIsDirty(true)
+    return true
   }
 
   const openMasterClip = (clipId: string) => {
@@ -2804,17 +2905,13 @@ function V2EditorApp() {
   }
 
   const selectMasterImage = (clipId: string) => {
-    const clip = (projectDocumentRef.current.masterSequence.imageClips ?? []).find((candidate) => candidate.id === clipId)
-    if (!clip) return
-    setMasterSelection({ kind: 'image', id: clipId })
-    setMasterFrame(clip.startMasterFrame)
+    selectMasterImageTimeline(clipId)
   }
 
   const snapMasterImageFrame = (frame: number, clipId: string, threshold = 3) => {
     const current = projectDocumentRef.current
-    const boundaries = [masterFrame, 0]
-    let cursor = 0
-    orderedMasterClips(current.masterSequence).forEach((clip) => { boundaries.push(cursor, cursor + masterClipDurationFrames(clip)); cursor += masterClipDurationFrames(clip) })
+    const boundaries = [masterFrame, 0, current.masterSequence.markInFrame ?? 0, current.masterSequence.markOutFrame ?? 0]
+    orderedMasterClips(current.masterSequence).forEach((clip) => { const start = masterClipStartFrame(current.masterSequence, clip.id) ?? 0; boundaries.push(start, start + masterClipDurationFrames(clip)) })
     ;(current.masterSequence.imageClips ?? []).filter((clip) => clip.id !== clipId).forEach((clip) => boundaries.push(clip.startMasterFrame, clip.startMasterFrame + clip.durationFrames))
     const nearest = boundaries.reduce((best, candidate) => Math.abs(candidate - frame) < Math.abs(best - frame) ? candidate : best, frame)
     return Math.abs(nearest - frame) <= threshold ? Math.max(0, nearest) : Math.max(0, Math.round(frame))
@@ -3005,14 +3102,9 @@ function V2EditorApp() {
     setIsDirty(true)
   }
 
-  const moveMasterImage = (clipId: string, startMasterFrame: number) => {
-    const current = projectDocumentRef.current
-    const clip = (current.masterSequence.imageClips ?? []).find((candidate) => candidate.id === clipId)
-    if (!clip || clip.startMasterFrame === startMasterFrame) return
-    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, imageClips: (current.masterSequence.imageClips ?? []).map((item) => item.id === clipId ? { ...item, startMasterFrame: snapMasterImageFrame(startMasterFrame, clipId) } : item) } }
-    projectHistoryRef.current.record({ label: 'Move Graphics Image', before: current, after: next })
-    replaceProjectDocument(next)
-    setIsDirty(true)
+  const moveMasterImage = (clipId: string, startMasterFrame: number, snapEnabled = true) => {
+    const finalStart = snapEnabled ? snapMasterImageFrame(startMasterFrame, clipId) : Math.max(0, Math.round(startMasterFrame))
+    moveMasterTimelineSelectionAction({ kind: 'image', id: clipId }, finalStart)
   }
 
   const trimMasterImage = (clipId: string, startMasterFrame: number, durationFrames: number) => {
@@ -3040,31 +3132,19 @@ function V2EditorApp() {
   }
 
   const duplicateMasterImage = () => {
-    const current = projectDocumentRef.current
     const selectedId = masterSelection?.kind === 'image' ? masterSelection.id : null
-    const source = selectedId ? (current.masterSequence.imageClips ?? []).find((clip) => clip.id === selectedId) : null
-    if (!source) return
-    const copy = { ...source, id: `image-clip-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, startMasterFrame: source.startMasterFrame + source.durationFrames }
-    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, imageClips: [...(current.masterSequence.imageClips ?? []), copy] } }
-    projectHistoryRef.current.record({ label: 'Duplicate Graphics Image', before: current, after: next })
-    replaceProjectDocument(next)
-    setMasterSelection({ kind: 'image', id: copy.id })
-    setIsDirty(true)
+    if (!selectedId) return
+    setMasterTimelineSelection([{ kind: 'image', id: selectedId }])
+    masterTimelineSelectionRef.current = [{ kind: 'image', id: selectedId }]
+    duplicateMasterTimelineSelectionAction()
   }
 
   const removeMasterImage = () => {
-    const current = projectDocumentRef.current
     const selectedId = masterSelection?.kind === 'image' ? masterSelection.id : null
-    const source = selectedId ? (current.masterSequence.imageClips ?? []).find((clip) => clip.id === selectedId) : null
-    if (!source) return
-    const remaining = (current.masterSequence.imageClips ?? []).filter((clip) => clip.id !== source.id)
-    const assetStillUsed = remaining.some((clip) => clip.assetId === source.assetId)
-    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: { ...current.masterSequence, imageAssets: assetStillUsed ? current.masterSequence.imageAssets : (current.masterSequence.imageAssets ?? []).filter((asset) => asset.id !== source.assetId), imageClips: remaining } }
-    projectHistoryRef.current.record({ label: 'Remove Graphics Image', before: current, after: next })
-    replaceProjectDocument(next)
-    if (!assetStillUsed) { const url = masterImageUrls[source.assetId]; if (url) URL.revokeObjectURL(url); setMasterImageUrls((urls) => { const nextUrls = { ...urls }; delete nextUrls[source.assetId]; return nextUrls }) }
-    setMasterSelection(null)
-    setIsDirty(true)
+    if (!selectedId) return
+    setMasterTimelineSelection([{ kind: 'image', id: selectedId }])
+    masterTimelineSelectionRef.current = [{ kind: 'image', id: selectedId }]
+    removeMasterTimelineSelectionAction()
   }
 
   const moveShot = (shotId: string, direction: -1 | 1) => {
@@ -3495,6 +3575,12 @@ function V2EditorApp() {
     applyEditorSnapshot({ document: next, selectedEntityId: selectChildren ? (group.childIds[group.childIds.length - 1] ?? null) : null })
   }
 
+  groupCommandsRef.current = { create: createGroupFromSelection, ungroup: () => {
+    const selected = selectedEntityIdsRef.current
+    if (selected.length !== 1 || !sceneDocumentRef.current.groups.some((group) => group.id === selected[0])) return
+    dissolveGroup(selected[0], true)
+  } }
+
   const deleteEntity = (entityId: string) => {
     const before = sceneDocumentRef.current
     if (before.groups.some((group) => group.id === entityId)) {
@@ -3718,9 +3804,15 @@ function V2EditorApp() {
     if (canEditLiveTarget('Shot', shotId)) updateShotCamera(shotId, cameraId)
   }
 
-  const addShotToMasterForRole = (shotId: string, index?: number) => {
-    if (liveRoleRef.current === 'editor') void sendEditorPlanningCommit({ operation: 'master_clip_add', shotId, targetIndex: index ?? projectDocumentRef.current.masterSequence.clips.length })
-    else addShotToMaster(shotId, index)
+  const addShotToMasterForRole = (shotId: string, startMasterFrame?: number) => {
+    if (liveRoleRef.current === 'editor') void sendEditorPlanningCommit({ operation: 'master_clip_add', shotId, targetIndex: projectDocumentRef.current.masterSequence.clips.length })
+    else addShotToMaster(shotId, startMasterFrame)
+  }
+
+  const moveMasterClipForRole = (clipId: string, startMasterFrame: number) => {
+    if (liveRoleRef.current === 'editor') return
+    if (liveRoleRef.current === 'viewer') return
+    moveMasterClipAction(clipId, startMasterFrame)
   }
 
   const duplicateMasterClipForRole = (clipId: string) => {
@@ -3733,20 +3825,9 @@ function V2EditorApp() {
     else removeMasterClipAction(clipId)
   }
 
-  const reorderMasterClipForRole = (clipId: string, index: number) => {
-    const current = projectDocumentRef.current
-    const next = reorderMasterClip(current.masterSequence, clipId, index)
-    if (!next) return
-    const previousOrder = current.masterSequence.clips.slice().sort((left, right) => left.order - right.order).map((clip) => clip.id)
-    const nextOrder = next.clips.slice().sort((left, right) => left.order - right.order).map((clip) => clip.id)
-    if (previousOrder.every((id, order) => id === nextOrder[order])) return
-    if (liveRoleRef.current === 'editor') void sendEditorPlanningCommit({ operation: 'master_reorder', clipId, targetIndex: index })
-    else reorderMasterClipAction(clipId, index)
-  }
-
-  const trimMasterClipForRole = (clipId: string, start: number, end: number) => {
+  const trimMasterClipForRole = (clipId: string, start: number, end: number, timelineStartFrame?: number) => {
     if (liveRoleRef.current === 'editor') void sendEditorPlanningCommit({ operation: 'master_clip_update', clipId, sourceStartFrame: start, sourceEndFrame: end })
-    else trimMasterClip(clipId, start, end)
+    else trimMasterClip(clipId, start, end, timelineStartFrame)
   }
 
   const cameraBlockingTarget = (scene: SceneDocument, camera: CameraDocument) => {
@@ -4517,8 +4598,8 @@ function V2EditorApp() {
     const current = sceneDocumentRef.current
     const activeCamera = current.cameras.find((camera) => camera.id === current.activeCameraId) ?? null
     const source = timelineMode === 'master' ? 'master' as const : 'scene' as const
-    const masterRange = effectiveMasterRenderRange(projectDocumentRef.current.masterSequence)
     const masterRate = masterSequenceFrameRate(projectDocumentRef.current.masterSequence, projectDocumentRef.current.shots, projectDocumentRef.current.scenes, current.timeline.frameRate).rate
+    const masterRange = effectiveMasterRenderRange(projectDocumentRef.current.masterSequence, masterSequenceVisualDurationFrames(projectDocumentRef.current.masterSequence, masterRate))
     if (isPlaying) {
       playbackRef.current = null
       setIsPlaying(false)
@@ -4814,6 +4895,7 @@ function V2EditorApp() {
         saveProjectAsRef.current()
         return
       }
+      if (!isTextEditing && event.code === 'Space' && target?.closest('.v2-stage-viewport')) return
       if (!isTextEditing && shortcutMatches(event, bindings.playPause) && !event.repeat) {
         event.preventDefault()
         togglePlaybackRef.current()
@@ -4836,6 +4918,37 @@ function V2EditorApp() {
         return
       }
       if (isTextEditing) return
+      if (timelineModeRef.current === 'master' && masterTimelineFocusedRef.current && (liveRoleRef.current === null || liveRoleRef.current === 'host')) {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          clearMasterTimelineSelection()
+          return
+        }
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'd' && !event.repeat) {
+          event.preventDefault()
+          duplicateMasterTimelineSelectionAction()
+          return
+        }
+        if ((event.key === 'Delete' || event.key === 'Backspace') && !event.repeat) {
+          event.preventDefault()
+          removeMasterTimelineSelectionAction()
+          return
+        }
+      }
+      const groupShortcut = groupShortcutForKey(event)
+      if (groupShortcut && !event.repeat) {
+        const selected = selectedEntityIdsRef.current
+        const groups = sceneDocumentRef.current.groups
+        const validGroupSelection = groupShortcut === 'group'
+          ? selected.length >= 2 && selected.every((id) => !groups.some((group) => group.id === id || group.childIds.includes(id)))
+          : selected.length === 1 && groups.some((group) => group.id === selected[0])
+        if (validGroupSelection) {
+          event.preventDefault()
+          if (groupShortcut === 'group') groupCommandsRef.current.create()
+          else groupCommandsRef.current.ungroup()
+          return
+        }
+      }
       const shortcut = editorShortcutForKey(event)
       if (shortcut) {
         if (shortcut === 'undo' || shortcut === 'redo') {
@@ -4882,7 +4995,7 @@ function V2EditorApp() {
     <>{unsavedDialog}<main ref={appShellRef} className={`v2-app-shell${isResizingTimeline ? ' is-resizing-timeline' : ''}${shotListPresentation ? ' is-shot-presentation' : ''}`} style={appShellStyle}>
       {desktopDropState === 'valid' ? <div className="v2-desktop-drop-feedback" role="status">Drop .ndblock or .ndpack to open this Project</div> : null}
       {updateNotice ? <V2UpdateNotice release={updateNotice} downloadStatus={downloadStatus} downloadError={downloadError} onDownload={() => downloadUpdate(updateNotice)} onLater={dismissUpdate} /> : null}
-      <V2TopBar projectName={projectDocument.name} sceneName={view === 'shot-list' ? 'Shot List' : sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} saveState={projectSaveStatus} view={view} onViewChange={handleViewChange} onNewProject={newProject} onBackToLibrary={returnToLibrary} onSaveProject={saveProject} onSaveProjectAs={saveProjectAs} onLoadProject={loadProject} onOpenProjectSettings={() => setProjectSettingsOpen(true)} onOpenMediaManager={() => setMediaManagerOpen(true)} onExportProjectPackage={openProjectPackage} missingMediaCount={mediaHealth.filter((item) => item.status !== 'available').length} onProjectNameChange={renameProject} onExport={openExport} onOpenAbout={() => setShortcutSettingsOpen(true)} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'encoding' || exportStatus === 'finalizing' || exportStatus === 'saving'} readOnly={liveRole !== null && liveRole !== 'host'} liveStatus={liveStatus} liveRole={liveRole} liveViewerCount={liveViewerCount} onOpenLive={() => setLivePanelOpen(true)} />
+      <V2TopBar projectName={projectDocument.name} sceneName={view === 'shot-list' ? 'Shot List' : sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} saveState={projectSaveStatus} view={view} onViewChange={handleViewChange} onNewProject={newProject} onBackToLibrary={returnToLibrary} onSaveProject={saveProject} onSaveProjectAs={saveProjectAs} onLoadProject={loadProject} onOpenProjectSettings={() => setProjectSettingsOpen(true)} onOpenMediaManager={() => setMediaManagerOpen(true)} onExportProjectPackage={openProjectPackage} missingMediaCount={mediaHealth.filter((item) => item.status !== 'available').length} onProjectNameChange={renameProject} onExport={openExport} onOpenAbout={() => setShortcutSettingsOpen(true)} onToggleSelectionDiagnostics={() => window.dispatchEvent(new Event(SELECTION_DIAGNOSTICS_TOGGLE_EVENT))} selectionDiagnosticsAvailable={platformAdapter.kind === 'desktop' || import.meta.env.DEV} onToggleMasterTimelineDiagnostics={() => window.dispatchEvent(new Event(MASTER_TIMELINE_DIAGNOSTICS_TOGGLE_EVENT))} masterTimelineDiagnosticsAvailable={timelineMode === 'master' && (platformAdapter.kind === 'desktop' || import.meta.env.DEV)} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'encoding' || exportStatus === 'finalizing' || exportStatus === 'saving'} readOnly={liveRole !== null && liveRole !== 'host'} liveStatus={liveStatus} liveRole={liveRole} liveViewerCount={liveViewerCount} onOpenLive={() => setLivePanelOpen(true)} />
       {view === 'shot-list' ? <V2ShotListWorkspace project={projectDocument} selectedShotId={shotListSelectedId} presentation={shotListPresentation} controlledView={shotListViewMode} controlledSceneFilter={shotListSceneFilter} onViewChange={setShotListViewMode} onSceneFilterChange={setShotListSceneFilter} onSelectShot={setShotListSelectedId} onPresentationChange={setShotListPresentation} onOpenShot={activateShot} onPreviewShot={previewShot} onCaptureThumbnail={(shotId) => { if (liveRole !== 'editor') void captureShotThumbnail(shotId) }} onRenameShot={liveRole === 'viewer' ? () => {} : renameShotForRole} onNotesChange={liveRole === 'viewer' ? () => {} : updateShotNotesForRole} onShotMetadataChange={liveRole === 'viewer' ? () => {} : updateShotMetadataForRole} onShotCameraChange={liveRole === 'viewer' ? () => {} : updateShotCameraForRole} canEditShotCamera={canEditCollaborativeShotCamera(liveRole, Boolean(selectedShotLease))} shotCameraEditDisabledReason={liveRole === 'editor' ? selectedShotLeaseReason : null} onDuplicateShot={liveRole === null || liveRole === 'host' ? duplicateShot : () => {}} onDeleteShot={liveRole === null || liveRole === 'host' ? deleteShot : () => {}} onReorderShot={liveRole === 'viewer' ? () => {} : reorderShotForRole} onShotListSettingsChange={liveRole === null || liveRole === 'host' ? updateShotListSettings : () => {}} onExportShotList={(format, scope) => { void exportShotList(format, scope) }} onExportShotListPdf={exportShotListPdf} onRevealShotListPdf={platformAdapter.revealFile} shotListPdfRevealLabel={platformAdapter.revealFileLabel} desktop={platformAdapter.kind === 'desktop'} onOpenBlocking={() => setView('blocking')} /> : <>
       {timelineMode === 'master' ? <V2MasterShotBin shots={projectDocument.shots} scenes={projectDocument.scenes} activeShotId={activeMasterClipId ? projectDocument.masterSequence.clips.find((clip) => clip.id === activeMasterClipId)?.shotId ?? null : null} onSelectShot={(shotId) => { const clip = projectDocument.masterSequence.clips.find((candidate) => candidate.shotId === shotId); if (clip) selectMasterClip(clip.id, 0) }} onAddShot={liveRole === 'viewer' ? () => {} : addShotToMasterForRole} /> : <V2ScenePanel scenes={projectDocument.scenes} activeSceneId={projectDocument.activeSceneId} actors={sceneDocument.actors} props={sceneDocument.props} walls={sceneDocument.walls} openings={sceneDocument.openings} lights={sceneDocument.lights} cameras={sceneDocument.cameras} groups={sceneDocument.groups} activeCameraId={sceneDocument.activeCameraId} selectedEntityIds={selectedEntityIds} sectionState={workspaceSidebarState} onSectionToggle={setWorkspaceSidebarSection} onSelectScene={switchScene} onAddScene={liveRole === null || liveRole === 'host' ? addScene : () => {}} onRenameScene={liveRole === null || liveRole === 'host' ? renameScene : () => {}} onDuplicateScene={liveRole === null || liveRole === 'host' ? duplicateScene : () => {}} onDeleteScene={liveRole === null || liveRole === 'host' ? deleteScene : () => {}} onImportScene={liveRole === null || liveRole === 'host' ? importScene : () => {}} onExportScene={exportScene} onAddActor={liveRole === null || liveRole === 'host' ? addActor : () => {}} onAddProp={liveRole === null || liveRole === 'host' ? addProp : () => {}} onAddWall={liveRole === null || liveRole === 'host' ? addWall : () => {}} onAddOpening={liveRole === null || liveRole === 'host' ? addOpening : () => {}} onAddSun={liveRole === null || liveRole === 'host' ? addSun : () => {}} onAddCamera={liveRole === null || liveRole === 'host' ? addCamera : () => {}} onSetActiveCamera={liveRole === null || liveRole === 'host' ? setActiveCamera : () => {}} onSelectEntity={handleSelectionChange} onBeginEntityRename={liveRole === null || liveRole === 'host' ? beginEntityRename : () => {}} shots={projectDocument.shots} activeShotId={projectDocument.activeShotId} onCreateShot={liveRole === 'viewer' ? () => {} : createShotForRole} onSelectShot={activateShot} onRenameShot={liveRole === 'viewer' ? () => {} : renameShotForRole} onDuplicateShot={liveRole === null || liveRole === 'host' ? duplicateShot : () => {}} onDeleteShot={liveRole === null || liveRole === 'host' ? deleteShot : () => {}} onMoveShot={liveRole === 'viewer' ? () => {} : (shotId, direction) => { const shot = projectDocument.shots.find((candidate) => candidate.id === shotId); if (shot) reorderShotForRole(shotId, shot.order + direction) }} onCaptureShotThumbnail={(shotId) => { if (liveRole !== 'editor') void captureShotThumbnail(shotId) }} onShotNotesChange={liveRole === 'viewer' ? () => {} : updateShotNotesForRole} onShotRangeChange={liveRole === 'viewer' ? () => {} : updateShotRangeForRole} onPreviewShot={previewShot} onAddShotToMaster={liveRole === 'viewer' ? () => {} : addShotToMasterForRole} />}
       <V2Stage
@@ -4982,7 +5095,7 @@ function V2EditorApp() {
         }}
       ><span aria-hidden="true" /></div>
       <div className="v2-timeline-shell">
-      {timelineMode === 'scene' ? <V2Timeline key={`${projectDocument.id}:${projectDocument.createdAt}:${sceneDocument.metadata.id}`} timeline={sceneDocument.timeline} tracks={sceneDocument.timeline.tracks} entities={timelineEntities} selectedEntityId={selectedEntityId} isPlaying={isPlaying} isLooping={isLooping} onFrameChange={liveRole === 'viewer' && liveFollowHost ? () => {} : setCurrentFrame} onDurationChange={liveRole === null || liveRole === 'host' ? changeTimelineDuration : () => {}} onFrameRateChange={liveRole === null || liveRole === 'host' ? changeFrameRate : () => {}} onTogglePlayback={liveRole === null || liveRole === 'host' ? togglePlayback : () => {}} onStopPlayback={liveRole === null || liveRole === 'host' ? () => stopPlaybackSession() : () => {}} onMarkIn={liveRole === null || liveRole === 'host' ? () => changeMark('in') : () => {}} onMarkOut={liveRole === null || liveRole === 'host' ? () => changeMark('out') : () => {}} onToggleLoop={liveRole === null || liveRole === 'host' ? () => setIsLooping((current) => !current) : () => {}} onMoveKeyframes={moveKeyframesForRole} onKeyframeInterpolationChange={changeKeyframeEasingForRole} canEditKeyframe={liveRole === 'editor' ? canEditTimelineSelection : undefined} canEditTimelineStructure={liveRole === null || liveRole === 'host'} canEditTimelineInterpolation={liveRole === null || liveRole === 'host'} onKeyframeEditStart={beginTimelineKeyframeLease} onKeyframeEditActivity={renewActiveLiveLease} onKeyframeEditEnd={endTimelineKeyframeLease} selectedKeyframes={selectedTimelineKeyframes} onKeyframeSelect={selectTimelineKeyframe} onEntitySelect={handleSelectionChange} onScrubStart={() => setIsScrubbing(true)} onScrubEnd={() => setIsScrubbing(false)} onSwitchToScene={() => switchTimelineMode('scene')} onSwitchToMaster={() => switchTimelineMode('master')} initialWorkspaceState={getSceneTimelineWorkspace(timelineWorkspaceSessionRef.current, sceneDocument.metadata.id)} onWorkspaceStateChange={(patch) => updateTimelineWorkspace({ scene: { sceneId: sceneDocument.metadata.id, patch } })} onRegisterZoomShortcut={registerSceneTimelineZoomShortcut} /> : <V2MasterTimeline key={`${projectDocument.id}:${projectDocument.createdAt}`} projectId={projectDocument.id} sequence={projectDocument.masterSequence} shots={projectDocument.shots} scenes={projectDocument.scenes} activeClipId={activeMasterClipId} masterFrame={masterFrame} fallbackRate={sceneDocument.timeline.frameRate} isPlaying={isMasterPlaying} isLooping={isMasterLooping} musicPeaks={masterMusicPeaks} onSelectClip={selectMasterClip} onSelectMusic={selectMasterMusic} onDeleteMusicTrack={liveRole === null || liveRole === 'host' ? deleteMusicTrack : () => {}} onAddMusicTrack={liveRole === null || liveRole === 'host' ? addMusicTrack : () => {}} onSetMasterFrame={liveRole === null || liveRole === 'host' ? setMasterPlayhead : () => {}} onReturnToStart={liveRole === null || liveRole === 'host' ? returnMasterToStart : () => {}} onAddShot={liveRole === 'viewer' ? () => {} : addShotToMasterForRole} onReorderClip={liveRole === 'viewer' ? () => {} : reorderMasterClipForRole} onImportMusic={liveRole === null || liveRole === 'host' ? (file) => { void importMasterMusic(file) } : () => {}} onPlay={liveRole === null || liveRole === 'host' ? playMasterPlayback : () => {}} onPause={liveRole === null || liveRole === 'host' ? pauseMasterPlayback : () => {}} onStop={liveRole === null || liveRole === 'host' ? () => stopMasterPlayback(false) : () => {}} onToggleLoop={liveRole === null || liveRole === 'host' ? () => setIsMasterLooping((current) => !current) : () => {}} onMarkIn={liveRole === null || liveRole === 'host' ? () => changeMasterMark('in') : () => {}} onMarkOut={liveRole === null || liveRole === 'host' ? () => changeMasterMark('out') : () => {}} onSwitchToScene={() => switchTimelineMode('scene')} onSwitchToMaster={() => switchTimelineMode('master')} activeImageClipId={activeMasterImageClipId} onSelectImage={selectMasterImage} onAddGraphicsTrack={addGraphicsTrack} onImportImage={(trackId, file) => { void importMasterImage(trackId, file) }} imageHealth={mediaHealth} onMoveImage={liveRole === 'viewer' ? () => {} : moveMasterImage} onTrimImage={liveRole === 'viewer' ? () => {} : trimMasterImage} onChangeImageFade={liveRole === 'viewer' ? () => {} : changeMasterImageFade} onGraphicsTrackChange={liveRole === 'viewer' ? () => {} : updateGraphicsTrack} onDeleteGraphicsTrack={liveRole === 'viewer' ? () => {} : deleteGraphicsTrack} initialWorkspaceState={timelineWorkspaceSessionRef.current.master} onWorkspaceStateChange={(patch) => updateTimelineWorkspace({ master: patch })} onRegisterZoomShortcut={registerMasterTimelineZoomShortcut} />}
+      {timelineMode === 'scene' ? <V2Timeline key={`${projectDocument.id}:${projectDocument.createdAt}:${sceneDocument.metadata.id}`} timeline={sceneDocument.timeline} tracks={sceneDocument.timeline.tracks} entities={timelineEntities} selectedEntityId={selectedEntityId} isPlaying={isPlaying} isLooping={isLooping} onFrameChange={liveRole === 'viewer' && liveFollowHost ? () => {} : setCurrentFrame} onDurationChange={liveRole === null || liveRole === 'host' ? changeTimelineDuration : () => {}} onFrameRateChange={liveRole === null || liveRole === 'host' ? changeFrameRate : () => {}} onTogglePlayback={liveRole === null || liveRole === 'host' ? togglePlayback : () => {}} onStopPlayback={liveRole === null || liveRole === 'host' ? () => stopPlaybackSession() : () => {}} onMarkIn={liveRole === null || liveRole === 'host' ? () => changeMark('in') : () => {}} onMarkOut={liveRole === null || liveRole === 'host' ? () => changeMark('out') : () => {}} onToggleLoop={liveRole === null || liveRole === 'host' ? () => setIsLooping((current) => !current) : () => {}} onMoveKeyframes={moveKeyframesForRole} onKeyframeInterpolationChange={changeKeyframeEasingForRole} canEditKeyframe={liveRole === 'editor' ? canEditTimelineSelection : undefined} canEditTimelineStructure={liveRole === null || liveRole === 'host'} canEditTimelineInterpolation={liveRole === null || liveRole === 'host'} onKeyframeEditStart={beginTimelineKeyframeLease} onKeyframeEditActivity={renewActiveLiveLease} onKeyframeEditEnd={endTimelineKeyframeLease} selectedKeyframes={selectedTimelineKeyframes} onKeyframeSelect={selectTimelineKeyframe} onEntitySelect={handleSelectionChange} onScrubStart={() => setIsScrubbing(true)} onScrubEnd={() => setIsScrubbing(false)} onSwitchToScene={() => switchTimelineMode('scene')} onSwitchToMaster={() => switchTimelineMode('master')} initialWorkspaceState={getSceneTimelineWorkspace(timelineWorkspaceSessionRef.current, sceneDocument.metadata.id)} onWorkspaceStateChange={(patch) => updateTimelineWorkspace({ scene: { sceneId: sceneDocument.metadata.id, patch } })} onRegisterZoomShortcut={registerSceneTimelineZoomShortcut} /> : <V2MasterTimeline key={`${projectDocument.id}:${projectDocument.createdAt}`} projectId={projectDocument.id} sequence={projectDocument.masterSequence} shots={projectDocument.shots} scenes={projectDocument.scenes} activeClipId={activeMasterClipId} selectedItems={masterTimelineSelection} onClearSelection={clearMasterTimelineSelection} onTimelineFocusChange={(focused) => { masterTimelineFocusedRef.current = focused }} onTrimClip={liveRole === 'viewer' ? () => {} : trimMasterClipForRole} masterFrame={masterFrame} fallbackRate={sceneDocument.timeline.frameRate} isPlaying={isMasterPlaying} isLooping={isMasterLooping} musicPeaks={masterMusicPeaks} onSelectClip={selectMasterClip} onSelectMusic={selectMasterMusic} onDeleteMusicTrack={liveRole === null || liveRole === 'host' ? deleteMusicTrack : () => {}} onAddMusicTrack={liveRole === null || liveRole === 'host' ? addMusicTrack : () => {}} onSetMasterFrame={liveRole === null || liveRole === 'host' ? setMasterPlayhead : () => {}} onReturnToStart={liveRole === null || liveRole === 'host' ? returnMasterToStart : () => {}} onAddShot={liveRole === 'viewer' ? () => {} : addShotToMasterForRole} onMoveClip={liveRole === 'viewer' ? () => {} : moveMasterClipForRole} onImportMusic={liveRole === null || liveRole === 'host' ? (file) => { void importMasterMusic(file) } : () => {}} onPlay={liveRole === null || liveRole === 'host' ? playMasterPlayback : () => {}} onPause={liveRole === null || liveRole === 'host' ? pauseMasterPlayback : () => {}} onStop={liveRole === null || liveRole === 'host' ? () => stopMasterPlayback(false) : () => {}} onToggleLoop={liveRole === null || liveRole === 'host' ? () => setIsMasterLooping((current) => !current) : () => {}} onMarkIn={liveRole === null || liveRole === 'host' ? () => changeMasterMark('in') : () => {}} onMarkOut={liveRole === null || liveRole === 'host' ? () => changeMasterMark('out') : () => {}} onSwitchToScene={() => switchTimelineMode('scene')} onSwitchToMaster={() => switchTimelineMode('master')} activeImageClipId={activeMasterImageClipId} onSelectImage={selectMasterImageTimeline} onAddGraphicsTrack={addGraphicsTrack} onImportImage={(trackId, file) => { void importMasterImage(trackId, file) }} imageHealth={mediaHealth} onMoveImage={liveRole === 'viewer' ? () => {} : moveMasterImage} onTrimImage={liveRole === 'viewer' ? () => {} : trimMasterImage} onChangeImageFade={liveRole === 'viewer' ? () => {} : changeMasterImageFade} onGraphicsTrackChange={liveRole === 'viewer' ? () => {} : updateGraphicsTrack} onDeleteGraphicsTrack={liveRole === 'viewer' ? () => {} : deleteGraphicsTrack} initialWorkspaceState={timelineWorkspaceSessionRef.current.master} onWorkspaceStateChange={(patch) => updateTimelineWorkspace({ master: patch })} onRegisterZoomShortcut={registerMasterTimelineZoomShortcut} />}
       </div>
       {exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'encoding' || exportStatus === 'finalizing' || exportStatus === 'saving' ? <div className="v2-export-lock" aria-hidden="true" /> : null}
       </>}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { STAGE_SNAP_GRID_PRESETS, STAGE_VIEW_CUBE_FACE_MODES, constrainStageDeltaToAxis, dominantStageAxis, scaleFromFactor, scaleFromPointer, snapStagePosition, snapStageValue, stageApplyRotation, stageGizmoSpaceForSelection, stageIsometricAngles, stageLocalAxis, stageMovedBeyondThreshold, stageNdcFromEvent, stageOrbitAfterPointerDelta, stageOrbitAnglesFromDirection, stagePointerDeltaAlongAxis, stageProjectWorldAxisToScreen, stageRotationAxis, stageToolForKey, stageTransformAxis, stageTransformSpace, stageViewCubeDragStarted, stageViewCubeFaceMode, stageViewDirection, stageViewModeIsOrthographic, stageViewSelectionIsIsometric, stageWorldAxis, stageWorldUnitsPerPixelAtDepth, stageWorldUnitsPerPixelAlongAxis, stageZoomDistance } from '../stage-engine'
+import { STAGE_SNAP_GRID_PRESETS, STAGE_VIEW_CUBE_FACE_MODES, constrainStageDeltaToAxis, dominantStageAxis, scaleFromFactor, scaleFromPointer, snapStagePosition, snapStageValue, stageApplyRotation, stageGizmoSpaceForSelection, stageIsometricAngles, stageLocalAxis, stageMarqueeRect, stageMarqueeSelection, stageMovedBeyondThreshold, stageNdcFromEvent, stageOrbitAfterPointerDelta, stageOrbitAnglesFromDirection, stagePointerDeltaAlongAxis, stageProjectWorldAxisToScreen, stageProjectedBoundsIntersectMarquee, stageRotationAxis, stageToolForKey, stageTransformAxis, stageTransformSpace, stageViewCubeDragStarted, stageViewCubeFaceMode, stageViewDirection, stageViewModeIsOrthographic, stageViewSelectionIsIsometric, stageWorldAxis, stageWorldUnitsPerPixelAtDepth, stageWorldUnitsPerPixelAlongAxis, stageZoomDistance } from '../stage-engine'
 
 describe('StageEngine math boundary', () => {
   it('keeps Y on world-up while X/Z follow the semantic local basis', () => {
@@ -112,6 +112,40 @@ describe('StageEngine math boundary', () => {
     expect(stageMovedBeyondThreshold(10, 10, 13, 14)).toBe(true)
   })
 
+  it('normalizes all four marquee drag directions', () => {
+    const expected = { left: 10, top: 20, width: 30, height: 40, additive: false, subtractive: false }
+    expect(stageMarqueeRect(10, 20, 40, 60)).toEqual(expected)
+    expect(stageMarqueeRect(40, 20, 10, 60)).toEqual(expected)
+    expect(stageMarqueeRect(10, 60, 40, 20)).toEqual(expected)
+    expect(stageMarqueeRect(40, 60, 10, 20)).toEqual(expected)
+  })
+
+  it('applies replace, additive, and subtractive marquee selection in one commit', () => {
+    expect(stageMarqueeSelection(['a'], ['b', 'b'], 'a', 'replace')).toEqual({ ids: ['b'], primaryId: 'b' })
+    expect(stageMarqueeSelection(['a'], ['b', 'b'], 'a', 'add')).toEqual({ ids: ['a', 'b'], primaryId: 'b' })
+    expect(stageMarqueeSelection(['a', 'b'], ['b'], 'b', 'subtract')).toEqual({ ids: ['a'], primaryId: 'a' })
+  })
+
+  it('clears on a zero-hit replace click while preserving additive and subtractive selections', () => {
+    expect(stageMarqueeSelection(['actor-1', 'actor-2'], [], 'actor-2', 'replace')).toEqual({ ids: [], primaryId: null })
+    expect(stageMarqueeSelection(['actor-1', 'actor-2'], [], 'actor-2', 'add')).toEqual({ ids: ['actor-1', 'actor-2'], primaryId: 'actor-2' })
+    expect(stageMarqueeSelection(['actor-1', 'actor-2'], [], 'actor-2', 'subtract')).toEqual({ ids: ['actor-1', 'actor-2'], primaryId: 'actor-2' })
+  })
+
+  it('uses projected visual bounds for perspective box selection with viewport offsets', () => {
+    const camera = new THREE.PerspectiveCamera(45, 4 / 3, 0.1, 100)
+    camera.position.set(0, 0, 10)
+    camera.lookAt(0, 0, 0)
+    camera.updateProjectionMatrix()
+    camera.updateMatrixWorld(true)
+    const object = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 1))
+    object.updateMatrixWorld(true)
+    const canvas = { left: 100, top: 200, width: 800, height: 600 }
+    expect(stageProjectedBoundsIntersectMarquee(object, camera, canvas, { left: 430, top: 430, width: 120, height: 120 })).toBe(true)
+    expect(stageProjectedBoundsIntersectMarquee(object, camera, canvas, { left: 900, top: 900, width: 40, height: 40 })).toBe(false)
+    object.geometry.dispose()
+  })
+
   it('uses a four-pixel ViewCube click-versus-drag threshold', () => {
     expect(stageViewCubeDragStarted(10, 10, 12, 12)).toBe(false)
     expect(stageViewCubeDragStarted(10, 10, 14, 10)).toBe(true)
@@ -166,6 +200,15 @@ describe('StageEngine math boundary', () => {
   it('uses multiplicative DEMO-style zoom distance', () => {
     expect(stageZoomDistance(15, -60)).toBeLessThan(15)
     expect(stageZoomDistance(0.1, 100)).toBeGreaterThanOrEqual(0.6)
+  })
+
+  it('does not mutate canonical selection while navigation math is applied repeatedly', () => {
+    const selectedIds = ['actor-01', 'prop-01', 'camera-01']
+    const initialSelection = [...selectedIds]
+    let radius = 15
+    for (const deltaY of [-40, 20, -12, 8]) radius = stageZoomDistance(radius, deltaY)
+    expect(radius).toBeGreaterThan(0.6)
+    expect(selectedIds).toEqual(initialSelection)
   })
 
   it('projects a visible world axis into a stable client-space direction', () => {

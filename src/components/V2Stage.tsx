@@ -2,13 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { createPortal } from 'react-dom'
 import * as THREE from 'three'
 import type { ActorDocument, ActorVector3, CameraDocument, OpeningDocument, PropDocument, SceneDocument, SceneGroup, SunDocument, WallDocument } from '../core/sceneDocument'
-import { evaluateGroupTransforms } from '../core/groupMath'
+import { evaluateGroupTransforms, groupSelectionId } from '../core/groupMath'
 import { cameraDisplayAspect, cameraProjectionForDocument, letterboxRect } from '../runtime/cameraMath'
 import { deliveryAspectValue, fitAspectInsideSource, insetFrameGuideRect } from '../runtime/frameGuideMath'
 import type { FrameGuide } from '../core/sceneDocument'
 import { CameraViewRuntime } from '../runtime/cameraViewRuntime'
 import { actorVisualStyle, createActorRuntime, type ActorRuntime } from '../runtime/actor/actorRuntime'
-import { arrangePopoverPosition, STAGE_ROTATION_SNAP_PRESETS, STAGE_SNAP_GRID_PRESETS, StageEngine, stageViewSelectionIsIsometric, type StageAxisName, type StageSelection, type StageTool, type StageTransform, type StageTransformBatch, type StageViewOrientation, type StageViewSelection } from '../stage-engine'
+import { arrangePopoverPosition, STAGE_ROTATION_SNAP_PRESETS, STAGE_SNAP_GRID_PRESETS, StageEngine, stageViewSelectionIsIsometric, type StageAxisName, type StageEngineDebugSnapshot, type StageSelection, type StageTool, type StageTransform, type StageTransformBatch, type StageViewOrientation, type StageViewSelection } from '../stage-engine'
 import { StageViewCube } from './StageViewCube'
 import { ProceduralCameraRuntime } from '../runtime/cameraRuntime'
 import { cameraDocumentWithTimelineEvaluation, evaluateTimeline, timelinePropertyIsAuthored, type EvaluatedEntityState } from '../timeline/timelineEvaluator'
@@ -28,6 +28,7 @@ import { graphicsScaleFromPointerDelta, imageTransformForAsset } from '../core/m
 import { SHOT_THUMBNAIL_RENDER_WIDTH } from '../core/shotDocument'
 import type { LiveReviewPointer } from '../liveReview/protocol'
 import { formatWebGLDiagnostics, recordWebGLDiagnosticEvent, webGLDiagnosticsAvailable } from '../runtime/webglDiagnostics'
+import { buildIdentity, interactionDiagnosticsCanBeActivated, interactionDiagnosticsFromLocation, SELECTION_DIAGNOSTICS_TOGGLE_EVENT } from '../runtime/buildIdentity'
 
 export type V2TransformDebugState = {
   entityId: string
@@ -53,7 +54,7 @@ type V2StageProps = {
   selectedEntityIds: readonly string[]
   tool: StageTool
   onSelectionChange: (selection: StageSelection) => void
-  onMarqueeChange?: (rect: { left: number; top: number; width: number; height: number; additive: boolean } | null) => void
+  onMarqueeChange?: (rect: { left: number; top: number; width: number; height: number; additive: boolean; subtractive: boolean } | null) => void
   onBeginEntityRename: (entityId: string) => void
   onToolChange: (tool: StageTool) => void
   onTransformStart: (change: StageTransform) => void
@@ -154,6 +155,7 @@ function syncCameras(engine: StageEngine, sceneId: string, cameras: readonly Cam
         type: 'Camera',
         name: camera.name,
         root: runtime.root,
+        selectionBounds: runtime.proxyRoot,
         getTransformPivot: () => runtime?.getTransformPivot() ?? runtime!.root.position.clone(),
         getTransformSnapshot: () => runtime?.getDocumentTransform() ?? { position: camera.position, rotation: camera.rotation },
         applyTransform: (transform) => runtime?.applyDocumentPose(transform.position, transform.rotation),
@@ -240,6 +242,7 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
   const cameraRuntimesRef = useRef(new Map<string, ProceduralCameraRuntime>())
   const scenicRuntimesRef = useRef(new Map<string, ScenicVisual>())
   const groupRootsRef = useRef(new Map<string, THREE.Group>())
+  const groupsRef = useRef(groups)
   const groupPreviewRef = useRef<{ groups: readonly SceneGroup[]; actors: readonly ActorDocument[]; props: readonly PropDocument[]; walls: readonly WallDocument[]; cameras: readonly CameraDocument[] }>({ groups: [], actors: [], props: [], walls: [], cameras: [] })
   const applyGroupPreviewRef = useRef<(groupId: string) => void>(() => {})
   const baseCameraPosesRef = useRef(new Map<string, CameraPose>())
@@ -273,7 +276,8 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
   const [captureError, setCaptureError] = useState<string | null>(null)
   const [graphicsContextMessage, setGraphicsContextMessage] = useState<string | null>(null)
   const [diagnosticsCopied, setDiagnosticsCopied] = useState(false)
-  const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number; additive: boolean } | null>(null)
+  const [selectionDiagnosticsCopied, setSelectionDiagnosticsCopied] = useState(false)
+  const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number; additive: boolean; subtractive: boolean } | null>(null)
   const [stageContextMenu, setStageContextMenu] = useState<{ entityId: string; x: number; y: number } | null>(null)
   const [stageViewSelection, setStageViewSelection] = useState<StageViewSelection>('perspective')
   const [stageViewOrientation, setStageViewOrientation] = useState<StageViewOrientation>([0, 0, 0, 1])
@@ -286,12 +290,40 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
   const arrangeButtonRef = useRef<HTMLButtonElement>(null)
   const arrangeMenuRef = useRef<HTMLDivElement>(null)
   const [arrangeMenuPosition, setArrangeMenuPosition] = useState<CSSProperties | null>(null)
+  const [stageDebug, setStageDebug] = useState<StageEngineDebugSnapshot | null>(null)
   const selectionKey = selectedEntityIds.join('\u0000')
   const arrangeableSelectionCount = selectedEntityIds.filter((entityId) => !openings.some((opening) => opening.id === entityId && Boolean(opening.wallId))).length
   const arrangeIsOpen = arrangeContext?.sceneId === activeSceneId && arrangeContext.selectionKey === selectionKey && arrangeableSelectionCount >= 2
   const callbacksRef = useRef({ onSelectionChange, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onTransformBatchStart, onTransformBatchEnd, onTransformBatchPreview, canTransformEntity, canTransformGroup, onTransformPermissionRequest, onWallDrawCommit, onWallDrawState, onWallDrawExit, onCameraPathKeyframeSelect, onCameraPathSegmentSelect, onCameraPathPointMoveStart, onCameraPathPointMovePreview, onCameraPathPointMoveEnd })
   const phoneCameraLiveRef = useRef(phoneCameraLive)
-  const debugEnabled = import.meta.env.DEV && new URLSearchParams(window.location.search).get('interactionDebug') === '1'
+  const diagnosticsActivationAvailable = interactionDiagnosticsCanBeActivated()
+  const [interactionDiagnosticsEnabled, setInteractionDiagnosticsEnabled] = useState(interactionDiagnosticsFromLocation)
+  const debugEnabled = diagnosticsActivationAvailable && interactionDiagnosticsEnabled
+  const debugEnabledRef = useRef(debugEnabled)
+
+  useEffect(() => {
+    if (!diagnosticsActivationAvailable) return
+    const toggleDiagnostics = (event: KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey) || !event.altKey || !event.shiftKey || event.key.toLowerCase() !== 'd') return
+      event.preventDefault()
+      setInteractionDiagnosticsEnabled((enabled) => !enabled)
+    }
+    window.addEventListener('keydown', toggleDiagnostics)
+    return () => window.removeEventListener('keydown', toggleDiagnostics)
+  }, [diagnosticsActivationAvailable])
+  useEffect(() => {
+    if (!diagnosticsActivationAvailable) return
+    const toggleDiagnostics = () => setInteractionDiagnosticsEnabled((enabled) => !enabled)
+    window.addEventListener(SELECTION_DIAGNOSTICS_TOGGLE_EVENT, toggleDiagnostics)
+    return () => window.removeEventListener(SELECTION_DIAGNOSTICS_TOGGLE_EVENT, toggleDiagnostics)
+  }, [diagnosticsActivationAvailable])
+  useEffect(() => {
+    debugEnabledRef.current = debugEnabled
+    engineRef.current?.setDebugEnabled(debugEnabled)
+  }, [debugEnabled])
+  useEffect(() => {
+    groupsRef.current = groups
+  }, [groups])
 
   const masterPreviewData = useMemo(() => {
     const scene = masterPreview?.scene ?? null
@@ -526,12 +558,17 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
         setMarqueeRect(rect ? { ...rect, left: rect.left - bounds.left, top: rect.top - bounds.top } : null)
         onMarqueeChange?.(rect)
       },
+      resolveSelectionId: (entityId) => groupSelectionId(entityId, groupsRef.current),
+      resolveSelectionVisualIds: (entityId) => groupsRef.current.find((group) => group.id === entityId)?.childIds ?? [entityId],
       onCameraPathKeyframeSelect: (keyframe) => callbacksRef.current.onCameraPathKeyframeSelect(keyframe),
       onCameraPathSegmentSelect: (segment) => callbacksRef.current.onCameraPathSegmentSelect(segment),
       onCameraPathPointMoveStart: (keyframe, position) => callbacksRef.current.onCameraPathPointMoveStart(keyframe, position),
       onCameraPathPointMovePreview: (keyframe, position) => callbacksRef.current.onCameraPathPointMovePreview(keyframe, position),
       onCameraPathPointMoveEnd: (keyframe, position) => callbacksRef.current.onCameraPathPointMoveEnd(keyframe, position),
-      debugEnabled: false,
+      onDebug: (snapshot) => {
+        if (debugEnabledRef.current) setStageDebug(snapshot)
+      },
+      debugEnabled: debugEnabledRef.current,
       toolShortcuts: Object.fromEntries((['select', 'move', 'rotate', 'scale'] as const).map((key) => [key, initialShortcutBindingsRef.current[key]?.key ?? ({ select: 'e', move: 'q', rotate: 'r', scale: 's' }[key])])),
       frameSelectedShortcut: initialShortcutBindingsRef.current.frameSelected?.key ?? 'f',
     })
@@ -582,11 +619,13 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
     stageElement.addEventListener('webglcontextrestored', handleContextRestored, true)
     const removeSelectionListener = engine.onSelectionChanged((selection) => callbacksRef.current.onSelectionChange(selection))
     const initial = initialStageRef.current
-    syncActors(engine, initial.activeSceneId, initial.actors, actorRuntimes)
-    syncCameras(engine, initial.activeSceneId, initial.cameras, cameraRuntimes)
-    engine.setProps([])
-    syncScenic(engine, initial.activeSceneId, [...initial.props, ...initial.walls, ...initial.openings.map((opening) => resolveOpeningAgainstWalls(opening, initial.walls)), ...initial.lights], scenicRuntimes)
-    syncGroupEntities(engine, initial.activeSceneId, initial.groups, groupRootsRef.current)
+    engine.reconcileEntities(() => {
+      syncActors(engine, initial.activeSceneId, initial.actors, actorRuntimes)
+      syncCameras(engine, initial.activeSceneId, initial.cameras, cameraRuntimes)
+      engine.setProps([])
+      syncScenic(engine, initial.activeSceneId, [...initial.props, ...initial.walls, ...initial.openings.map((opening) => resolveOpeningAgainstWalls(opening, initial.walls)), ...initial.lights], scenicRuntimes)
+      syncGroupEntities(engine, initial.activeSceneId, initial.groups, groupRootsRef.current)
+    })
     engine.setTool(initialToolRef.current)
     engine.setSelected(initial.selectedEntityIds)
     engineRef.current = engine
@@ -645,6 +684,55 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
       window.setTimeout(() => setDiagnosticsCopied(false), 1600)
     } catch {
       setDiagnosticsCopied(false)
+    }
+  }
+
+  const copySelectionDiagnostics = async (): Promise<void> => {
+    const report = {
+      build: buildIdentity,
+      capturedAt: new Date().toISOString(),
+      sceneId: activeSceneId,
+      appSelectedIds: [...selectedEntityIds],
+      engineSelectedIds: stageDebug?.selectedIds ?? [],
+      outlineTargetIds: stageDebug?.selectionOutlineTargetIds ?? [],
+      outlineCount: stageDebug?.selectionOutlineCount ?? 0,
+      runtimeInstance: stageDebug?.stageRuntimeInstance ?? 'NONE',
+      cameraInstance: stageDebug?.stageCameraInstance ?? 'NONE',
+      lastPointerEvent: stageDebug?.lastPointerEvent ?? 'NONE',
+      lastSelectionEvent: stageDebug?.lastSelectionEvent ?? 'NONE',
+      lastNavigationEvent: stageDebug?.lastNavigationEvent ?? 'NONE',
+      lastEmptyClickEvent: stageDebug?.lastEmptyClickEvent ?? 'NONE',
+      lastDeselectionCallback: stageDebug?.lastDeselectionCallback ?? 'NONE',
+      lastSelectionCallbackPayload: stageDebug?.lastSelectionCallbackPayload ?? 'NONE',
+      marqueePreviewActive: stageDebug?.marqueePreviewActive ?? false,
+      marqueePreviewIds: stageDebug?.marqueePreviewIds ?? [],
+      marqueeFinalHitIds: stageDebug?.marqueeFinalHitIds ?? [],
+      marqueePreviousSelectedIds: stageDebug?.marqueePreviousSelectedIds ?? [],
+      marqueeNextSelectedIds: stageDebug?.marqueeNextSelectedIds ?? [],
+      marqueeCallbackPayload: stageDebug?.marqueeCallbackPayload ?? 'NONE',
+      recentInteractionEvents: stageDebug?.recentInteractionEvents ?? [],
+      gesture: stageDebug?.pointerMode ?? 'NONE',
+      pointerCaptureOwner: stageDebug?.pointerCaptureOwner ?? 'NONE',
+      entityReconciliationCount: stageDebug?.entityReconciliationCount ?? 0,
+      lastEntityReconciliation: stageDebug?.lastEntityReconciliation ?? 'NONE',
+    }
+    const text = JSON.stringify(report, null, 2)
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text)
+      else {
+        const textarea = document.createElement('textarea')
+        textarea.value = text
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        textarea.remove()
+      }
+      setSelectionDiagnosticsCopied(true)
+      window.setTimeout(() => setSelectionDiagnosticsCopied(false), 1600)
+    } catch {
+      setSelectionDiagnosticsCopied(false)
     }
   }
 
@@ -797,12 +885,12 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
   }, [cameras, evaluatedEntities, runtimeSceneRef, selectedPathCamera, timeline, view])
 
   useEffect(() => {
-    if (engineRef.current) syncActors(engineRef.current, activeSceneId, actors, actorRuntimesRef.current)
+    if (engineRef.current) engineRef.current.reconcileEntities(() => syncActors(engineRef.current!, activeSceneId, actors, actorRuntimesRef.current))
   }, [activeSceneId, actors])
 
   useEffect(() => {
     if (engineRef.current) {
-      syncCameras(engineRef.current, activeSceneId, cameras, cameraRuntimesRef.current)
+      engineRef.current.reconcileEntities(() => syncCameras(engineRef.current!, activeSceneId, cameras, cameraRuntimesRef.current))
       cameras.forEach((camera) => {
         const base = cameraPose(camera)
         baseCameraPosesRef.current.set(camera.id, base)
@@ -883,10 +971,17 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
       })
     }
     if (engineRef.current) {
-      syncCameras(engineRef.current, activeSceneId, groupedCameras, cameraRuntimesRef.current)
-      syncScenic(engineRef.current, activeSceneId, [...groupedProps, ...groupedWalls, ...resolvedOpenings, ...evaluatedLights], scenicRuntimesRef.current)
-      syncGroupEntities(engineRef.current, activeSceneId, evaluatedGroups, groupRootsRef.current)
-      engineRef.current.setSelected(selectedEntityIds)
+      // Groups are represented as persistent world-space deltas. Keep actor
+      // runtimes on the same evaluated/group-composed path as props, walls,
+      // and cameras; the raw actor sync above only maintains the base
+      // document/runtime and must not be the final transform writer.
+      engineRef.current.reconcileEntities(() => {
+        syncActors(engineRef.current!, activeSceneId, groupedActors, actorRuntimesRef.current)
+        syncCameras(engineRef.current!, activeSceneId, groupedCameras, cameraRuntimesRef.current)
+        syncScenic(engineRef.current!, activeSceneId, [...groupedProps, ...groupedWalls, ...resolvedOpenings, ...evaluatedLights], scenicRuntimesRef.current)
+        syncGroupEntities(engineRef.current!, activeSceneId, evaluatedGroups, groupRootsRef.current)
+        engineRef.current!.setSelected(selectedEntityIds)
+      })
     }
     const masterMode = masterPreview !== null
     const previewActors = masterMode ? masterPreviewActors : groupedActors
@@ -977,7 +1072,7 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
   return (
     <section className="v2-stage-panel" aria-label="Stage">
       <div className={`v2-stage-viewport v2-view-${view}`} ref={stageRef} onPointerMove={(event) => emitLivePointer(event, true)} onPointerLeave={(event) => emitLivePointer(event, false)}>
-        {marqueeRect ? <div className={`v2-stage-marquee${marqueeRect.additive ? ' is-additive' : ''}`} style={{ left: `${marqueeRect.left}px`, top: `${marqueeRect.top}px`, width: `${marqueeRect.width}px`, height: `${marqueeRect.height}px` }} aria-hidden="true" /> : null}
+        {marqueeRect ? <div className={`v2-stage-marquee${marqueeRect.additive ? ' is-additive' : ''}${marqueeRect.subtractive ? ' is-subtractive' : ''}`} style={{ left: `${marqueeRect.left}px`, top: `${marqueeRect.top}px`, width: `${marqueeRect.width}px`, height: `${marqueeRect.height}px` }} aria-hidden="true" /> : null}
         {graphicsContextMessage ? <div className="v2-runtime-notice" role="alert"><strong>Graphics unavailable</strong><span>{graphicsContextMessage}</span><div className="v2-runtime-notice-actions">{webGLDiagnosticsAvailable() ? <button className="v2-button" onClick={() => void copyGraphicsDiagnostics()} type="button">{diagnosticsCopied ? 'Diagnostics Copied' : 'Copy Diagnostics'}</button> : null}<button className="v2-button v2-button-primary" onClick={() => window.location.reload()} type="button">Reload App</button></div></div> : null}
         {view === 'blocking' ? <div className="v2-stage-header">
           <button className={`v2-camera-preview-toggle${cameraPreview ? ' is-active' : ''}`} onClick={() => onCameraPreviewChange(!cameraPreview)} type="button">{cameraPreview ? 'Hide Camera Preview' : 'Camera Preview'}</button>
@@ -1018,7 +1113,7 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
               </div>
             </div>
             {arrangePopover}
-            <div className="v2-stage-hint">E Select · Q Move · R Rotate · S Scale · {frameSelectedShortcut} Frame · Left drag orbit · Right drag pan · Shift move axis lock · Two-finger scroll pan · Pinch zoom</div>
+            <div className="v2-stage-hint">E Select · Q Move · R Rotate · S Scale · {frameSelectedShortcut} Frame · Select drag box · Space + drag orbit · Right drag pan · Shift move axis lock · ⌘G Group · ⌘⇧G Ungroup</div>
             <StageViewCube selection={stageViewSelection} orientation={stageViewOrientation} onSelect={handleStageViewSelect} onOrbitDrag={(deltaX, deltaY) => engineRef.current?.orbitFromViewCube(deltaX, deltaY)} />
             {stageContextMenu ? <div className="v2-entity-context-menu v2-stage-entity-context-menu" role="menu" style={{ left: stageContextMenu.x, top: stageContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { onBeginEntityRename(stageContextMenu.entityId); setStageContextMenu(null) }} type="button">Rename</button></div> : null}
             {axisLock ? <div className="v2-stage-axis-lock" aria-live="polite">Axis Lock · {axisLock.toUpperCase()}</div> : null}
@@ -1040,17 +1135,47 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
             </div>
             {captureError ? <div className="v2-capture-error" role="alert">{captureError}</div> : null}
           </div>
+        ) : masterPreview?.status === 'empty' ? (
+          <div className="v2-camera-view-overlay v2-master-gap-view" aria-label="Empty Master Timeline gap">
+            <div className="v2-camera-image-area v2-master-gap-frame" style={imageStyle}>
+              <MasterGraphicsOverlay preview={masterPreview} imageUrls={masterImageUrls} aspect={16 / 9} activeClipId={activeMasterImageClipId} editable={!readOnly} onSelect={onMasterImageSelect} onChange={onMasterImageChange} />
+            </div>
+          </div>
         ) : (
           <div className="v2-stage-empty"><div className="v2-stage-empty-mark">◇</div><strong>{masterPreview?.status === 'missing-shot' ? 'Missing Shot' : masterPreview?.status === 'missing-scene' ? 'Missing Scene' : masterPreview?.status === 'missing-camera' ? 'Missing Camera' : 'No active Camera'}</strong><span>{masterPreview ? 'The current Master frame has no valid production Camera source.' : 'Add a Camera and set it active to view the shot.'}</span></div>
         )}
         {isPlaying ? <div className="v2-playback-shield" aria-hidden="true" /> : null}
         {livePointer && livePointer.visible && view === 'blocking' ? <div className="v2-live-pointer" style={{ left: `${livePointer.x * 100}%`, top: `${livePointer.y * 100}%` }} aria-hidden="true"><span /> <b>{livePointer.displayName}</b></div> : null}
         {debugEnabled ? (
-          <div className="v2-interaction-debug" aria-hidden="true">
-            <strong>TIMELINE / TRANSFORM AUDIT</strong>
+          <div className="v2-interaction-debug" role="dialog" aria-label="Selection Diagnostics">
+            <div className="v2-interaction-debug-header"><strong>Selection Diagnostics</strong><button className="v2-interaction-debug-close" aria-label="Close Selection Diagnostics" onClick={() => setInteractionDiagnosticsEnabled(false)} type="button">×</button></div>
+            <span>BUILD {buildIdentity.id}</span>
+            <span>BUILD TIME {buildIdentity.timestamp}</span>
+            <span>APP VERSION {buildIdentity.version}</span>
             <span>STAGE ENGINE v2-stage-engine</span>
             <span>ENTITIES {actors.length + props.length + cameras.length}</span>
+            <span>SELECTED COUNT {selectedEntityIds.length}</span>
             <span>SELECTED ID {selectedEntityId ?? 'NONE'}</span>
+            <span>REACT IDS {selectedEntityIds.length > 0 ? selectedEntityIds.join(', ') : 'NONE'}</span>
+            <span>ENGINE IDS {stageDebug?.selectedIds.length ? stageDebug.selectedIds.join(', ') : 'NONE'}</span>
+            <span>OUTLINE TARGETS {stageDebug?.selectionOutlineTargetIds.length ? stageDebug.selectionOutlineTargetIds.join(', ') : 'NONE'}</span>
+            <span>SELECTION EVENT {stageDebug?.lastSelectionEvent ?? '—'}</span>
+            <span>NAVIGATION EVENT {stageDebug?.lastNavigationEvent ?? '—'}</span>
+            <span>POINTER EVENT {stageDebug?.lastPointerEvent ?? '—'}</span>
+            <span>EMPTY CLICK {stageDebug?.lastEmptyClickEvent ?? '—'}</span>
+            <span>DESELECTION CALLBACK {stageDebug?.lastDeselectionCallback ?? '—'}</span>
+            <span>CALLBACK {stageDebug?.lastSelectionCallbackPayload ?? '—'}</span>
+            <span>MARQUEE PREVIEW {stageDebug?.marqueePreviewActive ? stageDebug.marqueePreviewIds.join(', ') || 'NONE' : 'INACTIVE'}</span>
+            <span>MARQUEE FINAL HITS {stageDebug?.marqueeFinalHitIds.length ? stageDebug.marqueeFinalHitIds.join(', ') : 'NONE'}</span>
+            <span>MARQUEE PREVIOUS {stageDebug?.marqueePreviousSelectedIds.length ? stageDebug.marqueePreviousSelectedIds.join(', ') : 'NONE'}</span>
+            <span>MARQUEE NEXT {stageDebug?.marqueeNextSelectedIds.length ? stageDebug.marqueeNextSelectedIds.join(', ') : 'NONE'}</span>
+            <span>MARQUEE CALLBACK {stageDebug?.marqueeCallbackPayload ?? '—'}</span>
+            <span>RECENT EVENTS {stageDebug?.recentInteractionEvents.length ? stageDebug.recentInteractionEvents.join(' · ') : '—'}</span>
+            <span>GESTURE {stageDebug?.pointerMode ?? '—'} · CAPTURE {stageDebug?.pointerCaptureOwner ?? '—'}</span>
+            <span>STAGE INSTANCE {stageDebug?.stageRuntimeInstance ?? '—'}</span>
+            <span>CAMERA INSTANCE {stageDebug?.stageCameraInstance ?? '—'}</span>
+            <span>OUTLINES {stageDebug?.selectionOutlineCount ?? '—'}</span>
+            <span>RECONCILIATIONS {stageDebug?.entityReconciliationCount ?? '—'} · {stageDebug?.lastEntityReconciliation ?? '—'}</span>
             <span>ACTIVE CAMERA {displayCamera?.id ?? 'NONE'}</span>
             <span>VIEW {view.toUpperCase()}</span>
             <span>RENDER CAMERA {renderCamera}</span>
@@ -1064,6 +1189,7 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
             <span>BASE DOCUMENT FINAL {lastTransformDebug?.baseDocumentFinal ?? '—'}</span>
             <span>TIMELINE EVALUATED {lastTransformDebug?.timelineEvaluated ?? '—'}</span>
             <span>VALUE APPLIED AFTER TRANSFORM {lastTransformDebug?.valueAppliedAfterTransform ?? '—'}</span>
+            <button className="v2-button v2-interaction-debug-copy" onClick={() => void copySelectionDiagnostics()} type="button">{selectionDiagnosticsCopied ? 'Diagnostics Copied' : 'Copy Selection Diagnostics'}</button>
           </div>
         ) : null}
         <div className="v2-stage-footer">
@@ -1084,7 +1210,7 @@ export function CameraPreviewOverlay({ displayCamera, displayActors, imageAspect
         <CameraPreviewOverlays camera={displayCamera} sourceAspect={imageAspect} actor={displayActors.find((actor) => actor.id === displayCamera.targetEntityId) ?? null} />
       </div>
       {masterPreview ? <MasterGraphicsOverlay preview={masterPreview} imageUrls={masterImageUrls} aspect={previewAspect} activeClipId={activeMasterImageClipId} editable={!readOnly} onSelect={onMasterImageSelect} onChange={onMasterImageChange} /> : null}
-    </> : <div className="v2-camera-preview-empty">{masterPreview?.status === 'missing-shot' ? 'Missing Shot' : masterPreview?.status === 'missing-scene' ? 'Missing Scene' : masterPreview?.status === 'missing-camera' ? 'Missing Camera' : 'No active camera'}<button className="v2-camera-preview-close" onClick={(event) => { event.stopPropagation(); onCameraPreviewChange(false) }} type="button" aria-label="Close Camera Preview">×</button></div>}
+    </> : masterPreview?.status === 'empty' ? <div className="v2-camera-preview-empty v2-camera-preview-gap" aria-label="Empty Master Timeline gap"><MasterGraphicsOverlay preview={masterPreview} imageUrls={masterImageUrls} aspect={previewAspect} activeClipId={activeMasterImageClipId} editable={!readOnly} onSelect={onMasterImageSelect} onChange={onMasterImageChange} /><button className="v2-camera-preview-close" onClick={(event) => { event.stopPropagation(); onCameraPreviewChange(false) }} type="button" aria-label="Close Camera Preview">×</button></div> : <div className="v2-camera-preview-empty">{masterPreview?.status === 'missing-shot' ? 'Missing Shot' : masterPreview?.status === 'missing-scene' ? 'Missing Scene' : masterPreview?.status === 'missing-camera' ? 'Missing Camera' : 'No active camera'}<button className="v2-camera-preview-close" onClick={(event) => { event.stopPropagation(); onCameraPreviewChange(false) }} type="button" aria-label="Close Camera Preview">×</button></div>}
   </div>
 }
 

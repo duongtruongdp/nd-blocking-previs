@@ -16,3 +16,12 @@ export function toggleSelection(selection: SelectionState, entityId: string, val
   const ids = selection.ids.includes(entityId) ? selection.ids.filter((id) => id !== entityId) : [...selection.ids, entityId]
   return normalizeSelection(ids, ids.includes(entityId) ? entityId : null, validIds)
 }
+
+/** Expand canonical selection IDs to the entity IDs that should receive visual feedback. */
+export function expandSelectionVisualIds(ids: readonly string[], resolveVisualIds?: (id: string) => readonly string[]): string[] {
+  const expanded: string[] = []
+  ids.forEach((id) => (resolveVisualIds?.(id) ?? [id]).forEach((visualId) => {
+    if (!expanded.includes(visualId)) expanded.push(visualId)
+  }))
+  return expanded
+}

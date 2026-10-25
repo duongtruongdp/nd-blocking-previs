@@ -1,5 +1,6 @@
 import type { ProjectDocument } from '../core/projectDocument'
 import { resolveMasterRenderFrame, type MasterRenderPlan } from './masterRenderPlan'
+import { resolveMasterPreviewContext } from '../core/masterPreview'
 import { VideoExportRenderer } from './exportRenderer'
 import type { VideoExportSettings } from './exportTypes'
 import { imageTransformForAsset } from '../core/masterGraphics'
@@ -39,28 +40,33 @@ export class MasterExportRenderer {
 
   renderFrame(masterFrame: number): void {
     if (this.disposed) throw new Error('The Master export renderer has been disposed.')
-    const frame = resolveMasterRenderFrame(this.project, masterFrame)
-    const rendererKey = `${frame.sceneId}:${frame.cameraId}`
-    if (!this.renderer) {
-      const settings: VideoExportSettings = { ...this.settings, source: 'scene', cameraId: frame.cameraId }
-      this.renderer = new VideoExportRenderer(frame.scene, settings, { outputDimensions: this.plan.dimensions, deliveryAspectOverride: this.plan.deliveryAspect, diagnosticIdentity: 'master-export', drawShotInfo: false })
-      this.lifecycle.rendererCreated()
-      this.recordLifecycle('export-renderer-created', 'persistent renderer created')
-      this.rendererKey = rendererKey
-    } else if (this.rendererKey !== rendererKey) {
-      const settings: VideoExportSettings = { ...this.settings, source: 'scene', cameraId: frame.cameraId }
-      const releasedResources = this.renderer.reconfigureScene(frame.scene, settings, { outputDimensions: this.plan.dimensions, deliveryAspectOverride: this.plan.deliveryAspect })
-      this.lifecycle.sceneTransition(releasedResources)
-      this.recordLifecycle('export-scene-transition', `transition=${this.lifecycle.stats.sceneTransitions}`)
-      this.recordLifecycle('export-resource-disposal', `released=${releasedResources}`)
-      this.rendererKey = rendererKey
-    }
-    const renderer = this.renderer
-    if (!renderer) throw new Error('The Master export renderer could not create a scene renderer.')
-    renderer.renderFrame(frame.sourceFrame, frame.evaluatedEntities)
+    const context = resolveMasterPreviewContext(this.project, masterFrame, false)
     this.context.clearRect(0, 0, this.canvas.width, this.canvas.height)
-    this.context.drawImage(renderer.canvas, 0, 0, this.canvas.width, this.canvas.height)
-    frame.graphics.forEach(({ clip, asset, opacity }) => {
+    this.context.fillStyle = '#000'
+    this.context.fillRect(0, 0, this.canvas.width, this.canvas.height)
+    const frame = context.status === 'resolved' ? resolveMasterRenderFrame(this.project, masterFrame) : null
+    if (frame) {
+      const rendererKey = `${frame.sceneId}:${frame.cameraId}`
+      if (!this.renderer) {
+        const settings: VideoExportSettings = { ...this.settings, source: 'scene', cameraId: frame.cameraId }
+        this.renderer = new VideoExportRenderer(frame.scene, settings, { outputDimensions: this.plan.dimensions, deliveryAspectOverride: this.plan.deliveryAspect, diagnosticIdentity: 'master-export', drawShotInfo: false })
+        this.lifecycle.rendererCreated()
+        this.recordLifecycle('export-renderer-created', 'persistent renderer created')
+        this.rendererKey = rendererKey
+      } else if (this.rendererKey !== rendererKey) {
+        const settings: VideoExportSettings = { ...this.settings, source: 'scene', cameraId: frame.cameraId }
+        const releasedResources = this.renderer.reconfigureScene(frame.scene, settings, { outputDimensions: this.plan.dimensions, deliveryAspectOverride: this.plan.deliveryAspect })
+        this.lifecycle.sceneTransition(releasedResources)
+        this.recordLifecycle('export-scene-transition', `transition=${this.lifecycle.stats.sceneTransitions}`)
+        this.recordLifecycle('export-resource-disposal', `released=${releasedResources}`)
+        this.rendererKey = rendererKey
+      }
+      const renderer = this.renderer
+      if (!renderer) throw new Error('The Master export renderer could not create a scene renderer.')
+      renderer.renderFrame(frame.sourceFrame, frame.evaluatedEntities)
+      this.context.drawImage(renderer.canvas, 0, 0, this.canvas.width, this.canvas.height)
+    }
+    context.graphics.forEach(({ clip, asset, opacity }) => {
       const image = this.imageAssets.get(asset.id)
       if (!image || opacity <= 0) return
       const transform = imageTransformForAsset(clip, asset, this.plan.deliveryAspect)
@@ -71,7 +77,7 @@ export class MasterExportRenderer {
       this.context.drawImage(image, -transform.width * this.canvas.width / 2, -transform.height * this.canvas.height / 2, transform.width * this.canvas.width, transform.height * this.canvas.height)
       this.context.restore()
     })
-    if (this.settings.shotInfoBurnIn?.enabled) {
+    if (frame && this.settings.shotInfoBurnIn?.enabled) {
       const shot = this.project.shots.find((candidate) => candidate.id === frame.shotId) ?? null
       const camera = frame.scene.cameras.find((candidate) => candidate.id === frame.cameraId) ?? null
       drawShotInfoBurnIn(this.context, this.canvas.width, this.canvas.height, buildShotInfoBurnInModel({ source: 'master', projectName: this.project.name, scene: frame.scene, shot, camera, evaluatedCamera: frame.evaluatedEntities[frame.cameraId], frame: masterFrame, frameRate: this.plan.frameRate }), this.settings.shotInfoBurnIn)

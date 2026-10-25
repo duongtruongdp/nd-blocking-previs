@@ -1,15 +1,16 @@
 import * as THREE from 'three'
 import type { PropDocument } from '../core/sceneDocument'
 import { classifyWheelInput } from '../runtime/inputNormalization'
-import { constrainStageDeltaToAxis, dominantStageAxis, snapStagePosition, snapStageValue, stageApplyRotation, stageCameraSpaceDepth, stageIsometricAngles, stageLocalAxis, stageMovedBeyondThreshold, stageNdcFromEvent, stageOrbitAfterPointerDelta, stageOrbitAnglesFromDirection, stagePointerDeltaAlongAxis, stageProjectToClient, stageProjectWorldAxisToScreen, stageRotationAxis, stageToolForKey, stageTransformAxis, stageTransformSpace, stageViewDirection, stageViewModeIsOrthographic, stageWorldAxis, stageWorldUnitsPerPixelAlongAxis, stageWorldUnitsPerPixelAtDepth, stageZoomDistance, type StageAxisName, type StageCanvasRect, type StageGizmoSpace, type StageIsometricCorner, type StagePointerMode, type StageTool, type StageViewMode, type StageViewSelection } from './stageEngineMath'
+import { constrainStageDeltaToAxis, dominantStageAxis, snapStagePosition, snapStageValue, stageApplyRotation, stageCameraSpaceDepth, stageIsometricAngles, stageLocalAxis, stageMarqueeRect, stageMarqueeSelection, stageMovedBeyondThreshold, stageNdcFromEvent, stageOrbitAfterPointerDelta, stageOrbitAnglesFromDirection, stagePointerDeltaAlongAxis, stageProjectedBoundsIntersectMarquee, stageProjectWorldAxisToScreen, stageRotationAxis, stageToolForKey, stageTransformAxis, stageTransformSpace, stageViewDirection, stageViewModeIsOrthographic, stageWorldAxis, stageWorldUnitsPerPixelAlongAxis, stageWorldUnitsPerPixelAtDepth, stageZoomDistance, type StageAxisName, type StageCanvasRect, type StageGizmoSpace, type StageIsometricCorner, type StageMarqueeSelectionMode, type StagePointerMode, type StageTool, type StageViewMode, type StageViewSelection } from './stageEngineMath'
 import { scaleFromPointer, type ScaleAxis } from './stageEngineScaleMath'
 import { distributeOffsets, snapAngle } from './arrangeMath'
-import { normalizeSelection, toggleSelection } from './selectionMath'
+import { expandSelectionVisualIds, normalizeSelection, toggleSelection } from './selectionMath'
 import type { CameraPathKeyframe, CameraPathSegmentSelection } from '../timeline/cameraPath'
 import { registerWebGLRenderer } from '../runtime/webglDiagnostics'
 
 const MAX_PIXEL_RATIO = 2
 const SELECTION_COLOR = '#f0a032'
+const MARQUEE_PREVIEW_COLOR = '#4d8ff0'
 const GIZMO_HOVER_COLOR = 0xffe066
 const GIZMO_AXIS_COLORS = { x: 0xe5484d, y: 0x62d16e, z: 0x4d8ff0 } as const
 
@@ -23,6 +24,8 @@ export type StageEntity = {
   name: string
   type: StageEntityType
   root: THREE.Group
+  /** Renderable bounds used for marquee selection, framing, and selection outlines. */
+  selectionBounds?: THREE.Object3D
   mesh?: THREE.Mesh
   material?: THREE.MeshStandardMaterial
   /** Optional world-space pivot for direct manipulation. */
@@ -107,8 +110,10 @@ type StageDrag = {
   lastX: number
   lastY: number
   moved: boolean
+  emptySpaceClick: boolean
   transformStarted: boolean
   mode: Exclude<StagePointerMode, 'idle'>
+  marqueeMode: StageMarqueeSelectionMode
   entity: StageEntity | null
   groupEntities: StageEntity[]
   groupPivot: THREE.Vector3 | null
@@ -140,11 +145,33 @@ type StageDrag = {
 }
 
 export type StageEngineDebugSnapshot = {
+  stageRuntimeInstance: string
+  stageCameraInstance: string
+  eventOrigin: string
   tool: StageTool
   pointerMode: StagePointerMode
   ndc: string
   rayHits: string
   selectedId: string
+  selectedIds: string[]
+  selectionOutlineTargetIds: string[]
+  selectionOutlineCount: number
+  lastSelectionEvent: string
+  lastNavigationEvent: string
+  lastPointerEvent: string
+  lastEmptyClickEvent: string
+  lastSelectionCallbackPayload: string
+  lastDeselectionCallback: string
+  marqueePreviewActive: boolean
+  marqueePreviewIds: string[]
+  marqueeFinalHitIds: string[]
+  marqueePreviousSelectedIds: string[]
+  marqueeNextSelectedIds: string[]
+  marqueeCallbackPayload: string
+  recentInteractionEvents: string[]
+  entityReconciliationCount: number
+  lastEntityReconciliation: string
+  pointerCaptureOwner: string
   axisDrag: StageAxisDragDebug | null
   scaleDrag?: StageScaleDragDebug | null
 }
@@ -168,9 +195,12 @@ export type StageEngineOptions = {
   onContextMenu?: (entityId: string | null, point: { clientX: number; clientY: number }) => void
   onViewChanged?: (selection: StageViewSelection) => void
   onViewOrientationChanged?: (orientation: StageViewOrientation) => void
-  /** Ctrl/Cmd + left-drag on empty Stage space, preserving plain left-drag orbit. */
-  onMarqueeChange?: (rect: { left: number; top: number; width: number; height: number; additive: boolean } | null) => void
+  /** Select-mode left-drag on empty Stage space; Space+left remains orbit. */
+  onMarqueeChange?: (rect: { left: number; top: number; width: number; height: number; additive: boolean; subtractive: boolean } | null) => void
   onMarqueeSelection?: (selection: StageSelection) => void
+  resolveSelectionId?: (entityId: string) => string
+  /** Maps canonical selections (including collapsed groups) to visible entity IDs. */
+  resolveSelectionVisualIds?: (entityId: string) => readonly string[]
   onCameraPathKeyframeSelect?: (keyframe: CameraPathKeyframe) => void
   onCameraPathSegmentSelect?: (segment: CameraPathSegmentSelection) => void
   onCameraPathPointMoveStart?: (keyframe: CameraPathKeyframe, position: ActorVector3Like) => void
@@ -181,6 +211,7 @@ export type StageEngineOptions = {
 type SelectionListener = (selection: StageSelection) => void
 
 export class StageEngine {
+  private static nextInstanceId = 1
   readonly canvas: HTMLCanvasElement
 
   private readonly container: HTMLElement
@@ -217,7 +248,8 @@ export class StageEngine {
   private savedPerspectiveOrbit: { radius: number; theta: number; phi: number; target: THREE.Vector3 } | null = null
   private readonly orthographicViewStates = new Map<Exclude<StageViewMode, 'perspective'>, { target: THREE.Vector3; halfHeight: number }>()
   private readonly options: StageEngineOptions
-  private readonly debugEnabled: boolean
+  private debugEnabled: boolean
+  private readonly stageRuntimeInstance = `stage-engine-${StageEngine.nextInstanceId++}`
   private selectionListener: SelectionListener | null = null
   private frameRequest: number | null = null
   private resizeObserver: ResizeObserver | null = null
@@ -225,6 +257,11 @@ export class StageEngine {
   private lastRenderSucceeded = false
   private selectedId: string | null = null
   private selectedIds: string[] = []
+  private marqueePreviewActive = false
+  private marqueePreviewIds: string[] = []
+  private marqueePreviewPrimaryId: string | null = null
+  private readonly selectionOutlines = new Map<string, THREE.BoxHelper>()
+  private entityReconciliationDepth = 0
   private tool: StageTool = 'select'
   private toolShortcuts: Partial<Record<StageTool, string>>
   private frameSelectedShortcut: string
@@ -235,10 +272,25 @@ export class StageEngine {
   private lastRayHits = '—'
   private lastAxisDragDebug: StageAxisDragDebug | null = null
   private lastScaleDragDebug: StageScaleDragDebug | null = null
+  private lastDebugEventOrigin = 'init'
+  private lastSelectionEvent = 'NONE'
+  private lastNavigationEvent = 'NONE'
+  private lastPointerEvent = 'NONE'
+  private lastEmptyClickEvent = 'NONE'
+  private lastSelectionCallbackPayload = 'NONE'
+  private lastDeselectionCallback = 'NONE'
+  private lastMarqueeFinalHitIds: string[] = []
+  private lastMarqueePreviousSelectedIds: string[] = []
+  private lastMarqueeNextSelectedIds: string[] = []
+  private lastMarqueeCallbackPayload = 'NONE'
+  private recentInteractionEvents: string[] = []
+  private entityReconciliationCount = 0
+  private lastEntityReconciliation = 'NONE'
   private viewMode: StageViewMode = 'perspective'
   private isometricCorner: StageIsometricCorner | null = null
   private orthographicHalfHeight = 8
   private shiftKeyActive = false
+  private spaceKeyActive = false
   private snapEnabled = false
   private snapGridSize = 0.1
   private rotationSnapEnabled = false
@@ -293,6 +345,11 @@ export class StageEngine {
     this.options.onToolChanged?.(tool)
     this.emitDebug()
     this.requestRender()
+  }
+
+  setDebugEnabled(enabled: boolean): void {
+    this.debugEnabled = enabled
+    if (enabled) this.emitDebug(true, 'diagnostics-enabled')
   }
 
   setShortcutBindings(toolShortcuts: Partial<Record<StageTool, string>>, frameSelectedShortcut = 'f'): void {
@@ -415,6 +472,8 @@ export class StageEngine {
       this.orbit.radius = Math.max(2.5, size * 1.8)
     }
     this.applyViewCamera()
+    this.lastNavigationEvent = 'frame-selected'
+    this.emitDebug(true, 'navigation:frame-selected')
   }
 
   getViewMode(): StageViewMode {
@@ -438,6 +497,8 @@ export class StageEngine {
       this.viewMode = mode
       this.editorCamera = this.perspectiveCamera
       this.applyViewCamera()
+      this.lastNavigationEvent = 'view-perspective'
+      this.emitDebug(true, 'navigation:view-perspective')
       this.options.onViewChanged?.('perspective')
       return
     }
@@ -459,6 +520,8 @@ export class StageEngine {
     this.viewMode = mode
     this.editorCamera = this.orthographicCamera
     this.applyViewCamera()
+    this.lastNavigationEvent = `view-${mode}`
+    this.emitDebug(true, `navigation:view-${mode}`)
     this.options.onViewChanged?.(mode)
   }
 
@@ -471,6 +534,8 @@ export class StageEngine {
     this.viewMode = 'perspective'
     this.editorCamera = this.perspectiveCamera
     this.applyViewCamera()
+    this.lastNavigationEvent = `view-isometric-${corner}`
+    this.emitDebug(true, `navigation:view-isometric-${corner}`)
     this.options.onViewChanged?.(corner)
   }
 
@@ -495,9 +560,11 @@ export class StageEngine {
     Object.assign(this.orbit, stageOrbitAfterPointerDelta(this.orbit, deltaX, deltaY))
     this.options.onViewChanged?.('perspective')
     this.applyViewCamera()
+    this.lastNavigationEvent = 'view-cube-orbit'
+    this.emitDebug(true, 'navigation:view-cube-orbit')
   }
 
-  addEntity(entity: { id: string; sceneId?: string; type: StageEntityType; root: THREE.Group; name?: string; getTransformPivot?: () => THREE.Vector3; getTransformSnapshot?: () => Pick<StageTransform, 'position' | 'rotation' | 'scale'>; applyTransform?: (transform: Pick<StageTransform, 'position' | 'rotation' | 'scale'>) => void; setSelected?: (selected: boolean, primary?: boolean) => void; setSnapPreview?: (active: boolean) => void; dispose?: () => void; transformable?: boolean; groupTransformable?: boolean; scalable?: boolean }): void {
+  addEntity(entity: { id: string; sceneId?: string; type: StageEntityType; root: THREE.Group; selectionBounds?: THREE.Object3D; name?: string; getTransformPivot?: () => THREE.Vector3; getTransformSnapshot?: () => Pick<StageTransform, 'position' | 'rotation' | 'scale'>; applyTransform?: (transform: Pick<StageTransform, 'position' | 'rotation' | 'scale'>) => void; setSelected?: (selected: boolean, primary?: boolean) => void; setSnapPreview?: (active: boolean) => void; dispose?: () => void; transformable?: boolean; groupTransformable?: boolean; scalable?: boolean }): void {
     this.removeEntity(entity.id)
     const registered: StageEntity = { ...entity, name: entity.name ?? entity.id }
     registered.root.userData.entityId = registered.id
@@ -505,17 +572,54 @@ export class StageEngine {
     this.entities.set(entity.id, registered)
     this.selectableRoots.push(entity.root)
     this.scene.add(entity.root)
+    this.applySelectionVisuals()
     this.updateGizmo()
     this.requestRender()
+  }
+
+  /**
+   * Apply a runtime entity reconciliation as one selection transaction.
+   * Runtime replacement is common when a visual proxy changes shape. During
+   * that short window the old entity is removed before the replacement is
+   * registered; selection must not be reported as cleared in between.
+   */
+  reconcileEntities(reconcile: () => void): void {
+    this.entityReconciliationDepth += 1
+    let thrown: unknown
+    let didThrow = false
+    try {
+      reconcile()
+    } catch (error) {
+      didThrow = true
+      thrown = error
+      this.lastEntityReconciliation = 'failed'
+    }
+    this.entityReconciliationDepth -= 1
+    if (this.entityReconciliationDepth === 0) {
+      this.entityReconciliationCount += 1
+      if (!didThrow) this.lastEntityReconciliation = 'completed'
+      const resolveSelectionId = this.options.resolveSelectionId ?? ((entityId: string) => entityId)
+      const normalized = normalizeSelection(this.selectedIds.map(resolveSelectionId), this.selectedId ? resolveSelectionId(this.selectedId) : null, new Set(this.entities.keys()))
+      const selectionChanged = normalized.primaryId !== this.selectedId || normalized.ids.length !== this.selectedIds.length || normalized.ids.some((id, index) => id !== this.selectedIds[index])
+      if (selectionChanged) this.select(normalized.ids, normalized.primaryId)
+      else {
+        this.applySelectionVisuals()
+        this.updateGizmo()
+        this.requestRender()
+      }
+    }
+    if (didThrow) throw thrown
   }
 
   removeEntity(entityId: string): void {
     const entity = this.entities.get(entityId)
     if (!entity) return
-    if (this.selectedIds.includes(entityId)) this.select(this.selectedIds.filter((id) => id !== entityId), this.selectedId === entityId ? null : this.selectedId)
+    if (this.selectedIds.includes(entityId) && this.entityReconciliationDepth === 0) this.select(this.selectedIds.filter((id) => id !== entityId), this.selectedId === entityId ? null : this.selectedId)
     entity.root.removeFromParent()
     entity.dispose?.()
     this.entities.delete(entityId)
+    this.marqueePreviewIds = this.marqueePreviewIds.filter((id) => id !== entityId)
+    this.applySelectionVisuals()
     this.selectableRoots.splice(0, this.selectableRoots.length, ...this.selectableRoots.filter((root) => root !== entity.root))
     this.requestRender()
   }
@@ -655,6 +759,8 @@ export class StageEngine {
     this.perspectiveCamera.updateProjectionMatrix()
     this.configureOrthographicCamera(width / height)
     this.applyViewCamera()
+    this.lastNavigationEvent = 'resize'
+    this.emitDebug(true, 'navigation:resize')
   }
 
   dispose(): void {
@@ -665,6 +771,7 @@ export class StageEngine {
     if (!this.resizeObserver) window.removeEventListener('resize', this.handleWindowResize)
     this.removeInput()
     this.entities.forEach((entity) => entity.dispose?.())
+    this.clearSelectionOutlines()
     this.clearCameraPathOverlay()
     this.resources.forEach((resource) => resource.dispose())
     this.renderer.dispose()
@@ -702,9 +809,10 @@ export class StageEngine {
     event.preventDefault()
     if (this.drag?.button === 2) this.releasePointer(this.drag.pointerId)
     const hit = this.pick(event)
-    if (hit && this.selectedIds.length > 1 && this.selectedIds.includes(hit.id)) return
-    if (hit) this.select(hit.id)
-    this.options.onContextMenu?.(hit?.id ?? null, { clientX: event.clientX, clientY: event.clientY })
+    const logicalHit = this.logicalEntity(hit)
+    if (logicalHit && this.selectedIds.length > 1 && this.selectedIds.includes(logicalHit.id)) return
+    if (logicalHit) this.select(logicalHit.id)
+    this.options.onContextMenu?.(logicalHit?.id ?? null, { clientX: event.clientX, clientY: event.clientY })
   }
 
   private readonly handlePointerDown = (event: PointerEvent) => {
@@ -719,6 +827,8 @@ export class StageEngine {
       lastX: event.clientX,
       lastY: event.clientY,
       moved: false,
+      emptySpaceClick: false,
+      marqueeMode: (event.altKey ? 'subtract' : event.shiftKey ? 'add' : 'replace') as StageDrag['marqueeMode'],
       transformStarted: false,
       entity: null,
       handle: null,
@@ -751,11 +861,22 @@ export class StageEngine {
     }
 
     const marqueeModifier = event.metaKey || event.ctrlKey
-    const marqueeHit = event.button === 0 && marqueeModifier ? this.pick(event) : null
-    if (event.button === 0 && marqueeModifier && !marqueeHit && !this.pickGizmo(event) && !this.pickCameraPathKeyframe(event) && !this.pickCameraPathSegment(event)) {
-      this.drag = { ...base, mode: 'marquee' }
+    const marqueeHit = event.button === 0 && (marqueeModifier || this.tool === 'select') ? this.pick(event) : null
+    const marqueeEmpty = event.button === 0 && !marqueeHit && !this.pickGizmo(event) && !this.pickCameraPathKeyframe(event) && !this.pickCameraPathSegment(event)
+    const selectModeMarquee = this.tool === 'select' && !this.spaceKeyActive && !event.altKey && !event.shiftKey && !marqueeModifier
+    const modifierMarquee = !this.spaceKeyActive && !(event.altKey && event.shiftKey) && (marqueeModifier || event.shiftKey || event.altKey)
+    if (marqueeEmpty && (selectModeMarquee || modifierMarquee)) {
+      this.drag = { ...base, mode: 'marquee', emptySpaceClick: true }
       this.pointerMode = 'marquee'
-      this.options.onMarqueeChange?.({ left: event.clientX, top: event.clientY, width: 0, height: 0, additive: event.shiftKey })
+      // Keep the committed selection visible while the gesture is still a
+      // pending click. Only a drag beyond the movement threshold becomes a
+      // marquee preview; this prevents navigation/cancellation from making a
+      // valid selection appear to disappear before a selection is committed.
+      this.marqueePreviewActive = false
+      this.marqueePreviewIds = []
+      this.marqueePreviewPrimaryId = null
+      this.lastEmptyClickEvent = 'pending-empty-click'
+      this.options.onMarqueeChange?.({ left: event.clientX, top: event.clientY, width: 0, height: 0, additive: base.marqueeMode === 'add', subtractive: base.marqueeMode === 'subtract' })
     } else if (event.button === 2 || event.button === 1 || (event.button === 0 && event.altKey && event.shiftKey)) {
       this.drag = { ...base, mode: 'pan' }
       this.pointerMode = 'pan'
@@ -784,12 +905,13 @@ export class StageEngine {
         this.pointerMode = 'gizmo'
       } else {
         const hit = event.button === 0 ? this.pick(event) : null
-        if (hit && this.tool === 'move' && hit.transformable !== false && this.options.canTransformEntity?.(hit.id) !== false && this.options.canTransformGroup?.(this.selectedIds.includes(hit.id) ? this.selectedIds : [hit.id]) !== false) {
-          if (!this.selectedIds.includes(hit.id)) {
-            this.select(hit.id, null, event.shiftKey)
+        const logicalHit = this.logicalEntity(hit)
+        if (logicalHit && this.tool === 'move' && logicalHit.transformable !== false && this.options.canTransformEntity?.(logicalHit.id) !== false && this.options.canTransformGroup?.(this.selectedIds.includes(logicalHit.id) ? this.selectedIds : [logicalHit.id]) !== false) {
+          if (!this.selectedIds.includes(logicalHit.id)) {
+            this.select(logicalHit.id, null, event.shiftKey)
             base.selectionChangedOnDown = true
           }
-          this.drag = this.beginDirectMove(event, base, hit)
+          this.drag = this.beginDirectMove(event, base, logicalHit)
           this.pointerMode = 'move'
         } else {
           this.drag = { ...base, mode: 'orbit' }
@@ -799,8 +921,10 @@ export class StageEngine {
       }
       }
     }
+    this.recordInteractionEvent(`pointerdown:${this.pointerMode}`)
     event.preventDefault()
-    this.emitDebug()
+    this.lastPointerEvent = 'pointerdown'
+    this.emitDebug(false, 'pointerdown')
   }
 
   private readonly handlePointerMove = (event: PointerEvent) => {
@@ -816,6 +940,7 @@ export class StageEngine {
       this.requestTransformPermission(drag)
       return
     }
+    const gestureStarted = !drag.moved
     drag.moved = true
     drag.lastX = event.clientX
     drag.lastY = event.clientY
@@ -829,6 +954,8 @@ export class StageEngine {
     }
 
     if (drag.mode === 'orbit') {
+      if (gestureStarted) this.recordInteractionEvent('gesture:start:orbit')
+      this.lastNavigationEvent = 'pointermove-orbit'
       if (!stageViewModeIsOrthographic(this.viewMode)) {
         if (this.isometricCorner) {
           this.isometricCorner = null
@@ -840,8 +967,20 @@ export class StageEngine {
         this.applyViewCamera()
       }
     } else if (drag.mode === 'marquee') {
-      this.options.onMarqueeChange?.(this.marqueeRect(drag, event))
+      if (drag.emptySpaceClick) this.lastEmptyClickEvent = 'marquee-selection'
+      if (!this.marqueePreviewActive) {
+        this.marqueePreviewActive = true
+        this.marqueePreviewIds = []
+        this.marqueePreviewPrimaryId = null
+        this.recordInteractionEvent('gesture:start:marquee')
+        this.recordInteractionEvent('marquee:preview')
+      }
+      const rect = this.marqueeRect(drag, event)
+      this.updateMarqueePreview(drag, rect)
+      this.options.onMarqueeChange?.(rect)
     } else if (drag.mode === 'pan') {
+      if (gestureStarted) this.recordInteractionEvent('gesture:start:pan')
+      this.lastNavigationEvent = 'pointermove-pan'
       this.pan(deltaX, deltaY)
     } else if (drag.mode === 'move') {
       const shiftHeld = event.shiftKey || this.shiftKeyActive
@@ -859,14 +998,17 @@ export class StageEngine {
     }
     if (drag.transformStarted && drag.entity) this.emitTransformPreview(drag)
     event.preventDefault()
-    this.emitDebug()
+    this.lastPointerEvent = 'pointermove'
+    this.emitDebug(false, 'pointermove')
     this.requestRender()
   }
 
   private readonly handlePointerUp = (event: PointerEvent) => {
     if (this.disposed || !this.drag || this.drag.pointerId !== event.pointerId) return
     const drag = this.drag
-    if (!drag.moved && drag.button === 0) {
+    if (drag.button === 0 && drag.moved && drag.mode === 'marquee') {
+      this.finishMarquee(drag, event)
+    } else if (!drag.moved && drag.button === 0) {
       const hit = this.pick(event)
       if (drag.pathKeyframe || drag.pathSegmentId) {
         // Marker selection is already handled on pointerdown; it must never
@@ -874,13 +1016,20 @@ export class StageEngine {
       } else if (drag.mode === 'move') {
         // A Shift-click on an already selected object is a toggle, not a
         // zero-distance move. Unmodified clicks retain the current group.
-        if (!drag.selectionChangedOnDown && event.shiftKey && hit && this.selectedIds.includes(hit.id)) this.select(hit.id, null, true)
+        const logicalHit = this.logicalEntity(hit)
+        if (!drag.selectionChangedOnDown && event.shiftKey && logicalHit && this.selectedIds.includes(logicalHit.id)) this.select(logicalHit.id, null, true)
       } else if (drag.mode === 'marquee') {
-        if (drag.moved) this.finishMarquee(drag, event)
+        if (drag.emptySpaceClick && drag.marqueeMode === 'replace') {
+          this.lastEmptyClickEvent = 'empty-click-cleared'
+          this.select(null)
+        }
       } else if (drag.mode !== 'gizmo') {
-        this.select(hit?.id ?? null, null, event.shiftKey)
+        const logicalHit = this.logicalEntity(hit)
+        if (!logicalHit && !event.shiftKey) this.lastEmptyClickEvent = 'empty-click-cleared'
+        this.select(logicalHit?.id ?? null, null, event.shiftKey)
       }
     }
+    this.recordInteractionEvent(`pointerup:${drag.mode}`)
     if (drag.moved && drag.transformStarted && drag.mode === 'move' && drag.pathKeyframe) {
       this.options.onCameraPathPointMoveEnd?.(drag.pathKeyframe, this.pathDragPosition(drag))
       this.requestRender()
@@ -891,35 +1040,25 @@ export class StageEngine {
     }
     this.releasePointer(event.pointerId)
     event.preventDefault()
-    this.emitDebug(true)
+    this.lastPointerEvent = 'pointerup'
+    this.emitDebug(true, 'pointerup')
   }
 
-  private marqueeRect(drag: StageDrag, event: PointerEvent): { left: number; top: number; width: number; height: number; additive: boolean } {
-    return {
-      left: Math.min(drag.startX, event.clientX),
-      top: Math.min(drag.startY, event.clientY),
-      width: Math.abs(event.clientX - drag.startX),
-      height: Math.abs(event.clientY - drag.startY),
-      additive: drag.shiftActive,
-    }
+  private marqueeRect(drag: StageDrag, event: PointerEvent) {
+    return stageMarqueeRect(drag.startX, drag.startY, event.clientX, event.clientY, drag.marqueeMode)
   }
 
   private finishMarquee(drag: StageDrag, event: PointerEvent): void {
     const rect = this.marqueeRect(drag, event)
-    const canvasRect = this.getCanvasRect()
-    const minX = rect.left
-    const maxX = rect.left + rect.width
-    const minY = rect.top
-    const maxY = rect.top + rect.height
-    const hits = Array.from(this.entities.values()).filter((entity) => {
-      entity.root.updateMatrixWorld(true)
-      const anchor = entity.getTransformPivot?.() ?? entity.root.getWorldPosition(new THREE.Vector3())
-      const point = stageProjectToClient(anchor, this.editorCamera, canvasRect)
-      return point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY
-    }).map((entity) => entity.id)
-    const ids = rect.additive ? [...this.selectedIds, ...hits] : hits
-    const primaryId = hits[hits.length - 1] ?? (rect.additive ? this.selectedId : null)
-    this.select(ids, primaryId)
+    const hits = this.marqueeHitIds(rect)
+    this.lastMarqueeFinalHitIds = [...hits]
+    this.lastMarqueePreviousSelectedIds = [...this.selectedIds]
+    const selection = stageMarqueeSelection(this.selectedIds, hits, this.selectedId, drag.marqueeMode)
+    this.lastMarqueeNextSelectedIds = [...selection.ids]
+    this.select(selection.ids, selection.primaryId)
+    this.lastMarqueeCallbackPayload = JSON.stringify(this.getSelection())
+    this.recordInteractionEvent(`marquee:commit:${hits.length}→${selection.ids.length}`)
+    this.clearMarqueePreview()
     this.options.onMarqueeSelection?.(this.getSelection())
     this.options.onMarqueeChange?.(null)
   }
@@ -927,12 +1066,20 @@ export class StageEngine {
   private readonly handlePointerCancel = (event: PointerEvent) => {
     if (!this.drag || this.drag.pointerId !== event.pointerId) return
     this.releasePointer(event.pointerId)
-    this.emitDebug()
+    this.lastPointerEvent = 'pointercancel'
+    this.emitDebug(true, 'pointercancel')
   }
 
   private readonly handleWheel = (event: WheelEvent) => {
     if (this.disposed) return
+    // A wheel/trackpad gesture is navigation, never the completion of a
+    // pointer selection gesture. Clear only navigation/marquee drags so a
+    // delayed pointerup cannot commit an empty-click selection after zoom.
+    if (this.drag && (this.drag.mode === 'marquee' || this.drag.mode === 'orbit' || this.drag.mode === 'pan')) {
+      this.releasePointer(this.drag.pointerId)
+    }
     const input = classifyWheelInput(event)
+    this.lastNavigationEvent = `wheel:${input}`
     if (input === 'trackpad-pan') this.pan(event.deltaX, event.deltaY)
     else if (stageViewModeIsOrthographic(this.viewMode)) {
       this.orthographicHalfHeight = THREE.MathUtils.clamp(stageZoomDistance(this.orthographicHalfHeight, event.deltaY), 1, 100)
@@ -940,11 +1087,31 @@ export class StageEngine {
     } else this.orbit.radius = stageZoomDistance(this.orbit.radius, event.deltaY)
     this.applyViewCamera()
     event.preventDefault()
-    this.emitDebug()
+    this.lastPointerEvent = 'wheel'
+    this.emitDebug(true, 'wheel')
     this.requestRender()
   }
 
   private readonly handleKeyDown = (event: KeyboardEvent) => {
+    if (event.code === 'Space') {
+      if (this.isTypingTarget(event.target)) return
+      this.spaceKeyActive = true
+      event.preventDefault()
+      return
+    }
+    if (event.key === 'Escape') {
+      if (this.drag?.mode === 'marquee') {
+        this.releasePointer(this.drag.pointerId)
+        event.preventDefault()
+        this.emitDebug()
+        return
+      }
+      if (event.target === this.canvas && !this.isTypingTarget(event.target) && (this.selectedIds.length > 0 || this.selectedId !== null)) {
+        this.select(null)
+        event.preventDefault()
+        return
+      }
+    }
     if (event.key === 'Shift') {
       this.shiftKeyActive = true
       return
@@ -978,6 +1145,10 @@ export class StageEngine {
   }
 
   private readonly handleKeyUp = (event: KeyboardEvent) => {
+    if (event.code === 'Space') {
+      this.spaceKeyActive = false
+      return
+    }
     if (event.key !== 'Shift') return
     this.shiftKeyActive = false
     if (this.drag?.mode === 'move') {
@@ -998,6 +1169,7 @@ export class StageEngine {
     this.pointerMode = 'idle'
     this.options.onAxisLockChange?.(null)
     this.setHover(null)
+    this.clearMarqueePreview()
     this.options.onMarqueeChange?.(null)
   }
 
@@ -1012,37 +1184,142 @@ export class StageEngine {
   private select(entityOrIds: string | readonly string[] | null, primaryId: string | null = null, additive = false): void {
     if (additive && entityOrIds === null) return
     let nextSelection
+    const resolveSelectionId = this.options.resolveSelectionId ?? ((entityId: string) => entityId)
     if (additive && typeof entityOrIds === 'string') {
-      nextSelection = toggleSelection({ ids: this.selectedIds, primaryId: this.selectedId }, entityOrIds, new Set(this.entities.keys()))
+      nextSelection = toggleSelection({ ids: this.selectedIds, primaryId: this.selectedId }, resolveSelectionId(entityOrIds), new Set(this.entities.keys()))
     } else {
-      const ids = typeof entityOrIds === 'string' ? [entityOrIds] : entityOrIds ? [...entityOrIds] : []
-      nextSelection = normalizeSelection(ids, primaryId ?? (typeof entityOrIds === 'string' ? entityOrIds : null), new Set(this.entities.keys()))
+      const ids = (typeof entityOrIds === 'string' ? [entityOrIds] : entityOrIds ? [...entityOrIds] : []).map(resolveSelectionId)
+      const resolvedPrimary = primaryId ? resolveSelectionId(primaryId) : typeof entityOrIds === 'string' ? resolveSelectionId(entityOrIds) : null
+      nextSelection = normalizeSelection(ids, resolvedPrimary, new Set(this.entities.keys()))
     }
     const ids = nextSelection.ids
     primaryId = nextSelection.primaryId
-    if (primaryId === this.selectedId && ids.length === this.selectedIds.length && ids.every((id, index) => id === this.selectedIds[index])) return
+    if (primaryId === this.selectedId && ids.length === this.selectedIds.length && ids.every((id, index) => id === this.selectedIds[index])) {
+      this.applySelectionVisuals()
+      return
+    }
     this.selectedIds = ids
     this.selectedId = primaryId
+    this.applySelectionVisuals()
+    this.selectedEntity?.root.updateMatrixWorld(true)
+    this.updateGizmo()
+    const callbackPayload = { ids: [...this.selectedIds], primaryId: this.selectedId }
+    this.lastSelectionEvent = this.selectedIds.length === 0 ? 'cleared' : 'committed'
+    this.lastSelectionCallbackPayload = JSON.stringify(callbackPayload)
+    if (this.selectedIds.length === 0) this.lastDeselectionCallback = 'selection-callback:cleared'
+    this.selectionListener?.(callbackPayload)
+    this.emitDebug(true, 'selection-commit')
+    this.requestRender()
+  }
+
+  private marqueeHitIds(rect: { left: number; top: number; width: number; height: number }): string[] {
+    const canvasRect = this.getCanvasRect()
+    const resolveSelectionId = this.options.resolveSelectionId ?? ((entityId: string) => entityId)
+    return Array.from(this.entities.values()).filter((entity) => {
+      if (!entity.root.visible) return false
+      entity.root.updateMatrixWorld(true)
+      return stageProjectedBoundsIntersectMarquee(this.selectionBoundsObject(entity), this.editorCamera, canvasRect, rect)
+    }).map((entity) => resolveSelectionId(entity.id)).filter((id, index, all) => all.indexOf(id) === index)
+  }
+
+  private updateMarqueePreview(drag: StageDrag, rect: { left: number; top: number; width: number; height: number; additive: boolean; subtractive: boolean }): void {
+    const hits = this.marqueeHitIds(rect)
+    const preview = stageMarqueeSelection(this.selectedIds, hits, this.selectedId, drag.marqueeMode)
+    this.marqueePreviewIds = preview.ids
+    this.marqueePreviewPrimaryId = preview.primaryId
+    this.applySelectionVisuals()
+  }
+
+  private recordInteractionEvent(event: string): void {
+    this.recentInteractionEvents = [...this.recentInteractionEvents, event].slice(-16)
+  }
+
+  private clearMarqueePreview(): void {
+    if (!this.marqueePreviewActive && this.marqueePreviewIds.length === 0) return
+    this.marqueePreviewActive = false
+    this.marqueePreviewIds = []
+    this.marqueePreviewPrimaryId = null
+    this.applySelectionVisuals()
+  }
+
+  private applySelectionVisuals(): void {
+    const canonicalIds = this.marqueePreviewActive ? this.marqueePreviewIds : this.selectedIds
+    const visualIds = new Set(expandSelectionVisualIds(canonicalIds, this.options.resolveSelectionVisualIds))
+    const primaryVisualIds = new Set(expandSelectionVisualIds(this.marqueePreviewActive ? (this.marqueePreviewPrimaryId ? [this.marqueePreviewPrimaryId] : []) : (this.selectedId ? [this.selectedId] : []), this.options.resolveSelectionVisualIds))
     this.entities.forEach((entity) => {
-      const selected = this.selectedIds.includes(entity.id)
-      const primary = entity.id === this.selectedId
+      const selected = visualIds.has(entity.id)
+      const primary = primaryVisualIds.has(entity.id)
+      const color = this.marqueePreviewActive ? MARQUEE_PREVIEW_COLOR : SELECTION_COLOR
       entity.setSelected?.(selected, primary)
-      entity.material?.emissive.set(selected ? SELECTION_COLOR : '#000000')
-      if (entity.material) entity.material.emissiveIntensity = selected ? (primary ? 0.35 : 0.2) : 0
+      entity.material?.emissive.set(selected ? color : '#000000')
+      if (entity.material) entity.material.emissiveIntensity = selected ? (primary ? 0.5 : 0.34) : 0
       entity.root.userData.stageSelected = selected
       entity.root.userData.stagePrimary = primary
       entity.root.traverse((object) => {
         if (object instanceof THREE.Mesh && object.material instanceof THREE.MeshStandardMaterial) {
-          object.material.emissive.set(selected ? SELECTION_COLOR : '#000000')
-          object.material.emissiveIntensity = selected ? (primary ? 0.35 : 0.2) : 0
+          object.material.emissive.set(selected ? color : '#000000')
+          object.material.emissiveIntensity = selected ? (primary ? 0.5 : 0.34) : 0
         }
       })
     })
-    this.selectedEntity?.root.updateMatrixWorld(true)
-    this.updateGizmo()
-    this.selectionListener?.({ ids: [...this.selectedIds], primaryId: this.selectedId })
-    this.emitDebug()
-    this.requestRender()
+    this.updateSelectionOutlines(visualIds)
+  }
+
+  private refreshSelectionOutlines(): void {
+    const visibleSelection = this.marqueePreviewActive ? this.marqueePreviewIds : this.selectedIds
+    this.updateSelectionOutlines(new Set(expandSelectionVisualIds(visibleSelection, this.options.resolveSelectionVisualIds)))
+  }
+
+  private updateSelectionOutlines(visualIds: ReadonlySet<string>): void {
+    this.selectionOutlines.forEach((helper, id) => {
+      if (!this.entities.has(id)) {
+        helper.removeFromParent()
+        helper.geometry.dispose()
+        ;(helper.material as THREE.Material).dispose()
+        this.selectionOutlines.delete(id)
+        return
+      }
+      if (visualIds.has(id) && this.entities.get(id)?.root.visible) {
+        this.entities.get(id)?.root.updateMatrixWorld(true)
+        helper.update()
+        helper.visible = true
+      } else {
+        helper.visible = false
+      }
+    })
+    visualIds.forEach((id) => {
+      const entity = this.entities.get(id)
+      if (!entity || !entity.root.visible) return
+      let helper = this.selectionOutlines.get(id)
+      if (!helper) {
+        helper = new THREE.BoxHelper(this.selectionBoundsObject(entity), MARQUEE_PREVIEW_COLOR)
+        helper.name = `Selection Outline: ${id}`
+        helper.renderOrder = 1001
+        helper.frustumCulled = false
+        helper.userData.stageSelectionHelper = true
+        helper.raycast = () => undefined
+        const material = helper.material as THREE.LineBasicMaterial
+        material.transparent = true
+        material.opacity = 0.95
+        material.depthTest = false
+        material.depthWrite = false
+        this.selectionOutlines.set(id, helper)
+        this.scene.add(helper)
+      }
+      entity.root.updateMatrixWorld(true)
+      helper.update()
+      helper.visible = true
+      ;(helper.material as THREE.LineBasicMaterial).color.set(this.marqueePreviewActive ? MARQUEE_PREVIEW_COLOR : SELECTION_COLOR)
+    })
+  }
+
+  private clearSelectionOutlines(): void {
+    this.selectionOutlines.forEach((helper) => {
+      helper.removeFromParent()
+      helper.geometry.dispose()
+      ;(helper.material as THREE.Material).dispose()
+    })
+    this.selectionOutlines.clear()
   }
 
   private beginTransform(drag: StageDrag): void {
@@ -1118,7 +1395,11 @@ export class StageEngine {
   }
 
   private entityBounds(entity: StageEntity): THREE.Box3 {
-    return new THREE.Box3().setFromObject(entity.root)
+    return new THREE.Box3().setFromObject(this.selectionBoundsObject(entity))
+  }
+
+  private selectionBoundsObject(entity: StageEntity): THREE.Object3D {
+    return entity.selectionBounds ?? entity.root
   }
 
   private transformPivot(entity: StageEntity): THREE.Vector3 {
@@ -1161,6 +1442,12 @@ export class StageEngine {
     let current: THREE.Object3D | null = hit.object
     while (current && !this.selectableRoots.includes(current as THREE.Group)) current = current.parent
     return current ? this.entities.get(current.userData.entityId as string) ?? null : null
+  }
+
+  private logicalEntity(entity: StageEntity | null): StageEntity | null {
+    if (!entity) return null
+    const logicalId = this.options.resolveSelectionId?.(entity.id) ?? entity.id
+    return this.entities.get(logicalId) ?? entity
   }
 
   private pickCameraPathKeyframe(event: { clientX: number; clientY: number }): CameraPathKeyframe | null {
@@ -1485,6 +1772,7 @@ export class StageEngine {
       this.editorCamera.lookAt(this.orbitTarget)
     }
     this.editorCamera.updateMatrixWorld(true)
+    this.refreshSelectionOutlines()
     this.options.onViewOrientationChanged?.([
       this.editorCamera.quaternion.x,
       this.editorCamera.quaternion.y,
@@ -1515,8 +1803,8 @@ export class StageEngine {
 
   private relevantBounds(): THREE.Box3 {
     const bounds = new THREE.Box3()
-    const roots = this.entities.size > 0 ? Array.from(this.entities.values(), (entity) => entity.root) : []
-    roots.forEach((root) => bounds.expandByObject(root))
+    const entities = this.entities.size > 0 ? Array.from(this.entities.values()) : []
+    entities.forEach((entity) => bounds.union(this.entityBounds(entity)))
     if (bounds.isEmpty()) bounds.setFromCenterAndSize(new THREE.Vector3(0, 1, 0), new THREE.Vector3(4, 2, 4))
     return bounds
   }
@@ -1584,15 +1872,38 @@ export class StageEngine {
     })
   }
 
-  private emitDebug(force = false): void {
+  private emitDebug(force = false, eventOrigin = 'state'): void {
     const drag = this.drag
     if (!force && !this.debugEnabled && drag?.moved && (drag.mode === 'move' || drag.mode === 'gizmo')) return
+    this.lastDebugEventOrigin = eventOrigin
     this.options.onDebug?.({
+      stageRuntimeInstance: this.stageRuntimeInstance,
+      stageCameraInstance: `${this.editorCamera.type}:${this.editorCamera.uuid}`,
+      eventOrigin: this.lastDebugEventOrigin,
       tool: this.tool,
       pointerMode: this.pointerMode,
       ndc: this.lastNdc,
       rayHits: this.lastRayHits,
       selectedId: this.selectedId ?? 'NONE',
+      selectedIds: [...this.selectedIds],
+      selectionOutlineTargetIds: Array.from(this.selectionOutlines.entries()).filter(([, helper]) => helper.visible).map(([id]) => id).sort(),
+      selectionOutlineCount: Array.from(this.selectionOutlines.values()).filter((helper) => helper.visible).length,
+      lastSelectionEvent: this.lastSelectionEvent,
+      lastNavigationEvent: this.lastNavigationEvent,
+      lastPointerEvent: this.lastPointerEvent,
+      lastEmptyClickEvent: this.lastEmptyClickEvent,
+      lastSelectionCallbackPayload: this.lastSelectionCallbackPayload,
+      lastDeselectionCallback: this.lastDeselectionCallback,
+      marqueePreviewActive: this.marqueePreviewActive,
+      marqueePreviewIds: [...this.marqueePreviewIds],
+      marqueeFinalHitIds: [...this.lastMarqueeFinalHitIds],
+      marqueePreviousSelectedIds: [...this.lastMarqueePreviousSelectedIds],
+      marqueeNextSelectedIds: [...this.lastMarqueeNextSelectedIds],
+      marqueeCallbackPayload: this.lastMarqueeCallbackPayload,
+      recentInteractionEvents: [...this.recentInteractionEvents],
+      entityReconciliationCount: this.entityReconciliationCount,
+      lastEntityReconciliation: this.lastEntityReconciliation,
+      pointerCaptureOwner: this.drag ? String(this.drag.pointerId) : 'NONE',
       axisDrag: this.lastAxisDragDebug ? { ...this.lastAxisDragDebug, resultPosition: [...this.lastAxisDragDebug.resultPosition] } : null,
       scaleDrag: this.lastScaleDragDebug ? { ...this.lastScaleDragDebug, startScale: [...this.lastScaleDragDebug.startScale], resultScale: [...this.lastScaleDragDebug.resultScale] } : null,
     })
@@ -1603,6 +1914,7 @@ export class StageEngine {
     this.frameRequest = window.requestAnimationFrame(() => {
       this.frameRequest = null
       try {
+        this.refreshSelectionOutlines()
         this.renderer.render(this.scene, this.editorCamera)
         this.lastRenderSucceeded = true
       } catch (error) {

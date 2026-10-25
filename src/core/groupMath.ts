@@ -31,6 +31,18 @@ export function groupForChild(scene: SceneDocument, entityId: string): SceneGrou
   return scene.groups.find((group) => group.childIds.includes(entityId)) ?? null
 }
 
+/** Resolve a rendered child to the logical selection target for its group. */
+export function groupSelectionId(entityId: string, groups: readonly SceneGroup[]): string {
+  return groups.find((group) => group.childIds.includes(entityId))?.id ?? entityId
+}
+
+/** Collapse rendered child hits to one logical target per persistent group. */
+export function collapseSelectionToGroups(ids: readonly string[], primaryId: string | null, groups: readonly SceneGroup[]): { ids: string[]; primaryId: string | null } {
+  const collapsed = ids.map((id) => groupSelectionId(id, groups)).filter((id, index, all) => all.indexOf(id) === index)
+  const collapsedPrimary = primaryId ? groupSelectionId(primaryId, groups) : null
+  return { ids: collapsed, primaryId: collapsedPrimary && collapsed.includes(collapsedPrimary) ? collapsedPrimary : collapsed[collapsed.length - 1] ?? null }
+}
+
 export function evaluateGroupTransforms<T extends GroupableEntity>(entities: readonly T[], groups: readonly SceneGroup[]): T[] {
   return entities.map((entity) => {
     const group = groups.find((candidate) => candidate.childIds.includes(entity.id))

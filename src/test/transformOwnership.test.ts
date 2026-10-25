@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createActorDocument, createCameraDocument, createEmptySceneDocument } from '../core/sceneDocument'
+import { createActorDocument, createCameraDocument, createEmptySceneDocument, type SceneGroup } from '../core/sceneDocument'
 import { CAMERA_DATABASE } from '../core/cameraDatabase'
 import { createDefaultProps } from '../scene/testEntities'
 import { captureTimelineValue, shouldApplyTimelineEvaluation, shouldApplyTimelinePropertyEvaluation, commitTimelineTransform, timelineEditingEnabled } from '../timeline/transformOwnership'
@@ -65,6 +65,25 @@ describe('V2.6B timeline transform ownership and keyframe capture', () => {
     const propResult = commitTimelineTransform({ ...createEmptySceneDocument(), props: [prop] }, change(prop.id))
     expect(cameraResult.document.cameras[0].position).toEqual([2, 0, -3])
     expect(propResult.document.props[0].position).toEqual([2, 0, -3])
+  })
+
+  it('commits Group inspector/gizmo position edits as canonical absolute group state', () => {
+    const actor = createActorDocument('actor-01', 'Actor 01', [1, 0, 0])
+    const group: SceneGroup = {
+      id: 'group-01',
+      name: 'Group 01',
+      position: [0, 0, 0],
+      rotation: [0, 0, 0],
+      pivot: [1, 0, 0],
+      childIds: [actor.id],
+    }
+    const document = { ...createEmptySceneDocument(), actors: [actor], groups: [group] }
+    const first = commitTimelineTransform(document, { entityId: group.id, position: [2, 0, 0], rotation: group.rotation, editedProperty: 'position' })
+    const second = commitTimelineTransform(first.document, { entityId: group.id, position: [0, 3, 0], rotation: group.rotation, editedProperty: 'position' })
+
+    expect(first.document.groups[0].position).toEqual([2, 0, 0])
+    expect(second.document.groups[0].position).toEqual([0, 3, 0])
+    expect(second.document.actors[0].position).toEqual(actor.position)
   })
 
   it('captures and commits animated Prop transforms through the generic ownership path', () => {

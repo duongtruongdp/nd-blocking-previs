@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { ActorDocument, CameraDocument, OpeningDocument, PropDocument, RationalFrameRate, SceneGroup, SunDocument, WallDocument } from '../core/sceneDocument'
 import type { ProjectSceneEntry } from '../core/projectDocument'
 import type { ShotDocument } from '../core/shotDocument'
@@ -55,12 +56,46 @@ type V2ScenePanelProps = {
 export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, openings, lights, cameras, groups, activeCameraId, selectedEntityIds, sectionState, onSectionToggle, onSelectScene, onAddScene, onRenameScene, onDuplicateScene, onDeleteScene, onImportScene, onExportScene, onAddActor, onAddProp, onAddWall, onAddOpening, onAddSun, onAddCamera, onSetActiveCamera, onSelectEntity, onBeginEntityRename, shots, activeShotId, onCreateShot, onSelectShot, onRenameShot, onDuplicateShot, onDeleteShot, onMoveShot, onCaptureShotThumbnail, onShotNotesChange, onShotRangeChange, onPreviewShot, onAddShotToMaster }: V2ScenePanelProps) {
   const [addOpen, setAddOpen] = useState(false)
   const [sceneMenuId, setSceneMenuId] = useState<string | null>(null)
+  const [sceneAddMenuOpen, setSceneAddMenuOpen] = useState(false)
+  const [sceneAddMenuPosition, setSceneAddMenuPosition] = useState<{ top: number; left: number } | null>(null)
+  const sceneAddMenuButtonRef = useRef<HTMLButtonElement>(null)
   const [shotMenuId, setShotMenuId] = useState<string | null>(null)
   const [editingSceneId, setEditingSceneId] = useState<string | null>(null)
   const [editingSceneName, setEditingSceneName] = useState('')
   const [editingShotId, setEditingShotId] = useState<string | null>(null)
   const [editingShotName, setEditingShotName] = useState('')
   const [entityMenu, setEntityMenu] = useState<{ entityId: string; x: number; y: number } | null>(null)
+
+  useEffect(() => {
+    if (!sceneAddMenuOpen) return
+    const updatePosition = () => {
+      const rect = sceneAddMenuButtonRef.current?.getBoundingClientRect()
+      if (!rect) return
+      setSceneAddMenuPosition({ top: rect.bottom + 4, left: Math.max(8, rect.right - 164) })
+    }
+    const dismiss = (event: globalThis.PointerEvent) => {
+      const target = event.target
+      if (target instanceof Element && (target.closest('.v2-scenes-section') || target.closest('.v2-section-popup-menu'))) return
+      setSceneAddMenuOpen(false)
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setSceneAddMenuOpen(false)
+      sceneAddMenuButtonRef.current?.focus()
+    }
+    updatePosition()
+    window.addEventListener('pointerdown', dismiss)
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+    return () => {
+      window.removeEventListener('pointerdown', dismiss)
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
+    }
+  }, [sceneAddMenuOpen])
 
   useEffect(() => {
     if (!entityMenu) return
@@ -119,7 +154,6 @@ export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, open
         <div className="v2-add-wrap">
           <button className="v2-add-button" onClick={() => setAddOpen((open) => !open)} type="button">+ Add</button>
           {addOpen ? <div className="v2-add-menu">
-            <AddMenuItem kind="scene" label="Scene" onClick={() => { onAddScene(); setAddOpen(false) }} />
             <AddMenuItem kind="shot" label="Shot" onClick={() => { onCreateShot(); setAddOpen(false) }} />
             <AddMenuItem kind="actor" label="Actor" onClick={addActor} />
             <AddMenuItem kind="camera" label="Camera" onClick={addCamera} />
@@ -134,7 +168,9 @@ export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, open
           </div> : null}
         </div>
       </div>
-      <SidebarSection section="scenes" label="Scenes" count={scenes.length} expanded={sectionState.scenes} onToggle={onSectionToggle} className="v2-scenes-section">
+      <SidebarSection section="scenes" label="Scenes" count={scenes.length} expanded={sectionState.scenes} onToggle={onSectionToggle} className="v2-scenes-section" actions={<>
+        <button className="v2-section-action-button v2-inline-add" aria-label="Add or Import Scene" aria-expanded={sceneAddMenuOpen} aria-haspopup="menu" onClick={(event) => { event.stopPropagation(); setSceneAddMenuOpen((open) => !open) }} onPointerDown={(event) => event.stopPropagation()} ref={sceneAddMenuButtonRef} title="Add or Import Scene" type="button">+</button>
+      </>}>
         <div className="v2-scene-list">
           {scenes.map((scene, index) => <div className={`v2-scene-row${scene.id === activeSceneId ? ' is-active' : ''}`} key={scene.id}>
             <button className="v2-scene-select" onClick={() => onSelectScene(scene.id)} type="button"><span className="v2-scene-index">{String(index + 1).padStart(2, '0')}</span>{editingSceneId === scene.id ? <input autoFocus value={editingSceneName} onChange={(event) => setEditingSceneName(event.target.value)} onBlur={finishSceneRename} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); finishSceneRename() } if (event.key === 'Escape') setEditingSceneId(null) }} aria-label="Scene name" /> : <span>{scene.name}</span>}</button>
@@ -142,9 +178,8 @@ export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, open
             {sceneMenuId === scene.id ? <div className="v2-scene-row-menu"><button onClick={() => renameScene(scene)} type="button">Rename</button><button onClick={() => { onDuplicateScene(scene.id); setSceneMenuId(null) }} type="button">Duplicate</button><button onClick={() => { onExportScene(scene.id); setSceneMenuId(null) }} type="button">Export Scene</button><button className="is-danger" disabled={scenes.length <= 1} onClick={() => { onDeleteScene(scene.id); setSceneMenuId(null) }} type="button">Delete</button></div> : null}
           </div>)}
         </div>
-        <div className="v2-scene-actions"><button className="v2-small-action" onClick={onAddScene} type="button">+ Add Scene</button><button className="v2-small-action" onClick={onImportScene} type="button">Import Scene</button><button className="v2-small-action" onClick={() => onExportScene()} type="button">Export Scene</button></div>
       </SidebarSection>
-      <SidebarSection section="shots" label="Shots" count={shots.length} expanded={sectionState.shots} onToggle={onSectionToggle} className="v2-shot-section" actions={<button className="v2-inline-add" onClick={onCreateShot} type="button" title="Create Shot">+</button>}>
+      <SidebarSection section="shots" label="Shots" count={shots.length} expanded={sectionState.shots} onToggle={onSectionToggle} className="v2-shot-section" actions={<button className="v2-section-action-button v2-inline-add" aria-label="Add Shot" onClick={(event) => { event.stopPropagation(); onCreateShot() }} onPointerDown={(event) => event.stopPropagation()} type="button" title="Add Shot">+</button>}>
         {shots.length === 0 ? <p>No Shots yet. Create one from the active Camera.</p> : <div className="v2-shot-list">
           {shots.map((shot, index) => {
             const shotScene = scenes.find((scene) => scene.id === shot.sceneId)?.scene
@@ -175,19 +210,19 @@ export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, open
         </div> : null}
       </SidebarSection>
       <div className="v2-scene-sections">
-        <SidebarSection section="actors" label="Actors" count={actors.length} expanded={sectionState.actors} onToggle={onSectionToggle}>
+        <SidebarSection section="actors" label="Actors" count={actors.length} expanded={sectionState.actors} onToggle={onSectionToggle} actions={<button className="v2-section-action-button v2-inline-add" aria-label="Add Actor" onClick={(event) => { event.stopPropagation(); onAddActor() }} onPointerDown={(event) => event.stopPropagation()} type="button" title="Add Actor">+</button>}>
           {actors.length === 0 ? <p>No actors in this Scene</p> : <div className="v2-entity-list">{actors.map((actor) => <button className={`v2-entity-row${selectedEntityIds.includes(actor.id) ? ' is-selected' : ''}`} key={actor.id} onClick={(event) => selectEntity(actor.id, event.shiftKey)} onContextMenu={(event) => openEntityMenu(event, actor.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: actor.appearance.primaryColor }} /><span>{actor.name}</span></button>)}</div>}
         </SidebarSection>
         <SidebarSection section="props" label="Props" count={props.length} expanded={sectionState.props} onToggle={onSectionToggle}>
           <div className="v2-entity-list">{props.map((entity) => <button className={`v2-entity-row${selectedEntityIds.includes(entity.id) ? ' is-selected' : ''}`} key={entity.id} onClick={(event) => selectEntity(entity.id, event.shiftKey)} onContextMenu={(event) => openEntityMenu(event, entity.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: entity.primaryColor }} /><span>{entity.name}</span><small>{entity.propType ?? entity.shape}</small></button>)}</div>
         </SidebarSection>
-        <SidebarSection section="architecture" label="Architecture" count={walls.length + openings.length} expanded={sectionState.architecture} onToggle={onSectionToggle}>
+        <SidebarSection section="architecture" label="Architecture" count={walls.length + openings.length} expanded={sectionState.architecture} onToggle={onSectionToggle} actions={<button className="v2-section-action-button v2-inline-add" aria-label="Add Wall" onClick={(event) => { event.stopPropagation(); onAddWall() }} onPointerDown={(event) => event.stopPropagation()} type="button" title="Add Wall">+</button>}>
           <div className="v2-entity-list">{[...walls, ...openings].map((entity) => <button className={`v2-entity-row${selectedEntityIds.includes(entity.id) ? ' is-selected' : ''}`} key={entity.id} onClick={(event) => selectEntity(entity.id, event.shiftKey)} onContextMenu={(event) => openEntityMenu(event, entity.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: entity.primaryColor }} /><span>{entity.name}</span><small>{entity.type === 'Wall' ? 'Wall' : entity.openingType}</small></button>)}</div>
         </SidebarSection>
-        <SidebarSection section="cameras" label="Cameras" count={cameras.length} expanded={sectionState.cameras} onToggle={onSectionToggle}>
+        <SidebarSection section="cameras" label="Cameras" count={cameras.length} expanded={sectionState.cameras} onToggle={onSectionToggle} actions={<button className="v2-section-action-button v2-inline-add" aria-label="Add Camera" onClick={(event) => { event.stopPropagation(); onAddCamera() }} onPointerDown={(event) => event.stopPropagation()} type="button" title="Add Camera">+</button>}>
           {cameras.length === 0 ? <p>No cameras in this Scene</p> : <div className="v2-entity-list">{cameras.map((camera) => <div className={`v2-camera-row${selectedEntityIds.includes(camera.id) ? ' is-selected' : ''}`} key={camera.id} onContextMenu={(event) => openEntityMenu(event, camera.id)}><button className="v2-camera-select" onClick={(event) => selectEntity(camera.id, event.shiftKey)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: camera.proxyColor }} /><span>{camera.name}</span></button><button className={`v2-camera-active${activeCameraId === camera.id ? ' is-active' : ''}`} onClick={() => onSetActiveCamera(camera.id)} type="button" title={activeCameraId === camera.id ? 'Active Camera' : 'Set Active Camera'}>{activeCameraId === camera.id ? 'A' : '·'}</button></div>)}</div>}
         </SidebarSection>
-        <SidebarSection section="lights" label="Lights" count={lights.length} expanded={sectionState.lights} onToggle={onSectionToggle}>
+        <SidebarSection section="lights" label="Lights" count={lights.length} expanded={sectionState.lights} onToggle={onSectionToggle} actions={<button className="v2-section-action-button v2-inline-add" aria-label="Add Light" onClick={(event) => { event.stopPropagation(); onAddSun() }} onPointerDown={(event) => event.stopPropagation()} type="button" title="Add Light">+</button>}>
           {lights.length === 0 ? <p>No lights in this Scene</p> : <div className="v2-entity-list">{lights.map((sun) => <button className={`v2-entity-row${selectedEntityIds.includes(sun.id) ? ' is-selected' : ''}`} key={sun.id} onClick={(event) => selectEntity(sun.id, event.shiftKey)} onContextMenu={(event) => openEntityMenu(event, sun.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: sun.color }} /><span>{sun.name}</span><small>Sun</small></button>)}</div>}
         </SidebarSection>
         <SidebarSection section="groups" label="Groups" count={groups.length} expanded={sectionState.groups} onToggle={onSectionToggle}>
@@ -195,6 +230,13 @@ export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, open
         </SidebarSection>
       </div>
       {entityMenu ? <div className="v2-entity-context-menu" role="menu" style={{ left: entityMenu.x, top: entityMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { onBeginEntityRename(entityMenu.entityId); setEntityMenu(null) }} type="button">Rename</button></div> : null}
+      {sceneAddMenuOpen && sceneAddMenuPosition && typeof document !== 'undefined' ? createPortal(
+        <div className="v2-section-popup-menu v2-scene-add-menu" role="menu" aria-label="Scene actions" style={{ top: sceneAddMenuPosition.top, left: sceneAddMenuPosition.left }} onPointerDown={(event) => event.stopPropagation()}>
+          <button onClick={() => { onAddScene(); setSceneAddMenuOpen(false); sceneAddMenuButtonRef.current?.focus() }} role="menuitem" type="button">Add Scene</button>
+          <button onClick={() => { onImportScene(); setSceneAddMenuOpen(false); sceneAddMenuButtonRef.current?.focus() }} role="menuitem" type="button">Import Scene</button>
+        </div>,
+        document.body,
+      ) : null}
     </aside>
   )
 }
@@ -203,13 +245,13 @@ function SidebarSection({ section, label, count, expanded, onToggle, className, 
   const bodyId = `v2-workspace-section-${section}`
   return <section className={`v2-scene-section v2-collapsible-section${className ? ` ${className}` : ''}`}>
     <div className="v2-section-title">
-      <span className="v2-section-label">{label}</span>
+      <button className="v2-section-label" type="button" aria-expanded={expanded} aria-controls={bodyId} onClick={() => onToggle(section, !expanded)}>{label}</button>
       <span className="v2-section-actions">
         <span className="v2-count">{count}</span>
+        {actions}
         <button className="v2-section-toggle" type="button" aria-label={`${expanded ? 'Collapse' : 'Expand'} ${label}`} aria-expanded={expanded} aria-controls={bodyId} onClick={() => onToggle(section, !expanded)}>
           <span className="v2-section-chevron" aria-hidden="true">⌄</span>
         </button>
-        {actions}
       </span>
     </div>
     <div id={bodyId} className="v2-collapsible-body" hidden={!expanded}>{children}</div>

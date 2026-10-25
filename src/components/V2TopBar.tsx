@@ -22,6 +22,10 @@ type V2TopBarProps = {
   onProjectNameChange: (name: string) => void
   onExport: () => void
   onOpenAbout?: () => void
+  onToggleSelectionDiagnostics?: () => void
+  selectionDiagnosticsAvailable?: boolean
+  onToggleMasterTimelineDiagnostics?: () => void
+  masterTimelineDiagnosticsAvailable?: boolean
   exportDisabled?: boolean
   readOnly?: boolean
   liveStatus?: LiveReviewTransportStatus
@@ -30,7 +34,7 @@ type V2TopBarProps = {
   onOpenLive?: () => void
 }
 
-export function V2TopBar({ view, projectName, sceneName, isDirty, fileError, saveState = 'idle', onViewChange, onNewProject, onBackToLibrary, onSaveProject, onSaveProjectAs, onLoadProject, onOpenProjectSettings, onOpenMediaManager, onExportProjectPackage, missingMediaCount = 0, onProjectNameChange, onExport, onOpenAbout, exportDisabled = false, readOnly = false, liveStatus = 'idle', liveRole = null, liveViewerCount = 0, onOpenLive }: V2TopBarProps) {
+export function V2TopBar({ view, projectName, sceneName, isDirty, fileError, saveState = 'idle', onViewChange, onNewProject, onBackToLibrary, onSaveProject, onSaveProjectAs, onLoadProject, onOpenProjectSettings, onOpenMediaManager, onExportProjectPackage, missingMediaCount = 0, onProjectNameChange, onExport, onOpenAbout, onToggleSelectionDiagnostics, selectionDiagnosticsAvailable = false, onToggleMasterTimelineDiagnostics, masterTimelineDiagnosticsAvailable = false, exportDisabled = false, readOnly = false, liveStatus = 'idle', liveRole = null, liveViewerCount = 0, onOpenLive }: V2TopBarProps) {
   const skipBlurRef = useRef(false)
   const projectMenuRef = useRef<HTMLDivElement>(null)
   const projectMenuButtonRef = useRef<HTMLButtonElement>(null)
@@ -95,6 +99,8 @@ export function V2TopBar({ view, projectName, sceneName, isDirty, fileError, sav
           {onExportProjectPackage ? <button role="menuitem" className="v2-project-menu-item" disabled={readOnly} onClick={() => { setProjectMenuOpen(false); onExportProjectPackage() }} type="button">Export Project Package…</button> : null}
           {onOpenProjectSettings ? <><div className="v2-project-menu-separator" role="separator" /><button role="menuitem" className="v2-project-menu-item" disabled={readOnly} onClick={() => { setProjectMenuOpen(false); onOpenProjectSettings() }} type="button">Project Settings…</button></> : null}
           {onOpenMediaManager ? <><div className="v2-project-menu-separator" role="separator" /><button role="menuitem" className="v2-project-menu-item" onClick={() => { setProjectMenuOpen(false); onOpenMediaManager() }} type="button">Media Manager{missingMediaCount > 0 ? <span className="v2-project-menu-count">{missingMediaCount}</span> : null}</button></> : null}
+          {onToggleSelectionDiagnostics ? <><div className="v2-project-menu-separator" role="separator" /><button role="menuitem" className="v2-project-menu-item" disabled={!selectionDiagnosticsAvailable} onClick={() => { setProjectMenuOpen(false); onToggleSelectionDiagnostics() }} type="button"><span>Selection Diagnostics</span><kbd>⌘⌥⇧D</kbd></button></> : null}
+          {onToggleMasterTimelineDiagnostics && masterTimelineDiagnosticsAvailable ? <><div className="v2-project-menu-separator" role="separator" /><button role="menuitem" className="v2-project-menu-item" onClick={() => { setProjectMenuOpen(false); onToggleMasterTimelineDiagnostics() }} type="button"><span>Master Timeline Diagnostics</span></button></> : null}
         </div> : null}
       </div>
       <div className="v2-project-context" title={fileError ?? projectName}>

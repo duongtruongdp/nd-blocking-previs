@@ -9,6 +9,7 @@ export type MasterTimelineWorkspaceState = {
   pixelsPerFrame: number | null
   horizontalScroll: number
   verticalScroll: number
+  snapEnabled: boolean
   trackHeights: Record<string, number>
 }
 
@@ -29,6 +30,7 @@ export function createTimelineWorkspaceSessionState(): TimelineWorkspaceSessionS
       pixelsPerFrame: null,
       horizontalScroll: 0,
       verticalScroll: 0,
+      snapEnabled: true,
       trackHeights: {
         shots: DEFAULT_SHOTS_TRACK_HEIGHT,
         music: DEFAULT_MUSIC_TRACK_HEIGHT,

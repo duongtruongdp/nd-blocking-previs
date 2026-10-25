@@ -4,7 +4,7 @@ import { createProjectDocument } from '../core/projectDocument'
 import { createShotDocument } from '../core/shotDocument'
 import { parseProjectFile, serializeProject } from '../core/projectPersistence'
 import { creativeProjectFingerprint } from '../core/projectDirty'
-import { clampMasterTimelineBoundary, createMasterClip, createMasterSequenceDocument, createMusicClip, duplicateMasterClip, effectiveMasterRenderRange, insertMasterClipAt, masterClipDurationFrames, masterClipStartFrame, masterPlaybackFrameAt, masterSequenceDurationFrames, masterSequenceFrameRate, masterSequenceVisualDurationFrames, moveMasterClip, normalizeMasterSequence, removeMasterClip, reorderMasterClip, resolveMasterFrame, resolveMasterMusicTime, sameFrameRate, setMasterSequenceMark, sourceRangeWithinShot, updateMasterClipRange } from '../core/masterSequence'
+import { clampMasterTimelineBoundary, createMasterClip, createMasterSequenceDocument, createMusicClip, duplicateMasterClip, effectiveMasterRenderRange, insertMasterClipAt, insertMasterClipAtFrame, materializeMasterClipPlacements, masterClipDurationFrames, masterClipStartFrame, masterPlaybackFrameAt, masterSequenceDurationFrames, masterSequenceFrameRate, masterSequenceVisualDurationFrames, moveMasterClip, moveMasterClipToFrame, normalizeMasterSequence, removeMasterClip, reorderMasterClip, resolveMasterFrame, resolveMasterMusicTime, sameFrameRate, setMasterSequenceMark, sourceRangeWithinShot, updateMasterClipRange, type MasterSequenceDocument } from '../core/masterSequence'
 
 function shot(id: string, sceneId: string, startFrame = 10, endFrame = 20) {
   return createShotDocument({ id, name: id, sceneId, cameraId: `camera-${id}`, startFrame, endFrame, order: 0, notes: '', thumbnail: null })
@@ -60,6 +60,62 @@ describe('master sequence foundation', () => {
     expect(resolveMasterFrame(sequence, [source], 5)).toBeNull()
     expect(clampMasterTimelineBoundary(-4, 5)).toBe(0)
     expect(clampMasterTimelineBoundary(5, 5)).toBe(5)
+  })
+
+  it('moves one Shot into a real gap without rippling or changing its duration', () => {
+    const first = shot('shot-a', 'scene-a', 0, 4)
+    const second = shot('shot-b', 'scene-a', 4, 8)
+    const sequence = { ...createMasterSequenceDocument(), clips: [
+      { ...createMasterClip(first), id: 'clip-a', startMasterFrame: 0, order: 0 },
+      { ...createMasterClip(second), id: 'clip-b', startMasterFrame: 10, order: 1 },
+    ] }
+    expect(masterSequenceDurationFrames(sequence)).toBe(14)
+    expect(resolveMasterFrame(sequence, [first, second], 5)).toBeNull()
+    expect(resolveMasterFrame(sequence, [first, second], 10)).toMatchObject({ clipId: 'clip-b', localClipFrame: 0 })
+    const moved = moveMasterClipToFrame(sequence, 'clip-b', 6)
+    expect(moved?.clips.find((clip) => clip.id === 'clip-b')).toMatchObject({ startMasterFrame: 6, sourceStartFrame: 4, sourceEndFrame: 8 })
+    expect(moved?.clips.find((clip) => clip.id === 'clip-a')?.startMasterFrame).toBe(0)
+  })
+
+  it('materializes legacy placements before moving one middle Shot', () => {
+    const shots = [0, 1, 2, 3, 4].map((index) => shot(`shot-${index + 1}`, 'scene-a', index * 100, (index + 1) * 100))
+    const sequence: MasterSequenceDocument = { ...createMasterSequenceDocument(), clips: shots.map((source, order) => ({ id: `clip-${order + 1}`, shotId: source.id, sourceStartFrame: source.startFrame, sourceEndFrame: source.endFrame, order })) }
+
+    const materialized = materializeMasterClipPlacements(sequence)
+    expect(materialized.clips.map((clip) => clip.startMasterFrame)).toEqual([0, 100, 200, 300, 400])
+    expect(materializeMasterClipPlacements(materialized)).toBe(materialized)
+    expect(sequence.clips.every((clip) => clip.startMasterFrame === undefined)).toBe(true)
+
+    const moved = moveMasterClipToFrame(sequence, 'clip-3', 500)
+    expect(moved?.clips.map((clip) => [clip.id, clip.startMasterFrame])).toEqual([
+      ['clip-1', 0],
+      ['clip-2', 100],
+      ['clip-3', 500],
+      ['clip-4', 300],
+      ['clip-5', 400],
+    ])
+    expect(resolveMasterFrame(moved!, shots, 200)).toBeNull()
+    expect(resolveMasterFrame(moved!, shots, 500)).toMatchObject({ clipId: 'clip-3', sourceFrame: 200 })
+  })
+
+  it('keeps an explicit Mark Out independent when a Shot is moved', () => {
+    const source = shot('shot-a', 'scene-a', 0, 4)
+    const sequence = { ...createMasterSequenceDocument(), clips: [{ ...createMasterClip(source), id: 'clip-a', startMasterFrame: 0, order: 0 }], markOutFrame: 4 }
+    const moved = moveMasterClipToFrame(sequence, 'clip-a', 20)
+    expect(moved?.markOutFrame).toBe(4)
+  })
+
+  it('rejects overlapping Shot placement and adds new Shots only into free space', () => {
+    const first = shot('shot-a', 'scene-a', 0, 4)
+    const second = shot('shot-b', 'scene-a', 4, 8)
+    const sequence = { ...createMasterSequenceDocument(), clips: [
+      { ...createMasterClip(first), id: 'clip-a', startMasterFrame: 0, order: 0 },
+      { ...createMasterClip(second), id: 'clip-b', startMasterFrame: 6, order: 1 },
+    ] }
+    expect(moveMasterClipToFrame(sequence, 'clip-b', 2)).toBeNull()
+    const inserted = insertMasterClipAtFrame(sequence, shot('shot-c', 'scene-a', 8, 11), 12)
+    expect(inserted?.clips.at(-1)).toMatchObject({ startMasterFrame: 12, shotId: 'shot-c' })
+    expect(insertMasterClipAtFrame(sequence, shot('shot-c', 'scene-a', 8, 11), 3)).toBeNull()
   })
 
   it('finishes non-loop playback at Out while keeping loop playback half-open', () => {
@@ -149,6 +205,18 @@ describe('master sequence foundation', () => {
     expect(absent.masterSequence.musicTrackPresent).toBe(false)
   })
 
+  it('round-trips explicit Shot placement and gaps through .ndblock persistence', () => {
+    const sourceScene = scene('scene-a')
+    const project = createProjectDocument('project-placement', 'Project', sourceScene.scene)
+    const first = shot('shot-a', 'scene-a', 0, 4)
+    const second = shot('shot-b', 'scene-a', 4, 8)
+    const sequence = { ...createMasterSequenceDocument(), clips: [{ ...createMasterClip(first), id: 'clip-a', startMasterFrame: 0, order: 0 }, { ...createMasterClip(second), id: 'clip-b', startMasterFrame: 12, order: 1 }], markOutFrame: 16 }
+    const reopened = parseProjectFile(serializeProject({ ...project, shots: [first, second], masterSequence: sequence }))
+    expect(reopened.masterSequence.clips.map((clip) => clip.startMasterFrame)).toEqual([0, 12])
+    expect(reopened.masterSequence.markOutFrame).toBe(16)
+    expect(masterSequenceDurationFrames(reopened.masterSequence)).toBe(16)
+  })
+
   it('includes sequence edits in the project dirty fingerprint', () => {
     const project = createProjectDocument('project', 'Project', scene('scene-a').scene)
     const source = shot('shot-a', 'scene-a')
@@ -206,6 +274,11 @@ describe('master sequence foundation', () => {
     const music = createMusicClip({ name: 'score.wav', type: 'audio/wav', size: 512 }, 12.5)
     const sequence = { ...createMasterSequenceDocument(), musicClip: { ...music, startMasterFrame: 48, sourceStartSeconds: 2, sourceEndSeconds: 10 } }
     expect(masterSequenceVisualDurationFrames(sequence, { numerator: 24, denominator: 1 })).toBe(48 + 8 * 24)
+  })
+
+  it('includes independently placed Graphics in the visible content extent', () => {
+    const sequence = { ...createMasterSequenceDocument(), imageClips: [{ id: 'image-clip', trackId: 'graphics-1', assetId: 'asset', startMasterFrame: 24, durationFrames: 18, positionX: .5, positionY: .5, scale: 1, rotation: 0, opacity: 1, fadeInFrames: 0, fadeOutFrames: 0 }] }
+    expect(masterSequenceVisualDurationFrames(sequence, { numerator: 24, denominator: 1 })).toBe(42)
   })
 
   it('keeps Fit extent separate from the default Master render range', () => {

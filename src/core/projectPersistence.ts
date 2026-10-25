@@ -133,7 +133,7 @@ function validateShot(value: unknown, path: string, errors: string[]): void {
 }
 
 function validateMasterClip(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value) || !stringField(value.id) || !stringField(value.shotId) || !finiteNumber(value.sourceStartFrame) || !finiteNumber(value.sourceEndFrame) || Number(value.sourceEndFrame) <= Number(value.sourceStartFrame) || !finiteNumber(value.order)) errors.push(`${path} is not a valid Master Clip.`)
+  if (!isRecord(value) || !stringField(value.id) || !stringField(value.shotId) || !finiteNumber(value.sourceStartFrame) || !finiteNumber(value.sourceEndFrame) || Number(value.sourceEndFrame) <= Number(value.sourceStartFrame) || (value.startMasterFrame !== undefined && (!finiteNumber(value.startMasterFrame) || Number(value.startMasterFrame) < 0)) || !finiteNumber(value.order)) errors.push(`${path} is not a valid Master Clip.`)
 }
 
 function validateMasterGraphics(sequence: Record<string, unknown>, errors: string[]): void {

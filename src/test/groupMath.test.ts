@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyGroupTransform, bakeGroupChildren, evaluateGroupTransforms, groupPivot } from '../core/groupMath'
+import { applyGroupTransform, bakeGroupChildren, collapseSelectionToGroups, evaluateGroupTransforms, groupPivot } from '../core/groupMath'
 import { createActorDocument, createEmptySceneDocument, type SceneGroup } from '../core/sceneDocument'
 import { evaluateTimeline } from '../timeline/timelineEvaluator'
 import { upsertTimelineKeyframe } from '../timeline/timelineMath'
@@ -49,5 +49,31 @@ describe('persistent blocking groups', () => {
     const first = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
     const second = createActorDocument('actor-02', 'Actor 02', [2, 0, 0])
     expect(groupPivot([first, second])).toEqual([1, 0, 0])
+  })
+
+  it('applies one absolute group position to every mixed child without changing relative layout', () => {
+    const first = createActorDocument('actor-01', 'Actor 01', [-1, 0, 0])
+    const second = createActorDocument('actor-02', 'Actor 02', [2, 1, 3])
+    const moved = evaluateGroupTransforms([first, second], [{ ...group, childIds: [first.id, second.id], pivot: [0, 0, 0], position: [4, 5, 6] }])
+
+    expect(moved.map((entity) => entity.position)).toEqual([
+      [3, 5, 6],
+      [6, 6, 9],
+    ])
+    expect(moved[1].position.map((value, index) => value - moved[0].position[index])).toEqual([3, 1, 3])
+  })
+
+  it('treats repeated inspector position edits as absolute values instead of accumulating deltas', () => {
+    const actor = createActorDocument('actor-01', 'Actor 01', [1, 2, 3])
+    const firstEdit = applyGroupTransform(actor, { ...group, position: [10, 0, 0] })
+    const secondEdit = applyGroupTransform(actor, { ...group, position: [0, 20, 0] })
+
+    expect(firstEdit.position).toEqual([11, 2, 3])
+    expect(secondEdit.position).toEqual([1, 22, 3])
+  })
+
+  it('collapses rendered child hits to one logical group selection target', () => {
+    const grouped = { ...group, childIds: ['actor-01', 'actor-02'] }
+    expect(collapseSelectionToGroups(['actor-01', 'actor-02'], 'actor-02', [grouped])).toEqual({ ids: ['group-01'], primaryId: 'group-01' })
   })
 })

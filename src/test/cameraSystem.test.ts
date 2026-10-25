@@ -187,6 +187,23 @@ describe('V2 Camera system foundation', () => {
     runtime.dispose()
   })
 
+  it('keeps the camera selection proxy separate from the FOV helper hierarchy', () => {
+    const definition = CAMERA_DATABASE[0]
+    const camera = createCameraDocument('camera-01', 'Camera 01', [0, 1, 3], [0, 0, 0], definition.id, definition.captureModes[0].id)
+    const runtime = new ProceduralCameraRuntime(camera)
+    runtime.setSelected(true)
+    runtime.root.updateMatrixWorld(true)
+    const proxyBounds = new THREE.Box3().setFromObject(runtime.proxyRoot)
+    const fullBounds = new THREE.Box3().setFromObject(runtime.root)
+
+    expect(runtime.fovGuide.userData.cameraFrustum).toBe(true)
+    expect(runtime.fovGuide.parent).toBe(runtime.opticalRig)
+    expect(runtime.proxyRoot.getObjectByName('CameraFovGuideRays')).toBeUndefined()
+    expect(fullBounds.getSize(new THREE.Vector3()).z).toBeGreaterThan(proxyBounds.getSize(new THREE.Vector3()).z)
+    expect(proxyBounds.getSize(new THREE.Vector3()).z).toBeLessThan(1)
+    runtime.dispose()
+  })
+
   it('keeps the visual body pivot at the root while the optical rig points down -Z', () => {
     const definition = CAMERA_DATABASE[0]
     const camera = createCameraDocument('camera-01', 'Camera 01', [0, 1, 3], [0, 0, 0], definition.id, definition.captureModes[0].id)

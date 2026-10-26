@@ -37,5 +37,5 @@
 ## Downloads
 
 - `ND-Blocking-Previs-macOS-latest.zip` — macOS Apple Silicon package.
-- `ND Blocking & Previs_0.2.2_aarch64.dmg` — macOS Apple Silicon disk image.
+- `ND.Blocking.Previs_0.2.2_aarch64.dmg` — macOS Apple Silicon disk image.
 - Matching SHA256 checksum files are included with the release assets.

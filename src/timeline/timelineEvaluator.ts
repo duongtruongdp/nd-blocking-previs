@@ -77,7 +77,10 @@ function evaluateEntity(base: { id: string; position: ActorVector3; rotation: Ac
   const rotation = evaluateRotation(base.rotation, rotationTrack, frame)
   const scaleTrack = trackFor(tracks, base.id, 'scale')
   const scaleValue = valueAtFrame(scaleTrack, frame)
-  const headingValue = headingTrack ? valueAtFrame(headingTrack, frame) : undefined
+  // `heading` is the legacy scalar Actor channel. A full `rotation` channel
+  // is authoritative whenever it exists, so an old heading track cannot
+  // overwrite a newly-authored quaternion-stable orientation.
+  const headingValue = rotationTrack ? undefined : headingTrack ? valueAtFrame(headingTrack, frame) : undefined
   if (headingValue !== undefined && !Array.isArray(headingValue)) {
     const headingKeyframes = [...headingTrack!.keyframes].sort((a, b) => a.frame - b.frame)
     const before = [...headingKeyframes].reverse().find((keyframe) => keyframe.frame <= frame)

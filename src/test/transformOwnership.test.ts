@@ -117,6 +117,27 @@ describe('V2.6B timeline transform ownership and keyframe capture', () => {
     expect(result.document.timeline.tracks.some((track) => track.property === 'rotation')).toBe(false)
   })
 
+  it('authors a full Actor Rotation key independently from Position', () => {
+    const actor = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 0, [0, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 120, [5, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'rotation', 120, [0.2, 1.1, -0.1])
+    const result = commitTimelineTransform({ ...createEmptySceneDocument(), actors: [actor], timeline: { ...timeline, currentFrame: 24 } }, { ...change(actor.id), rotation: [0.4, 0.8, -0.2], editedProperty: 'rotation' })
+    const rotationTrack = result.document.timeline.tracks.find((track) => track.entityId === actor.id && track.property === 'rotation')!
+    expect(rotationTrack.keyframes.map((keyframe) => keyframe.frame)).toEqual([24, 120])
+    expect(rotationTrack.keyframes.find((keyframe) => keyframe.frame === 24)?.value).toEqual([0.4, 0.8, -0.2])
+    expect(result.document.timeline.tracks.find((track) => track.entityId === actor.id && track.property === 'position')?.keyframes.map((keyframe) => keyframe.frame)).toEqual([0, 120])
+  })
+
+  it('preserves the persisted Rotation baseline during a Position-only commit', () => {
+    const actor = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
+    const baseRotation: [number, number, number] = [0.2, 0.6, -0.1]
+    const result = commitTimelineTransform({ ...createEmptySceneDocument(), actors: [{ ...actor, rotation: baseRotation }] }, { ...change(actor.id), rotation: [1.2, 2.1, 0.9], editedProperty: 'position' })
+    expect(result.document.actors[0].position).toEqual([2, 0, -3])
+    expect(result.document.actors[0].rotation).toEqual(baseRotation)
+  })
+
   it('updates an existing same-frame key without duplicating it', () => {
     const actor = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
     let timeline = createEmptySceneDocument().timeline

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fitMasterPixelsPerFrame, masterFrameRangeToPixels, masterFrameToPixel, masterRulerFrames, pixelToMasterFrame } from '../core/masterTimelineMath'
+import { fitMasterPixelsPerFrame, masterClientXToFrame, masterFrameRangeToPixels, masterFrameToPixel, masterRulerFrames, pixelToMasterFrame } from '../core/masterTimelineMath'
 import { downsampleAudioPeaks } from '../core/musicWaveform'
 
 describe('master timeline geometry', () => {
@@ -18,6 +18,21 @@ describe('master timeline geometry', () => {
       expect(pixelToMasterFrame(pixel, scale, 100)).toBe(37)
       expect(pixelToMasterFrame(pixel + scale * .49, scale, 100)).toBe(37)
     }
+  })
+
+  it('maps Master ruler client coordinates through horizontal scroll and zoom', () => {
+    expect(masterClientXToFrame(148, 100, 200, 8, 2.5, 500)).toBe(96)
+    expect(masterClientXToFrame(100 + 8, 100, 0, 8, .21207155056179783, 120)).toBe(0)
+    expect(masterClientXToFrame(100 + 8 + .21207155056179783 * 120, 100, 0, 8, .21207155056179783, 120)).toBe(120)
+  })
+
+  it('keeps ruler seeking frame-accurate at fractional zoom and non-24fps rates', () => {
+    const scale = 1.375
+    const rate = { numerator: 25, denominator: 1 }
+    const frame = 73
+    const clientX = 32 - 400 + 8 + masterFrameToPixel(frame, scale)
+    expect(masterClientXToFrame(clientX, 32, 400, 8, scale, 240)).toBe(frame)
+    expect(masterRulerFrames(250, 3, rate)[0]).toBe(0)
   })
 
   it('maps the final timeline pixel to the inclusive end boundary', () => {

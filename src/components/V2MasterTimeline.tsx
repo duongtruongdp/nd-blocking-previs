@@ -5,9 +5,9 @@ import type { MasterClipDocument, MasterImageClipDocument, MasterSequenceDocumen
 import { effectiveMasterRenderRange, MASTER_SHOT_DRAG_TYPE, masterClipDurationFrames, masterMusicTrackPresent, masterSequenceDurationFrames, masterSequenceFrameRate, masterSequenceVisualDurationFrames, musicClipDurationFrames, orderedMasterClips } from '../core/masterSequence'
 import type { ShotDocument } from '../core/shotDocument'
 import { frameToTimecode } from '../timeline/timelineMath'
-import { fitMasterPixelsPerFrame, masterFrameRangeToPixels, masterFrameToPixel, masterRulerFrames, pixelToMasterFrame } from '../core/masterTimelineMath'
+import { fitMasterPixelsPerFrame, masterClientXToFrame, masterFrameRangeToPixels, masterFrameToPixel, masterRulerFrames } from '../core/masterTimelineMath'
 import { masterShotSnapTargets, masterTimelineOrderStartFrames, snapMasterFrame } from '../core/masterTimelineDrag'
-import { moveMasterTimelineSelection, previewMasterClipTrim, type MasterTimelineItem, type MasterTrimLimit } from '../core/masterTimelineEditing'
+import { applyMasterTimelineMarqueeSelection, moveMasterTimelineSelection, previewMasterClipTrim, type MasterMarqueeMode, type MasterTimelineItem, type MasterTrimLimit } from '../core/masterTimelineEditing'
 import { masterClipEdgeHitZonePx, masterClipInteractionMode, MASTER_CLIP_EDGE_HIT_ZONE_PX, type MasterClipInteractionMode } from '../core/masterTimelineHitTesting'
 import { clampMasterTrackHeight, DEFAULT_GRAPHICS_TRACK_HEIGHT, DEFAULT_MUSIC_TRACK_HEIGHT, DEFAULT_SHOTS_TRACK_HEIGHT, masterTrackPopoverPosition } from '../core/masterGraphics'
 import type { MasterTimelineWorkspacePatch, MasterTimelineWorkspaceState } from '../core/timelineWorkspaceSession'
@@ -37,6 +37,17 @@ type ClipDragState = {
   valid: boolean
   active: boolean
   trimDiagnostics: MasterTrimDiagnostics | null
+}
+
+type MasterMarqueeState = {
+  pointerId: number
+  startX: number
+  startY: number
+  currentX: number
+  currentY: number
+  active: boolean
+  mode: MasterMarqueeMode
+  initialSelection: MasterTimelineItem[]
 }
 
 type MasterGeometryRect = {
@@ -155,6 +166,7 @@ type V2MasterTimelineProps = {
   onSelectClip: (clipId: string, frame: number, extend?: boolean) => void
   selectedItems: readonly MasterTimelineItem[]
   onClearSelection: () => void
+  onMarqueeSelection: (selection: MasterTimelineItem[]) => void
   onTimelineFocusChange?: (focused: boolean) => void
   onTrimClip: (clipId: string, sourceStartFrame: number, sourceEndFrame: number, timelineStartFrame?: number) => void
   onSelectMusic: () => void
@@ -163,6 +175,8 @@ type V2MasterTimelineProps = {
   onSetMasterFrame: (frame: number) => void
   onReturnToStart: () => void
   onAddShot: (shotId: string, startMasterFrame?: number) => void
+  onInsertShotWithRoom: (shotId: string, startMasterFrame: number) => void
+  onOpenShot: (clipId: string) => void
   onMoveClip: (clipId: string, startMasterFrame: number) => void
   onImportMusic: (file: File) => void
   onPlay: () => void
@@ -188,7 +202,7 @@ type V2MasterTimelineProps = {
   onRegisterZoomShortcut?: (handler: TimelineZoomShortcutHandler | null) => void
 }
 
-export function V2MasterTimeline({ projectId, sequence, shots, scenes, activeClipId, masterFrame, fallbackRate, isPlaying, isLooping, musicPeaks, onSelectClip, selectedItems, onClearSelection, onTimelineFocusChange, onTrimClip, onSelectMusic, onDeleteMusicTrack, onAddMusicTrack, onSetMasterFrame, onReturnToStart, onAddShot, onMoveClip, onImportMusic, onPlay, onPause, onStop, onToggleLoop, onMarkIn, onMarkOut, onSwitchToScene, onSwitchToMaster, activeImageClipId, onSelectImage, onAddGraphicsTrack, onImportImage, onMoveImage, onTrimImage, onChangeImageFade, onGraphicsTrackChange, onDeleteGraphicsTrack, imageHealth = [], initialWorkspaceState, onWorkspaceStateChange, onRegisterZoomShortcut }: V2MasterTimelineProps) {
+export function V2MasterTimeline({ projectId, sequence, shots, scenes, activeClipId, masterFrame, fallbackRate, isPlaying, isLooping, musicPeaks, onSelectClip, selectedItems, onClearSelection, onMarqueeSelection, onTimelineFocusChange, onTrimClip, onSelectMusic, onDeleteMusicTrack, onAddMusicTrack, onSetMasterFrame, onReturnToStart, onAddShot, onInsertShotWithRoom, onOpenShot, onMoveClip, onImportMusic, onPlay, onPause, onStop, onToggleLoop, onMarkIn, onMarkOut, onSwitchToScene, onSwitchToMaster, activeImageClipId, onSelectImage, onAddGraphicsTrack, onImportImage, onMoveImage, onTrimImage, onChangeImageFade, onGraphicsTrackChange, onDeleteGraphicsTrack, imageHealth = [], initialWorkspaceState, onWorkspaceStateChange, onRegisterZoomShortcut }: V2MasterTimelineProps) {
   const clips = orderedMasterClips(sequence)
   const rate = masterSequenceFrameRate(sequence, shots, scenes, fallbackRate).rate
   const shotDuration = masterSequenceDurationFrames(sequence)
@@ -200,6 +214,7 @@ export function V2MasterTimeline({ projectId, sequence, shots, scenes, activeCli
   const [dragOver, setDragOver] = useState<{ frame: number; left: number } | null>(null)
   const [snapEnabled, setSnapEnabled] = useState(initialWorkspaceState?.snapEnabled ?? true)
   const [clipDrag, setClipDrag] = useState<ClipDragState | null>(null)
+  const [marquee, setMarquee] = useState<MasterMarqueeState | null>(null)
   const [scrubbing, setScrubbing] = useState(false)
   const trackRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -215,10 +230,14 @@ export function V2MasterTimeline({ projectId, sequence, shots, scenes, activeCli
   const [geometryDiagnosticsOpen, setGeometryDiagnosticsOpen] = useState(import.meta.env.DEV)
   const [geometryRevision, setGeometryRevision] = useState(0)
   const scrubPointerRef = useRef<number | null>(null)
+  const scrubInitialFrameRef = useRef<number | null>(null)
   const clipDragRef = useRef<ClipDragState | null>(null)
+  const marqueeRef = useRef<MasterMarqueeState | null>(null)
   const horizontalScrollRef = useRef(Math.max(0, initialWorkspaceState?.horizontalScroll ?? 0))
   const verticalScrollRef = useRef(Math.max(0, initialWorkspaceState?.verticalScroll ?? 0))
   const finishClipDragRef = useRef<(cancelled: boolean) => void>(() => undefined)
+  const finishMarqueeRef = useRef<(cancelled: boolean) => void>(() => undefined)
+  const finishScrubRef = useRef<(cancelled: boolean) => void>(() => undefined)
   const onMoveClipRef = useRef(onMoveClip)
   const suppressClipClickRef = useRef(false)
   const autoScrollFrameRef = useRef<number | null>(null)
@@ -405,15 +424,78 @@ export function V2MasterTimeline({ projectId, sequence, shots, scenes, activeCli
     const track = trackRef.current
     if (!track) return 0
     const bounds = track.getBoundingClientRect()
-    return pixelToMasterFrame(clientX - bounds.left + track.scrollLeft - MASTER_TRACK_PADDING, scale, contentDuration)
+    return masterClientXToFrame(clientX, bounds.left, track.scrollLeft, MASTER_TRACK_PADDING, scale, contentDuration)
   }
 
   const setFrameFromPointer = (clientX: number) => onSetMasterFrame(frameAtClientX(clientX))
 
+  const canvasPoint = (event: PointerEvent<HTMLDivElement>) => {
+    const canvas = canvasRef.current
+    if (!canvas) return { x: 0, y: 0 }
+    const bounds = canvas.getBoundingClientRect()
+    return { x: event.clientX - bounds.left, y: event.clientY - bounds.top }
+  }
+
+  const marqueeSelectionFor = (state: MasterMarqueeState) => {
+    const startFrame = Math.max(0, Math.round((Math.min(state.startX, state.currentX) - MASTER_TRACK_PADDING) / Math.max(0.01, scale)))
+    const endFrame = Math.max(0, Math.round((Math.max(state.startX, state.currentX) - MASTER_TRACK_PADDING) / Math.max(0.01, scale)))
+    return applyMasterTimelineMarqueeSelection(sequence, state.initialSelection, startFrame, endFrame, state.mode)
+  }
+
+  const finishMarquee = (cancelled: boolean) => {
+    const current = marqueeRef.current
+    if (!current) return
+    marqueeRef.current = null
+    setMarquee(null)
+    if (trackRef.current?.hasPointerCapture(current.pointerId)) trackRef.current.releasePointerCapture(current.pointerId)
+    if (cancelled) onMarqueeSelection(current.initialSelection)
+    else if (!current.active && current.mode === 'replace') onClearSelection()
+  }
+
+  useEffect(() => {
+    finishMarqueeRef.current = finishMarquee
+  })
+
+  const finishScrub = (cancelled: boolean) => {
+    if (scrubPointerRef.current === null) return
+    const pointerId = scrubPointerRef.current
+    const initialFrame = scrubInitialFrameRef.current
+    scrubPointerRef.current = null
+    scrubInitialFrameRef.current = null
+    setScrubbing(false)
+    if (cancelled && initialFrame !== null) onSetMasterFrame(initialFrame)
+    if (trackRef.current?.hasPointerCapture(pointerId)) trackRef.current.releasePointerCapture(pointerId)
+  }
+
+  useEffect(() => {
+    finishScrubRef.current = finishScrub
+  })
+
   const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest('[data-master-music], button')) return
+    const target = event.target as HTMLElement
+    if (target.closest('[data-master-music], button')) return
+    if (target.closest('.v2-master-ruler')) {
+      event.preventDefault()
+      scrubInitialFrameRef.current = masterFrame
+      scrubPointerRef.current = event.pointerId
+      event.currentTarget.setPointerCapture(event.pointerId)
+      setScrubbing(true)
+      setFrameFromPointer(event.clientX)
+      return
+    }
+    const shotsRow = target.closest('.v2-master-shots-row')
+    if (shotsRow) {
+      event.preventDefault()
+      const point = canvasPoint(event)
+      const next: MasterMarqueeState = { pointerId: event.pointerId, startX: point.x, startY: point.y, currentX: point.x, currentY: point.y, active: false, mode: event.altKey ? 'subtract' : event.shiftKey ? 'add' : 'replace', initialSelection: [...selectedItems] }
+      marqueeRef.current = next
+      setMarquee(next)
+      event.currentTarget.setPointerCapture(event.pointerId)
+      return
+    }
     event.preventDefault()
     onClearSelection()
+    scrubInitialFrameRef.current = masterFrame
     scrubPointerRef.current = event.pointerId
     event.currentTarget.setPointerCapture(event.pointerId)
     setScrubbing(true)
@@ -421,6 +503,17 @@ export function V2MasterTimeline({ projectId, sequence, shots, scenes, activeCli
   }
 
   const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const activeMarquee = marqueeRef.current
+    if (activeMarquee?.pointerId === event.pointerId) {
+      const point = canvasPoint(event)
+      const movedX = point.x - activeMarquee.startX
+      const movedY = point.y - activeMarquee.startY
+      const next = { ...activeMarquee, currentX: point.x, currentY: point.y, active: activeMarquee.active || Math.hypot(movedX, movedY) >= DRAG_THRESHOLD_PX }
+      marqueeRef.current = next
+      setMarquee(next)
+      if (next.active) onMarqueeSelection(marqueeSelectionFor(next))
+      return
+    }
     const activeClipDrag = clipDragRef.current
     if (activeClipDrag?.pointerId === event.pointerId) {
       updateClipDrag(event.clientX, event.clientY)
@@ -431,35 +524,42 @@ export function V2MasterTimeline({ projectId, sequence, shots, scenes, activeCli
   }
 
   const handlePointerUp = (event: PointerEvent<HTMLDivElement>) => {
+    if (marqueeRef.current?.pointerId === event.pointerId) {
+      finishMarquee(false)
+      return
+    }
     if (clipDragRef.current?.pointerId === event.pointerId) {
       finishClipDrag(false)
       return
     }
     if (scrubPointerRef.current !== event.pointerId) return
-    scrubPointerRef.current = null
-    setScrubbing(false)
-    event.currentTarget.releasePointerCapture(event.pointerId)
+    finishScrub(false)
   }
 
   const handlePointerCancel = (event: PointerEvent<HTMLDivElement>) => {
+    if (marqueeRef.current?.pointerId === event.pointerId) {
+      finishMarquee(true)
+      return
+    }
     if (clipDragRef.current?.pointerId === event.pointerId) {
       finishClipDrag(true)
       return
     }
     if (scrubPointerRef.current !== event.pointerId) return
-    scrubPointerRef.current = null
-    setScrubbing(false)
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    finishScrub(true)
   }
 
   const handleLostPointerCapture = (event: PointerEvent<HTMLDivElement>) => {
+    if (marqueeRef.current?.pointerId === event.pointerId) {
+      finishMarquee(true)
+      return
+    }
     if (clipDragRef.current?.pointerId === event.pointerId) {
       finishClipDrag(true)
       return
     }
     if (scrubPointerRef.current !== event.pointerId) return
-    scrubPointerRef.current = null
-    setScrubbing(false)
+    finishScrub(true)
   }
 
   const pointerTimelineX = (clientX: number) => {
@@ -613,6 +713,12 @@ export function V2MasterTimeline({ projectId, sequence, shots, scenes, activeCli
       if (event.key === 'Escape' && clipDragRef.current?.active) {
         event.preventDefault()
         finishClipDragRef.current(true)
+      } else if (event.key === 'Escape' && marqueeRef.current) {
+        event.preventDefault()
+        finishMarqueeRef.current(true)
+      } else if (event.key === 'Escape' && scrubPointerRef.current !== null) {
+        event.preventDefault()
+        finishScrubRef.current(true)
       } else if (event.key === 'Escape' && !clipDragRef.current && timelineFocusedRef.current) {
         onClearSelectionRef.current()
       }
@@ -621,6 +727,8 @@ export function V2MasterTimeline({ projectId, sequence, shots, scenes, activeCli
     return () => {
       window.removeEventListener('keydown', onKeyDown)
       finishClipDragRef.current(true)
+      finishMarqueeRef.current(true)
+      finishScrubRef.current(true)
       stopAutoScroll()
     }
   }, [])
@@ -754,7 +862,7 @@ export function V2MasterTimeline({ projectId, sequence, shots, scenes, activeCli
         <button type="button" className="v2-small-action v2-master-add-shot" onClick={() => setPickerOpen((open) => !open)}>+ Add Shot</button>
       </div>
     </div>
-    {pickerOpen ? <div className="v2-master-shot-picker">{shots.length === 0 ? <span>No Shots available.</span> : shots.map((shot) => <button type="button" key={shot.id} onClick={() => { onAddShot(shot.id); setPickerOpen(false) }}>{shot.name}</button>)}</div> : null}
+    {pickerOpen ? <div className="v2-master-shot-picker"><div className="v2-master-picker-heading"><strong>Add Shot</strong><span>Playhead {frameToTimecode(masterFrame, rate)}</span></div>{shots.length === 0 ? <span>No Shots available.</span> : <div className="v2-master-picker-list">{shots.map((shot) => <div className="v2-master-picker-item" key={shot.id}><span className="v2-master-picker-shot-name">{shot.name}</span><span className="v2-master-picker-actions"><button type="button" onClick={() => { onAddShot(shot.id); setPickerOpen(false) }}>Add</button><button type="button" onClick={() => { onInsertShotWithRoom(shot.id, masterFrame); setPickerOpen(false) }}>Insert &amp; Make Room</button></span></div>)}</div>}</div> : null}
     <div className="v2-master-track-layout" style={{ gridTemplateColumns: '132px minmax(0, 1fr)' }}>
       <div className="v2-master-track-labels" style={{ gridTemplateRows: trackGridRows }}>
         <span aria-hidden="true" />
@@ -786,7 +894,7 @@ export function V2MasterTimeline({ projectId, sequence, shots, scenes, activeCli
               const startFrame = renderedStarts.get(clip.id) ?? 0
               const geometry = masterFrameRangeToPixels(startFrame, startFrame + masterClipDurationFrames(clip), scale)
               if (clipDrag?.active && clipDrag.selection.some((item) => item.kind === 'clip' && item.id === clip.id)) return <MasterClipPlaceholder key={clip.id} clip={clip} shot={shots.find((candidate) => candidate.id === clip.shotId)} rate={rate} geometry={geometry} rowHeight={shotsTrackHeight} invalid={!clipDrag.valid} />
-              return <MasterClipBlock key={clip.id} clip={clip} shot={shots.find((candidate) => candidate.id === clip.shotId)} rate={rate} geometry={geometry} selected={selectedItems.some((item) => item.kind === 'clip' && item.id === clip.id) || clip.id === activeClipId} startFrame={startFrame} rowHeight={shotsTrackHeight} onSelect={(frame, extend) => { if (!suppressClipClickRef.current) onSelectClip(clip.id, frame, extend) }} onPointerDown={beginClipDrag} />
+              return <MasterClipBlock key={clip.id} clip={clip} shot={shots.find((candidate) => candidate.id === clip.shotId)} rate={rate} geometry={geometry} selected={selectedItems.some((item) => item.kind === 'clip' && item.id === clip.id) || clip.id === activeClipId} startFrame={startFrame} rowHeight={shotsTrackHeight} onSelect={(frame, extend) => { if (!suppressClipClickRef.current) onSelectClip(clip.id, frame, extend) }} onOpenShot={onOpenShot} onPointerDown={beginClipDrag} />
             })}
             {dragOver ? <span className="v2-master-drop-indicator" style={{ left: `${dragOver.left}px` }} aria-hidden="true" /> : null}
             {clipDrag?.active && draggedClip ? <MasterClipBlock clip={{ ...draggedClip, sourceStartFrame: clipDrag.currentSourceStartFrame, sourceEndFrame: clipDrag.currentSourceEndFrame, startMasterFrame: clipDrag.currentStartFrame }} shot={shots.find((candidate) => candidate.id === draggedClip.shotId)} rate={rate} geometry={masterFrameRangeToPixels(clipDrag.currentStartFrame, clipDrag.currentStartFrame + clipDrag.currentSourceEndFrame - clipDrag.currentSourceStartFrame, scale)} selected={false} startFrame={clipDrag.currentStartFrame} rowHeight={shotsTrackHeight} floating leftPx={draggedLeft} widthPx={masterFrameRangeToPixels(0, clipDrag.currentSourceEndFrame - clipDrag.currentSourceStartFrame, scale).widthPx} invalid={!clipDrag.valid} onSelect={() => {}} /> : null}
@@ -806,6 +914,7 @@ export function V2MasterTimeline({ projectId, sequence, shots, scenes, activeCli
           {shotDuration > 0 ? <span className="v2-master-mark v2-master-mark-in" style={{ left: `${MASTER_TRACK_PADDING + masterFrameToPixel(renderRange.startFrame, scale)}px` }} aria-hidden="true" /> : null}
           {shotDuration > 0 ? <span className="v2-master-mark v2-master-mark-out" style={{ left: `${MASTER_TRACK_PADDING + masterFrameToPixel(renderRange.endFrame, scale)}px` }} aria-hidden="true" /> : null}
           <span className="v2-master-playhead" style={{ left: `${MASTER_TRACK_PADDING + masterFrameToPixel(masterFrame, scale)}px` }} aria-hidden="true" />
+          {marquee?.active ? <span className="v2-master-marquee" style={{ left: `${Math.min(marquee.startX, marquee.currentX)}px`, top: `${Math.min(marquee.startY, marquee.currentY)}px`, width: `${Math.abs(marquee.currentX - marquee.startX)}px`, height: `${Math.abs(marquee.currentY - marquee.startY)}px` }} aria-hidden="true" /> : null}
         </div>
       </div>
     </div>
@@ -871,7 +980,7 @@ function MasterClipPlaceholder({ clip, shot, rate, geometry, rowHeight, invalid 
   return <span className={`v2-master-clip-placeholder${isNarrow ? ' is-narrow' : ''}${invalid ? ' is-invalid' : ''}`} style={{ left: `${MASTER_TRACK_PADDING + geometry.startPx}px`, width: `${geometry.widthPx}px`, height: `${Math.max(48, rowHeight - 10)}px` }} aria-hidden="true"><span data-master-clip-content="label">{shot?.name ?? 'Missing Shot'}</span><small data-master-clip-content="duration">{frameToTimecode(masterClipDurationFrames(clip), rate)}</small></span>
 }
 
-function MasterClipBlock({ clip, shot, rate, geometry, selected, startFrame, rowHeight, onSelect, onPointerDown, floating = false, leftPx, widthPx, invalid = false }: { clip: MasterClipDocument; shot: ShotDocument | undefined; rate: { numerator: number; denominator: number }; geometry: ReturnType<typeof masterFrameRangeToPixels>; selected: boolean; startFrame: number; rowHeight: number; onSelect: (frame: number, extend?: boolean) => void; onPointerDown?: (event: PointerEvent<HTMLElement>, clip: MasterClipDocument, mode?: MasterClipInteractionMode) => void; floating?: boolean; leftPx?: number; widthPx?: number; invalid?: boolean }) {
+function MasterClipBlock({ clip, shot, rate, geometry, selected, startFrame, rowHeight, onSelect, onOpenShot, onPointerDown, floating = false, leftPx, widthPx, invalid = false }: { clip: MasterClipDocument; shot: ShotDocument | undefined; rate: { numerator: number; denominator: number }; geometry: ReturnType<typeof masterFrameRangeToPixels>; selected: boolean; startFrame: number; rowHeight: number; onSelect: (frame: number, extend?: boolean) => void; onOpenShot?: (clipId: string) => void; onPointerDown?: (event: PointerEvent<HTMLElement>, clip: MasterClipDocument, mode?: MasterClipInteractionMode) => void; floating?: boolean; leftPx?: number; widthPx?: number; invalid?: boolean }) {
   const duration = masterClipDurationFrames(clip)
   const visualWidth = widthPx ?? geometry.widthPx
   const isNarrow = visualWidth < 32
@@ -883,7 +992,7 @@ function MasterClipBlock({ clip, shot, rate, geometry, selected, startFrame, row
     if (nextMode !== hoverMode) setHoverMode(nextMode)
   }
   const clipStyle = { left: `${leftPx ?? MASTER_TRACK_PADDING + geometry.startPx}px`, width: `${visualWidth}px`, height: `${Math.max(48, rowHeight - 10)}px`, '--master-clip-edge-hit-zone': `${MASTER_CLIP_EDGE_HIT_ZONE_PX}px` } as CSSProperties
-  return <button type="button" className={`v2-master-clip${selected ? ' is-selected' : ''}${floating ? ' is-floating' : ''}${isNarrow ? ' is-narrow' : ''}${invalid ? ' is-invalid' : ''}`} data-master-clip={clip.id} data-hover-mode={floating ? undefined : hoverMode} aria-hidden={floating || undefined} tabIndex={floating ? -1 : undefined} onPointerMove={handleHoverMove} onPointerLeave={() => { if (!floating) setHoverMode('move') }} onPointerDown={(event) => { if (!floating) onPointerDown?.(event, clip) }} onClick={(event) => { event.stopPropagation(); if (!floating) onSelect(startFrame, event.shiftKey) }} style={clipStyle} title={invalid ? 'Invalid placement: overlaps another Shot' : shot?.name ?? 'Missing Shot'}><span className="v2-master-clip-handle is-trim-left" aria-hidden="true" /><span data-master-clip-content="label">{shot?.name ?? 'Missing Shot'}</span><small data-master-clip-content="duration">{frameToTimecode(duration, rate)}</small><span className="v2-master-clip-handle is-trim-right" aria-hidden="true" /></button>
+  return <button type="button" className={`v2-master-clip${selected ? ' is-selected' : ''}${floating ? ' is-floating' : ''}${isNarrow ? ' is-narrow' : ''}${invalid ? ' is-invalid' : ''}`} data-master-clip={clip.id} data-hover-mode={floating ? undefined : hoverMode} aria-hidden={floating || undefined} tabIndex={floating ? -1 : undefined} onPointerMove={handleHoverMove} onPointerLeave={() => { if (!floating) setHoverMode('move') }} onPointerDown={(event) => { if (!floating) onPointerDown?.(event, clip) }} onClick={(event) => { event.stopPropagation(); if (!floating) onSelect(startFrame, event.shiftKey) }} onDoubleClick={(event) => { event.stopPropagation(); if (!floating) onOpenShot?.(clip.id) }} style={clipStyle} title={invalid ? 'Invalid placement: overlaps another Shot' : shot?.name ?? 'Missing Shot'}><span className="v2-master-clip-handle is-trim-left" aria-hidden="true" /><span data-master-clip-content="label">{shot?.name ?? 'Missing Shot'}</span><small data-master-clip-content="duration">{frameToTimecode(duration, rate)}</small><span className="v2-master-clip-handle is-trim-right" aria-hidden="true" /></button>
 }
 
 function MasterTrackResizeHandle({ kind, height, label, onHeightChange }: { kind: 'shots' | 'graphics' | 'music'; height: number; label: string; onHeightChange: (height: number) => void }) {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { createPortal } from 'react-dom'
 import * as THREE from 'three'
 import type { ActorDocument, ActorVector3, CameraDocument, OpeningDocument, PropDocument, SceneDocument, SceneGroup, SunDocument, WallDocument } from '../core/sceneDocument'
-import { evaluateGroupTransforms, groupSelectionId } from '../core/groupMath'
+import { evaluateGroupTransforms, groupSelectionIdForEdit } from '../core/groupMath'
 import { cameraDisplayAspect, cameraProjectionForDocument, letterboxRect } from '../runtime/cameraMath'
 import { deliveryAspectValue, fitAspectInsideSource, insetFrameGuideRect } from '../runtime/frameGuideMath'
 import type { FrameGuide } from '../core/sceneDocument'
@@ -50,10 +50,13 @@ type V2StageProps = {
   cameras: readonly CameraDocument[]
   groups: readonly SceneGroup[]
   activeCameraId: string | null
+  groupEditGroupId: string | null
   selectedEntityId: string | null
   selectedEntityIds: readonly string[]
   tool: StageTool
   onSelectionChange: (selection: StageSelection) => void
+  onEnterGroupEdit: (groupId: string, childId: string) => void
+  onExitGroupEdit: () => void
   onMarqueeChange?: (rect: { left: number; top: number; width: number; height: number; additive: boolean; subtractive: boolean } | null) => void
   onBeginEntityRename: (entityId: string) => void
   onToolChange: (tool: StageTool) => void
@@ -234,7 +237,7 @@ function deliveryAspect(camera: CameraDocument): number {
   return deliveryAspectValue(camera.deliveryAspectRatio, cameraDisplayAspect(camera))
 }
 
-export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, walls, openings, lights, cameras, groups, activeCameraId, selectedEntityId, selectedEntityIds, tool, onSelectionChange, onMarqueeChange, onBeginEntityRename, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onTransformBatchStart, onTransformBatchEnd, onTransformBatchPreview, canTransformEntity, canTransformGroup, onTransformPermissionRequest, onCaptureFrameReady, cameraPreview, onCameraPreviewChange, onOpenCameraView, wallDrawing, wallDrawState, onWallDrawCommit, onWallDrawState, onWallDrawExit, snapPreviewWallId, evaluatedEntities, sceneRevision, isPlaying, transformingEntityId, suspendedTimelineEntityIds, suspendedTimelineProperties, runtimeSceneRef, timeline, isScrubbing, lastTransformDebug, selectedFrameGuideId, selectedTimelineKeyframes, cameraPathVisible, onCameraPathKeyframeSelect, selectedCameraPathSegment, onCameraPathSegmentSelect, onCameraPathPointMoveStart, onCameraPathPointMovePreview, onCameraPathPointMoveEnd, thumbnailCaptureRef, phoneCameraLiveApplyRef, phoneCameraLive, shortcutBindings, masterPreview, masterImageUrls = {}, activeMasterImageClipId = null, onMasterImageSelect = () => {}, onMasterImageChange = () => {}, readOnly = false, livePointer = null, livePointerActive = false, onLivePointerMove }: V2StageProps) {
+export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, walls, openings, lights, cameras, groups, activeCameraId, groupEditGroupId, selectedEntityId, selectedEntityIds, tool, onSelectionChange, onEnterGroupEdit, onExitGroupEdit, onMarqueeChange, onBeginEntityRename, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onTransformBatchStart, onTransformBatchEnd, onTransformBatchPreview, canTransformEntity, canTransformGroup, onTransformPermissionRequest, onCaptureFrameReady, cameraPreview, onCameraPreviewChange, onOpenCameraView, wallDrawing, wallDrawState, onWallDrawCommit, onWallDrawState, onWallDrawExit, snapPreviewWallId, evaluatedEntities, sceneRevision, isPlaying, transformingEntityId, suspendedTimelineEntityIds, suspendedTimelineProperties, runtimeSceneRef, timeline, isScrubbing, lastTransformDebug, selectedFrameGuideId, selectedTimelineKeyframes, cameraPathVisible, onCameraPathKeyframeSelect, selectedCameraPathSegment, onCameraPathSegmentSelect, onCameraPathPointMoveStart, onCameraPathPointMovePreview, onCameraPathPointMoveEnd, thumbnailCaptureRef, phoneCameraLiveApplyRef, phoneCameraLive, shortcutBindings, masterPreview, masterImageUrls = {}, activeMasterImageClipId = null, onMasterImageSelect = () => {}, onMasterImageChange = () => {}, readOnly = false, livePointer = null, livePointerActive = false, onLivePointerMove }: V2StageProps) {
   const stageRef = useRef<HTMLDivElement>(null)
   const engineRef = useRef<StageEngine | null>(null)
   const cameraViewRef = useRef<CameraViewRuntime | null>(null)
@@ -243,6 +246,7 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
   const scenicRuntimesRef = useRef(new Map<string, ScenicVisual>())
   const groupRootsRef = useRef(new Map<string, THREE.Group>())
   const groupsRef = useRef(groups)
+  const groupEditGroupIdRef = useRef<string | null>(groupEditGroupId)
   const groupPreviewRef = useRef<{ groups: readonly SceneGroup[]; actors: readonly ActorDocument[]; props: readonly PropDocument[]; walls: readonly WallDocument[]; cameras: readonly CameraDocument[] }>({ groups: [], actors: [], props: [], walls: [], cameras: [] })
   const applyGroupPreviewRef = useRef<(groupId: string) => void>(() => {})
   const baseCameraPosesRef = useRef(new Map<string, CameraPose>())
@@ -294,7 +298,7 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
   const selectionKey = selectedEntityIds.join('\u0000')
   const arrangeableSelectionCount = selectedEntityIds.filter((entityId) => !openings.some((opening) => opening.id === entityId && Boolean(opening.wallId))).length
   const arrangeIsOpen = arrangeContext?.sceneId === activeSceneId && arrangeContext.selectionKey === selectionKey && arrangeableSelectionCount >= 2
-  const callbacksRef = useRef({ onSelectionChange, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onTransformBatchStart, onTransformBatchEnd, onTransformBatchPreview, canTransformEntity, canTransformGroup, onTransformPermissionRequest, onWallDrawCommit, onWallDrawState, onWallDrawExit, onCameraPathKeyframeSelect, onCameraPathSegmentSelect, onCameraPathPointMoveStart, onCameraPathPointMovePreview, onCameraPathPointMoveEnd })
+  const callbacksRef = useRef({ onSelectionChange, onEnterGroupEdit, onExitGroupEdit, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onTransformBatchStart, onTransformBatchEnd, onTransformBatchPreview, canTransformEntity, canTransformGroup, onTransformPermissionRequest, onWallDrawCommit, onWallDrawState, onWallDrawExit, onCameraPathKeyframeSelect, onCameraPathSegmentSelect, onCameraPathPointMoveStart, onCameraPathPointMovePreview, onCameraPathPointMoveEnd })
   const phoneCameraLiveRef = useRef(phoneCameraLive)
   const diagnosticsActivationAvailable = interactionDiagnosticsCanBeActivated()
   const [interactionDiagnosticsEnabled, setInteractionDiagnosticsEnabled] = useState(interactionDiagnosticsFromLocation)
@@ -324,6 +328,9 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
   useEffect(() => {
     groupsRef.current = groups
   }, [groups])
+  useEffect(() => {
+    groupEditGroupIdRef.current = groupEditGroupId
+  }, [groupEditGroupId])
 
   const masterPreviewData = useMemo(() => {
     const scene = masterPreview?.scene ?? null
@@ -510,8 +517,8 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
   }, [isPlaying, phoneCameraLive])
 
   useEffect(() => {
-    callbacksRef.current = { onSelectionChange, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onTransformBatchStart, onTransformBatchEnd, onTransformBatchPreview, canTransformEntity, canTransformGroup, onTransformPermissionRequest, onWallDrawCommit, onWallDrawState, onWallDrawExit, onCameraPathKeyframeSelect, onCameraPathSegmentSelect, onCameraPathPointMoveStart, onCameraPathPointMovePreview, onCameraPathPointMoveEnd }
-  }, [onSelectionChange, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onTransformBatchStart, onTransformBatchEnd, onTransformBatchPreview, canTransformEntity, canTransformGroup, onTransformPermissionRequest, onWallDrawCommit, onWallDrawState, onWallDrawExit, onCameraPathKeyframeSelect, onCameraPathSegmentSelect, onCameraPathPointMoveStart, onCameraPathPointMovePreview, onCameraPathPointMoveEnd])
+    callbacksRef.current = { onSelectionChange, onEnterGroupEdit, onExitGroupEdit, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onTransformBatchStart, onTransformBatchEnd, onTransformBatchPreview, canTransformEntity, canTransformGroup, onTransformPermissionRequest, onWallDrawCommit, onWallDrawState, onWallDrawExit, onCameraPathKeyframeSelect, onCameraPathSegmentSelect, onCameraPathPointMoveStart, onCameraPathPointMovePreview, onCameraPathPointMoveEnd }
+  }, [onSelectionChange, onEnterGroupEdit, onExitGroupEdit, onToolChange, onTransformStart, onTransformEnd, onTransformPreview, onTransformBatchStart, onTransformBatchEnd, onTransformBatchPreview, canTransformEntity, canTransformGroup, onTransformPermissionRequest, onWallDrawCommit, onWallDrawState, onWallDrawExit, onCameraPathKeyframeSelect, onCameraPathSegmentSelect, onCameraPathPointMoveStart, onCameraPathPointMovePreview, onCameraPathPointMoveEnd])
 
   useEffect(() => {
     const wasLive = phoneCameraLiveRef.current
@@ -546,6 +553,19 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
         if (primary) cameraViewRef.current?.previewTransform(primary)
         callbacksRef.current.onTransformBatchPreview(batch)
       },
+      onEntityDoubleClick: (entityId) => {
+        const group = groupsRef.current.find((candidate) => candidate.childIds.includes(entityId))
+        if (!group) return
+        callbacksRef.current.onEnterGroupEdit(group.id, entityId)
+        callbacksRef.current.onSelectionChange({ ids: [entityId], primaryId: entityId })
+      },
+      onEscape: () => {
+        const groupId = groupEditGroupIdRef.current
+        if (!groupId) return false
+        callbacksRef.current.onExitGroupEdit()
+        callbacksRef.current.onSelectionChange({ ids: [groupId], primaryId: groupId })
+        return true
+      },
       canTransformEntity: (entityId) => callbacksRef.current.canTransformEntity?.(entityId) ?? true,
       canTransformGroup: (entityIds) => callbacksRef.current.canTransformGroup?.(entityIds) ?? true,
       onTransformPermissionRequest: (entityId) => callbacksRef.current.onTransformPermissionRequest?.(entityId) ?? true,
@@ -558,8 +578,14 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
         setMarqueeRect(rect ? { ...rect, left: rect.left - bounds.left, top: rect.top - bounds.top } : null)
         onMarqueeChange?.(rect)
       },
-      resolveSelectionId: (entityId) => groupSelectionId(entityId, groupsRef.current),
-      resolveSelectionVisualIds: (entityId) => groupsRef.current.find((group) => group.id === entityId)?.childIds ?? [entityId],
+      resolveSelectionId: (entityId) => {
+        return groupSelectionIdForEdit(entityId, groupsRef.current, groupEditGroupIdRef.current)
+      },
+      resolveSelectionVisualIds: (entityId) => {
+        const editingGroup = groupsRef.current.find((group) => group.id === groupEditGroupIdRef.current)
+        if (editingGroup?.childIds.includes(entityId)) return [entityId]
+        return groupsRef.current.find((group) => group.id === entityId)?.childIds ?? [entityId]
+      },
       onCameraPathKeyframeSelect: (keyframe) => callbacksRef.current.onCameraPathKeyframeSelect(keyframe),
       onCameraPathSegmentSelect: (segment) => callbacksRef.current.onCameraPathSegmentSelect(segment),
       onCameraPathPointMoveStart: (keyframe, position) => callbacksRef.current.onCameraPathPointMoveStart(keyframe, position),
@@ -617,7 +643,11 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
     }
     stageElement.addEventListener('webglcontextlost', handleContextLost, true)
     stageElement.addEventListener('webglcontextrestored', handleContextRestored, true)
-    const removeSelectionListener = engine.onSelectionChanged((selection) => callbacksRef.current.onSelectionChange(selection))
+    const removeSelectionListener = engine.onSelectionChanged((selection) => {
+      const editingGroup = groupsRef.current.find((group) => group.id === groupEditGroupIdRef.current)
+      if (editingGroup && selection.ids.some((id) => !editingGroup.childIds.includes(id))) callbacksRef.current.onExitGroupEdit()
+      callbacksRef.current.onSelectionChange(selection)
+    })
     const initial = initialStageRef.current
     engine.reconcileEntities(() => {
       syncActors(engine, initial.activeSceneId, initial.actors, actorRuntimes)

@@ -7,7 +7,7 @@ export const LIVE_REVIEW_CHAT_HISTORY_LIMIT = 100
 
 export type LiveReviewWorkspace = 'blocking' | 'camera' | 'shot-list'
 export type LiveReviewTimelineMode = 'scene' | 'master'
-export type LiveReviewShotListView = 'grid' | 'list'
+export type LiveReviewShotListView = 'board' | 'grid' | 'list'
 export type LiveReviewStageView = 'blocking' | 'camera'
 export type LiveReviewRole = 'host' | 'editor' | 'viewer'
 export type LiveReviewParticipantStatus = 'connected' | 'reconnecting'
@@ -114,6 +114,11 @@ export type LiveReviewEditResult = {
   reason?: LiveReviewEditRejection
   projectRevision: number
 }
+export type LiveReviewProjectEditResult = {
+  accepted: boolean
+  reason?: Extract<LiveReviewEditRejection, 'permission_denied' | 'stale_revision' | 'host_unavailable' | 'invalid_payload'>
+  projectRevision: number
+}
 
 export type LiveReviewPointer = {
   participantId: string
@@ -195,6 +200,7 @@ export type LiveReviewClientMessage =
   | { v: 2; type: 'editor_shot_patch'; patch: LiveReviewShotPatch }
   | { v: 2; type: 'editor_planning_commit'; commit: LiveReviewPlanningCommit }
   | { v: 2; type: 'editor_timeline_commit'; commit: LiveReviewTimelineCommit }
+  | { v: 2; type: 'editor_project_snapshot'; baseRevision: number; project: LiveReviewProject }
   | { v: 2; type: 'host_edit_result'; result: LiveReviewEditResult }
   | { v: 2; type: 'request_snapshot' }
   | { v: 2; type: 'end_session' }
@@ -205,6 +211,7 @@ export type LiveReviewServerMessage =
   | { v: 2; type: 'session_created'; session: string; token: string; expiresAt: number; participantId: string; participantToken: string; participants: LiveReviewParticipant[]; chatHistory: LiveReviewChatMessage[]; pointer: LiveReviewPointer | null; leases: LiveReviewLease[]; hostConnected: boolean }
   | { v: 2; type: 'session_snapshot'; project: LiveReviewProject; state: LiveReviewState; revision: number; projectRevision: number; hostConnected: boolean; participantId: string; participantToken: string; participants: LiveReviewParticipant[]; chatHistory: LiveReviewChatMessage[]; pointer: LiveReviewPointer | null; leases: LiveReviewLease[] }
   | { v: 2; type: 'project_update'; project: LiveReviewProject; revision: number }
+  | { v: 2; type: 'project_edit_result'; result: LiveReviewProjectEditResult }
   | { v: 2; type: 'present_state'; state: LiveReviewState }
   | { v: 2; type: 'transform_update'; transform: LiveReviewTransform }
   | { v: 2; type: 'transform_preview'; preview: LiveReviewTransformPreview }
@@ -290,7 +297,7 @@ export function isLiveReviewState(value: unknown): value is LiveReviewState {
     typeof value.scenePlaying === 'boolean' && typeof value.masterPlaying === 'boolean' &&
     isOneOf(value.stageViewMode, ['blocking', 'camera']) &&
     typeof value.cameraPreviewVisible === 'boolean' &&
-    isOneOf(value.shotListViewMode, ['grid', 'list']) &&
+    isOneOf(value.shotListViewMode, ['board', 'grid', 'list']) &&
     (value.shotListSceneFilter === null || typeof value.shotListSceneFilter === 'string') &&
     typeof value.presentMode === 'boolean' && finiteNumber(value.projectRevision)
 }

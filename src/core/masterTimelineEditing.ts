@@ -1,5 +1,6 @@
 import {
   createMasterClipId,
+  insertMasterClipAtFrame,
   materializeMasterClipPlacements,
   masterClipDurationFrames,
   masterClipStartFrame,
@@ -11,6 +12,7 @@ import {
 import type { ShotDocument } from './shotDocument'
 
 export type MasterTimelineItem = { kind: 'clip' | 'image'; id: string }
+export type MasterMarqueeMode = 'replace' | 'add' | 'subtract'
 
 export type MasterTimelineEditResult = {
   sequence: MasterSequenceDocument
@@ -32,6 +34,51 @@ export type MasterTrimPreview = {
   constrained: boolean
   neighborCollisionBoundary: number | null
   limitingConstraint: MasterTrimLimit
+}
+
+/** Returns the Shot clips intersected by a frame-domain marquee. */
+export function masterTimelineMarqueeItems(sequence: MasterSequenceDocument, startFrame: number, endFrame: number): MasterTimelineItem[] {
+  const materialized = materializeMasterClipPlacements(sequence)
+  const rangeStart = Math.min(Math.round(startFrame), Math.round(endFrame))
+  const rangeEnd = Math.max(Math.round(startFrame), Math.round(endFrame))
+  return orderedMasterClips(materialized).flatMap((clip) => {
+    const start = masterClipStartFrame(materialized, clip.id) ?? 0
+    const end = start + masterClipDurationFrames(clip)
+    return start < rangeEnd && end > rangeStart ? [{ kind: 'clip' as const, id: clip.id }] : []
+  })
+}
+
+/** Applies marquee modifiers without creating history or selecting Graphics clips. */
+export function applyMasterTimelineMarqueeSelection(sequence: MasterSequenceDocument, current: readonly MasterTimelineItem[], startFrame: number, endFrame: number, mode: MasterMarqueeMode): MasterTimelineItem[] {
+  const hits = masterTimelineMarqueeItems(sequence, startFrame, endFrame)
+  const hitKeys = new Set(hits.map((item) => `${item.kind}:${item.id}`))
+  const normalized = normalizeMasterTimelineSelection(sequence, current)
+  if (mode === 'replace') return hits
+  if (mode === 'add') {
+    return normalizeMasterTimelineSelection(sequence, [...normalized, ...hits])
+  }
+  return normalized.filter((item) => !hitKeys.has(`${item.kind}:${item.id}`))
+}
+
+/** Inserts a Shot at an empty/boundary frame and shifts only following Shot clips. */
+export function insertMasterClipWithRoomAtFrame(sequence: MasterSequenceDocument, shot: ShotDocument, startMasterFrame: number): MasterSequenceDocument | null {
+  const materialized = materializeMasterClipPlacements(sequence)
+  const start = Math.max(0, Math.round(Number.isFinite(startMasterFrame) ? startMasterFrame : 0))
+  const duration = Math.max(1, Math.round(shot.endFrame) - Math.round(shot.startFrame))
+  const starts = materialized.clips.map((clip) => ({ clip, start: masterClipStartFrame(materialized, clip.id) ?? 0 }))
+  const insideClip = starts.some(({ clip, start: clipStart }) => {
+    const end = clipStart + masterClipDurationFrames(clip)
+    return start > clipStart && start < end
+  })
+  if (insideClip) return null
+  const shifted = {
+    ...materialized,
+    clips: materialized.clips.map((clip) => {
+      const clipStart = masterClipStartFrame(materialized, clip.id) ?? 0
+      return clipStart >= start ? { ...clip, startMasterFrame: clipStart + duration } : clip
+    }),
+  }
+  return insertMasterClipAtFrame(shifted, shot, start)
 }
 
 /**

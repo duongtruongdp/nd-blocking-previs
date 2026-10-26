@@ -27,6 +27,26 @@ export function applyGroupTransform(entity: GroupableEntity, group: SceneGroup):
   return { ...entity, position: [cleanZero(position.x), cleanZero(position.y), cleanZero(position.z)], rotation: [cleanZero(euler.x), cleanZero(euler.y), cleanZero(euler.z)] }
 }
 
+/** Removes a group's evaluated world-space delta from an edited child. */
+export function removeGroupTransform<T extends GroupableEntity>(entity: T, group: SceneGroup): T {
+  const cleanZero = (value: number): number => value === 0 ? 0 : value
+  const pivot = new THREE.Vector3(...group.pivot)
+  const groupEuler = new THREE.Euler(...group.rotation, 'XYZ')
+  const inverseGroupQuaternion = new THREE.Quaternion().setFromEuler(groupEuler).invert()
+  const position = new THREE.Vector3(...entity.position)
+    .sub(new THREE.Vector3(...group.position))
+    .sub(pivot)
+    .applyQuaternion(inverseGroupQuaternion)
+    .add(pivot)
+  const worldQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(...entity.rotation, 'XYZ'))
+  const localRotation = new THREE.Euler().setFromQuaternion(inverseGroupQuaternion.clone().multiply(worldQuaternion), 'XYZ')
+  return {
+    ...entity,
+    position: [cleanZero(position.x), cleanZero(position.y), cleanZero(position.z)],
+    rotation: [cleanZero(localRotation.x), cleanZero(localRotation.y), cleanZero(localRotation.z)],
+  }
+}
+
 export function groupForChild(scene: SceneDocument, entityId: string): SceneGroup | null {
   return scene.groups.find((group) => group.childIds.includes(entityId)) ?? null
 }
@@ -34,6 +54,12 @@ export function groupForChild(scene: SceneDocument, entityId: string): SceneGrou
 /** Resolve a rendered child to the logical selection target for its group. */
 export function groupSelectionId(entityId: string, groups: readonly SceneGroup[]): string {
   return groups.find((group) => group.childIds.includes(entityId))?.id ?? entityId
+}
+
+/** Keeps grouped picks collapsed until a specific group enters child-edit mode. */
+export function groupSelectionIdForEdit(entityId: string, groups: readonly SceneGroup[], editingGroupId: string | null): string {
+  const editingGroup = editingGroupId ? groups.find((group) => group.id === editingGroupId) : null
+  return editingGroup?.childIds.includes(entityId) ? entityId : groupSelectionId(entityId, groups)
 }
 
 /** Collapse rendered child hits to one logical target per persistent group. */

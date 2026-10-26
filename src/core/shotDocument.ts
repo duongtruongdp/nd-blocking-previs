@@ -97,6 +97,13 @@ export function formatShotDisplayIdentity(order: number, name: string): ShotDisp
   }
 }
 
+/** Returns the compact Workspace label without changing the persisted Shot name. */
+export function workspaceShotLabel(name: string): string {
+  const trimmedName = name.trim()
+  const defaultName = /^shot\s+(\d+)$/i.exec(trimmedName)
+  return defaultName?.[1] ?? trimmedName
+}
+
 export function shotDurationFrames(shot: Pick<ShotDocument, 'startFrame' | 'endFrame'>): number {
   return Math.max(1, Math.round(shot.endFrame - shot.startFrame))
 }

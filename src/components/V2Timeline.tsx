@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from 'react'
 import type { RationalFrameRate, TimelineDocument, TimelineEasingMode, TimelineProperty, TimelineTrack } from '../core/sceneDocument'
 import type { TimelineWorkspaceViewPatch, TimelineWorkspaceViewState } from '../core/timelineWorkspaceSession'
-import { DEFAULT_TIMELINE_PIXELS_PER_SECOND, MAX_TIMELINE_PIXELS_PER_SECOND, MIN_TIMELINE_PIXELS_PER_SECOND, TIMELINE_FRAME_RATES, TIMELINE_ZOOM_LEVELS, clampTimelineKeyframeDelta, frameRateLabel, frameToTimecode, timelineCanvasModel, timelineCanvasModelForViewport, timelineCanvasXToFrame, timelineDurationEndX, timelineDurationFrames, timelineEasingMode, timelineFitPixelsPerSecond, timelineFrameToCanvasX, timecodeToFrame, type TimelineKeyframeSelection } from '../timeline/timelineMath'
+import { DEFAULT_TIMELINE_PIXELS_PER_SECOND, MAX_TIMELINE_PIXELS_PER_SECOND, MIN_TIMELINE_PIXELS_PER_SECOND, TIMELINE_FRAME_RATES, TIMELINE_ZOOM_LEVELS, canMoveTimelineKeyframes, clampTimelineKeyframeDelta, frameRateLabel, frameToTimecode, timelineCanvasModel, timelineCanvasModelForViewport, timelineCanvasXToFrame, timelineDurationEndX, timelineDurationFrames, timelineEasingMode, timelineFitPixelsPerSecond, timelineFrameToCanvasX, timelineKeyframeSelectionKey, timecodeToFrame, type TimelineKeyframeSelection } from '../timeline/timelineMath'
 import { groupTimelineTracks, type TimelineEntityDescriptor } from '../timeline/timelineGroups'
 import { timelineRulerLabelAlignment } from '../timeline/timelinePresentation'
 import { keyframeGlyphLabel, keyframeGlyphMode } from '../timeline/keyframeGlyph'
@@ -43,14 +43,13 @@ type V2TimelineProps = {
   onRegisterZoomShortcut?: (handler: TimelineZoomShortcutHandler | null) => void
 }
 
-type KeyframeDrag = { selection: readonly TimelineKeyframeSelection[]; anchor: TimelineKeyframeSelection; sourceFrame: number; deltaFrames: number }
+const KEYFRAME_DRAG_THRESHOLD_PX = 3
+type KeyframeDrag = { selection: readonly TimelineKeyframeSelection[]; anchor: TimelineKeyframeSelection; sourceFrame: number; startClientX: number; startClientY: number; pointerId: number; deltaFrames: number; proposedDeltaFrames: number; editStarted: boolean }
 type MarqueeDrag = { startX: number; startY: number; currentX: number; currentY: number; viewportLeft: number; viewportTop: number; additive: boolean }
 type TimelineContextMenu = { target: TimelineKeyframeSelection; selection: readonly TimelineKeyframeSelection[]; x: number; y: number }
 
 const propertyLabels: Record<TimelineProperty, string> = { position: 'Position', heading: 'Heading', rotation: 'Rotation', scale: 'Scale', focalLengthMm: 'Focal Length', openAngle: 'Open Angle', azimuth: 'Direction', elevation: 'Height', intensity: 'Intensity', color: 'Color' }
 const easingOptions: readonly { mode: TimelineEasingMode; label: string }[] = [{ mode: 'linear', label: 'Linear' }, { mode: 'easeIn', label: 'Ease In' }, { mode: 'easeOut', label: 'Ease Out' }, { mode: 'easeInOut', label: 'Ease In & Out' }]
-
-function selectionKey(selection: TimelineKeyframeSelection): string { return `${selection.trackId}:${selection.keyframeId}` }
 
 function frameFromPointer(clientX: number, element: HTMLElement, timeline: TimelineDocument, pixelsPerSecond: number): number {
   const bounds = element.getBoundingClientRect()
@@ -92,6 +91,8 @@ export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPla
   const rulerRef = useRef<HTMLDivElement>(null)
   const marqueeRef = useRef<MarqueeDrag | null>(null)
   const draggingGroupRef = useRef<KeyframeDrag | null>(null)
+  const draggingKeyframeTargetRef = useRef<HTMLButtonElement | null>(null)
+  const keyframeEditEndRef = useRef(onKeyframeEditEnd)
   const zoomAnchorRef = useRef<{ screenX: number } | null>(null)
   const frameInputRef = useRef<HTMLInputElement>(null)
   const durationInputRef = useRef<HTMLInputElement>(null)
@@ -104,8 +105,9 @@ export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPla
   const [draggingGroup, setDraggingGroup] = useState<KeyframeDrag | null>(null)
   const [marquee, setMarquee] = useState<MarqueeDrag | null>(null)
   const [contextMenu, setContextMenu] = useState<TimelineContextMenu | null>(null)
+  useEffect(() => { keyframeEditEndRef.current = onKeyframeEditEnd }, [onKeyframeEditEnd])
   const groups = groupTimelineTracks(tracks, entities)
-  const selectedSet = new Set(selectedKeyframes.map(selectionKey))
+  const selectedSet = new Set(selectedKeyframes.map(timelineKeyframeSelectionKey))
   const canvasModel = timelineCanvasModelForViewport(timeline, pixelsPerSecond, timelineViewportWidth)
   const timelineCanvasWidth = canvasModel.contentWidth
   const durationEndX = timelineDurationEndX(canvasModel)
@@ -190,10 +192,7 @@ export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPla
       if (target instanceof Element && target.closest('.v2-timeline-context-menu')) return
       setContextMenu(null)
     }
-    const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      setContextMenu(null); marqueeRef.current = null; draggingGroupRef.current = null; setMarquee(null); setDraggingGroup(null)
-    }
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setContextMenu(null) }
     window.addEventListener('pointerdown', dismiss); window.addEventListener('keydown', escape)
     return () => { window.removeEventListener('pointerdown', dismiss); window.removeEventListener('keydown', escape) }
   }, [contextMenu])
@@ -283,42 +282,77 @@ export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPla
     const next = { ...active, currentX: event.clientX, currentY: event.clientY }; marqueeRef.current = next; setMarquee(next)
   }
 
+  const resetKeyframeDrag = useCallback((active: KeyframeDrag) => {
+    const target = draggingKeyframeTargetRef.current
+    draggingGroupRef.current = null
+    draggingKeyframeTargetRef.current = null
+    setDraggingGroup(null)
+    if (target?.hasPointerCapture(active.pointerId)) target.releasePointerCapture(active.pointerId)
+  }, [])
+  const cancelActiveKeyframeDrag = useCallback(() => {
+    const active = draggingGroupRef.current
+    if (!active) return
+    resetKeyframeDrag(active)
+    if (active.editStarted) keyframeEditEndRef.current?.(false)
+  }, [resetKeyframeDrag])
   const handleKeyframePointerDown = (event: PointerEvent<HTMLButtonElement>, track: TimelineTrack, keyframeId: string, frame: number) => {
     if (isPlaying) return
     event.preventDefault(); event.stopPropagation()
     const selection = { trackId: track.id, keyframeId }
     if (event.shiftKey) { onKeyframeSelect(selection, true); return }
-    const isSelected = selectedSet.has(selectionKey(selection)); const group = isSelected ? [...selectedKeyframes] : [selection]
+    const isSelected = selectedSet.has(timelineKeyframeSelectionKey(selection)); const group = isSelected ? [...selectedKeyframes] : [selection]
     if (!isSelected) onKeyframeSelect(selection, false)
     if (canEditKeyframe && (!canEditKeyframe(selection) || group.length !== 1)) return
-    onKeyframeEditStart?.(selection)
-    const next = { selection: group, anchor: selection, sourceFrame: frame, deltaFrames: 0 }; draggingGroupRef.current = next; setDraggingGroup(next); event.currentTarget.setPointerCapture(event.pointerId)
+    const next = { selection: group, anchor: selection, sourceFrame: frame, startClientX: event.clientX, startClientY: event.clientY, pointerId: event.pointerId, deltaFrames: 0, proposedDeltaFrames: 0, editStarted: false }
+    draggingGroupRef.current = next
+    draggingKeyframeTargetRef.current = event.currentTarget
+    setDraggingGroup(next)
+    event.currentTarget.setPointerCapture(event.pointerId)
   }
   const handleKeyframePointerMove = (event: PointerEvent<HTMLButtonElement>, trackId: string, keyframeId: string) => {
     const active = draggingGroupRef.current
-    if (!active || active.anchor.trackId !== trackId || active.anchor.keyframeId !== keyframeId || !event.currentTarget.hasPointerCapture(event.pointerId)) return
+    if (!active || active.pointerId !== event.pointerId || active.anchor.trackId !== trackId || active.anchor.keyframeId !== keyframeId || !event.currentTarget.hasPointerCapture(event.pointerId)) return
+    if (!active.editStarted && Math.hypot(event.clientX - active.startClientX, event.clientY - active.startClientY) < KEYFRAME_DRAG_THRESHOLD_PX) return
+    if (!active.editStarted) {
+      active.editStarted = true
+      onKeyframeEditStart?.(active.anchor)
+    }
     const lane = event.currentTarget.parentElement
     if (!lane) return
     const rawDelta = frameFromPointer(event.clientX, lane, timeline, pixelsPerSecond) - active.sourceFrame
+    const proposedDeltaFrames = clampTimelineKeyframeDelta(timeline, active.selection, rawDelta)
+    const deltaFrames = canMoveTimelineKeyframes(timeline, active.selection, proposedDeltaFrames) ? proposedDeltaFrames : active.deltaFrames
     onKeyframeEditActivity?.()
-    const next = { ...active, deltaFrames: clampTimelineKeyframeDelta(timeline, active.selection, rawDelta) }; draggingGroupRef.current = next; setDraggingGroup(next)
+    const next = { ...active, deltaFrames, proposedDeltaFrames }; draggingGroupRef.current = next; setDraggingGroup(next)
   }
   const finishKeyframeDrag = (event: PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault(); event.stopPropagation()
     const active = draggingGroupRef.current
-    if (!active) return
-    draggingGroupRef.current = null; setDraggingGroup(null)
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-    const committed = active.deltaFrames !== 0
+    if (!active || active.pointerId !== event.pointerId) return
+    const committed = active.editStarted && active.deltaFrames !== 0
+    resetKeyframeDrag(active)
     if (committed) onMoveKeyframes(active.selection, active.deltaFrames)
-    onKeyframeEditEnd?.(committed)
+    if (active.editStarted) keyframeEditEndRef.current?.(committed)
   }
   const cancelKeyframeDrag = (event: PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault(); event.stopPropagation()
     const active = draggingGroupRef.current
-    if (!active) return
-    draggingGroupRef.current = null; setDraggingGroup(null)
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-    onKeyframeEditEnd?.(false)
+    if (!active || active.pointerId !== event.pointerId) return
+    cancelActiveKeyframeDrag()
   }
+
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !draggingGroupRef.current) return
+      event.preventDefault()
+      cancelActiveKeyframeDrag()
+    }
+    window.addEventListener('keydown', escape)
+    return () => {
+      window.removeEventListener('keydown', escape)
+      cancelActiveKeyframeDrag()
+    }
+  }, [cancelActiveKeyframeDrag])
 
   const marqueeStyle = marquee ? { left: Math.min(marquee.startX, marquee.currentX) - marquee.viewportLeft, top: Math.min(marquee.startY, marquee.currentY) - marquee.viewportTop, width: Math.abs(marquee.currentX - marquee.startX), height: Math.abs(marquee.currentY - marquee.startY) } : undefined
   const rateValue = `${timeline.frameRate.numerator}/${timeline.frameRate.denominator}`
@@ -346,7 +380,7 @@ export function V2Timeline({ timeline, tracks, entities, selectedEntityId, isPla
         <div className="v2-timeline-canvas" style={{ width: `${timelineCanvasWidth}px` }}>
           <div className="v2-ruler" ref={rulerRef} onPointerDown={handleRulerPointerDown} onPointerMove={handleRulerPointerMove} onPointerUp={finishRulerScrub} onPointerCancel={finishRulerScrub}>{ticks.map((frame, index) => { const alignment = timelineRulerLabelAlignment(frame, index, ticks, timeline.startFrame, timeline.endFrame); return <span className={alignment === 'start' ? 'is-start' : alignment === 'end' ? 'is-end' : undefined} key={frame} style={{ left: `${frameX(frame)}px` }}>{rulerLabel(frame, timeline.frameRate)}</span> })}</div>
           <div className="v2-timeline-grid">{ticks.map((frame) => <div className="v2-timeline-grid-line" key={frame} style={{ left: `${frameX(frame)}px` }} aria-hidden="true" />)}</div>
-          <div className="v2-timeline-lanes">{groups.map((group) => { const collapsed = collapsedGroups[group.id] === true; return <div className="v2-timeline-group" key={group.id}><div className={`v2-timeline-group-header${group.id === selectedEntityId ? ' is-selected' : ''}`}><div className="v2-timeline-group-lane" aria-hidden="true"><span>{group.tracks.reduce((count, track) => count + track.keyframes.length, 0)} keys</span></div></div>{!collapsed ? group.tracks.map((track) => <div className={`v2-timeline-track${track.entityId === selectedEntityId ? ' is-selected' : ''}`} key={track.id}><div className="v2-timeline-track-lane" onPointerDown={handleLanePointerDown} onPointerMove={handleLanePointerMove} onPointerUp={completeMarquee} onPointerCancel={completeMarquee} onLostPointerCapture={completeMarquee}>{track.keyframes.map((keyframe) => { const selection = { trackId: track.id, keyframeId: keyframe.id }; const isSelected = selectedSet.has(selectionKey(selection)); const dragItem = draggingGroup?.selection.some((item) => item.trackId === track.id && item.keyframeId === keyframe.id); const displayFrame = dragItem ? keyframe.frame + draggingGroup!.deltaFrames : keyframe.frame; const glyphMode = keyframeGlyphMode(keyframe); const glyphLabel = keyframeGlyphLabel(glyphMode); return <button className={`v2-timeline-keyframe v2-timeline-keyframe-${glyphMode}${keyframe.frame === timeline.currentFrame ? ' is-current' : ''}${isSelected ? ' is-selected' : ''}${dragItem && draggingGroup!.deltaFrames !== 0 ? ' is-dragging' : ''}`} data-track-id={track.id} data-keyframe-id={keyframe.id} key={keyframe.id} style={{ left: `${frameX(displayFrame)}px` }} title={`${group.displayName} · ${propertyLabels[track.property]} · frame ${displayFrame} · ${glyphLabel}`} aria-label={`${group.displayName} ${propertyLabels[track.property]} keyframe, frame ${displayFrame}, ${glyphLabel}`} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); if (canEditKeyframe && !canEditKeyframe(selection)) { onKeyframeSelect(selection, false); return } const menuSelection = isSelected ? [...selectedKeyframes] : [selection]; if (!isSelected) onKeyframeSelect(selection, false); setContextMenu({ target: selection, selection: menuSelection, x: Math.min(event.clientX, window.innerWidth - 190), y: Math.min(event.clientY, window.innerHeight - 190) }) }} onPointerDown={(event) => handleKeyframePointerDown(event, track, keyframe.id, keyframe.frame)} onPointerMove={(event) => handleKeyframePointerMove(event, track.id, keyframe.id)} onPointerUp={finishKeyframeDrag} onPointerCancel={cancelKeyframeDrag} onLostPointerCapture={cancelKeyframeDrag} type="button"><KeyframeGlyph mode={glyphMode} /></button> })}</div></div>) : null}</div> })}</div>
+          <div className="v2-timeline-lanes">{groups.map((group) => { const collapsed = collapsedGroups[group.id] === true; return <div className="v2-timeline-group" key={group.id}><div className={`v2-timeline-group-header${group.id === selectedEntityId ? ' is-selected' : ''}`}><div className="v2-timeline-group-lane" aria-hidden="true"><span>{group.tracks.reduce((count, track) => count + track.keyframes.length, 0)} keys</span></div></div>{!collapsed ? group.tracks.map((track) => <div className={`v2-timeline-track${track.entityId === selectedEntityId ? ' is-selected' : ''}`} key={track.id}><div className="v2-timeline-track-lane" onPointerDown={handleLanePointerDown} onPointerMove={handleLanePointerMove} onPointerUp={completeMarquee} onPointerCancel={completeMarquee} onLostPointerCapture={completeMarquee}>{track.keyframes.map((keyframe) => { const selection = { trackId: track.id, keyframeId: keyframe.id }; const isSelected = selectedSet.has(timelineKeyframeSelectionKey(selection)); const dragItem = draggingGroup?.selection.some((item) => item.trackId === track.id && item.keyframeId === keyframe.id); const displayFrame = dragItem ? keyframe.frame + draggingGroup!.deltaFrames : keyframe.frame; const isInvalidDrag = dragItem && draggingGroup!.proposedDeltaFrames !== draggingGroup!.deltaFrames; const glyphMode = keyframeGlyphMode(keyframe); const glyphLabel = keyframeGlyphLabel(glyphMode); return <button className={`v2-timeline-keyframe v2-timeline-keyframe-${glyphMode}${keyframe.frame === timeline.currentFrame ? ' is-current' : ''}${isSelected ? ' is-selected' : ''}${dragItem && draggingGroup!.deltaFrames !== 0 ? ' is-dragging' : ''}${isInvalidDrag ? ' is-invalid' : ''}`} data-track-id={track.id} data-keyframe-id={keyframe.id} key={keyframe.id} style={{ left: `${frameX(displayFrame)}px` }} title={`${group.displayName} · ${propertyLabels[track.property]} · frame ${displayFrame} · ${glyphLabel}`} aria-label={`${group.displayName} ${propertyLabels[track.property]} keyframe, frame ${displayFrame}, ${glyphLabel}`} aria-pressed={isSelected} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); if (canEditKeyframe && !canEditKeyframe(selection)) { onKeyframeSelect(selection, false); return } const menuSelection = isSelected ? [...selectedKeyframes] : [selection]; if (!isSelected) onKeyframeSelect(selection, false); setContextMenu({ target: selection, selection: menuSelection, x: Math.min(event.clientX, window.innerWidth - 190), y: Math.min(event.clientY, window.innerHeight - 190) }) }} onPointerDown={(event) => handleKeyframePointerDown(event, track, keyframe.id, keyframe.frame)} onPointerMove={(event) => handleKeyframePointerMove(event, track.id, keyframe.id)} onPointerUp={finishKeyframeDrag} onPointerCancel={cancelKeyframeDrag} onLostPointerCapture={cancelKeyframeDrag} type="button"><KeyframeGlyph mode={glyphMode} /></button> })}</div></div>) : null}</div> })}</div>
           <div className="v2-timeline-outside-shot" style={{ left: `${durationEndX}px`, width: `${Math.max(0, timelineCanvasWidth - durationEndX)}px` }} aria-hidden="true" />
           <div className="v2-timeline-range-layer" aria-hidden="true"><div className="v2-timeline-range-outside" style={{ left: 0, width: `${frameX(timeline.markIn)}px` }} /><div className="v2-timeline-range-outside" style={{ left: `${frameX(timeline.markOut)}px`, width: `${Math.max(0, timelineCanvasWidth - frameX(timeline.markOut))}px` }} /><div className="v2-timeline-range-active" style={{ left: `${frameX(timeline.markIn)}px`, width: `${Math.max(0, frameX(timeline.markOut) - frameX(timeline.markIn))}px` }} /></div>
           <div className="v2-timeline-mark v2-timeline-mark-in" style={{ left: `${frameX(timeline.markIn)}px` }} aria-hidden="true" /><div className="v2-timeline-mark v2-timeline-mark-out" style={{ left: `${frameX(timeline.markOut)}px` }} aria-hidden="true" />

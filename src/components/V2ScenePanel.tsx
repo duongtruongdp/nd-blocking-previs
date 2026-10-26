@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { ActorDocument, CameraDocument, OpeningDocument, PropDocument, RationalFrameRate, SceneGroup, SunDocument, WallDocument } from '../core/sceneDocument'
 import type { ProjectSceneEntry } from '../core/projectDocument'
 import type { ShotDocument } from '../core/shotDocument'
-import { shotDurationFrames } from '../core/shotDocument'
+import { shotDurationFrames, workspaceShotLabel } from '../core/shotDocument'
 import { frameToTimecode, timecodeToFrame } from '../timeline/timelineMath'
 import { resolveShotCamera } from '../core/shotCameraResolver'
 import type { WorkspaceSidebarSection, WorkspaceSidebarSectionState } from '../core/workspaceSidebarSession'
+import { type RelativeInsertPosition } from '../core/sceneShotOrdering'
 
 type V2ScenePanelProps = {
   scenes: readonly ProjectSceneEntry[]
@@ -19,10 +20,14 @@ type V2ScenePanelProps = {
   cameras: readonly CameraDocument[]
   groups: readonly SceneGroup[]
   activeCameraId: string | null
+  groupEditGroupId?: string | null
   selectedEntityIds: readonly string[]
   sectionState: WorkspaceSidebarSectionState
   onSectionToggle: (section: WorkspaceSidebarSection, expanded: boolean) => void
   onSelectScene: (sceneId: string) => void
+  canEditOrdering?: boolean
+  onReorderScene?: (sceneId: string, targetIndex: number) => void
+  onInsertSceneRelative?: (sceneId: string, position: RelativeInsertPosition) => void
   onAddScene: () => void
   onRenameScene: (sceneId: string, name: string) => void
   onDuplicateScene: (sceneId: string) => void
@@ -37,6 +42,7 @@ type V2ScenePanelProps = {
   onAddCamera: () => void
   onSetActiveCamera: (cameraId: string) => void
   onSelectEntity: (entityId: string, additive?: boolean) => void
+  onEnterGroupEdit?: (groupId: string, childId: string) => void
   onBeginEntityRename: (entityId: string) => void
   shots: readonly ShotDocument[]
   activeShotId: string | null
@@ -45,7 +51,10 @@ type V2ScenePanelProps = {
   onRenameShot: (shotId: string, name: string) => void
   onDuplicateShot: (shotId: string) => void
   onDeleteShot: (shotId: string) => void
-  onMoveShot: (shotId: string, direction: -1 | 1) => void
+  onReorderShotWithinScene?: (shotId: string, targetIndex: number) => void
+  onInsertShotRelative?: (shotId: string, position: RelativeInsertPosition) => void
+  /** @deprecated Kept for legacy embedders; use scene-scoped ordering instead. */
+  onMoveShot?: (shotId: string, direction: -1 | 1) => void
   onCaptureShotThumbnail: (shotId: string) => void
   onShotNotesChange: (shotId: string, notes: string) => void
   onShotRangeChange: (shotId: string, startFrame: number, endFrame: number) => void
@@ -53,18 +62,67 @@ type V2ScenePanelProps = {
   onAddShotToMaster: (shotId: string) => void
 }
 
-export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, openings, lights, cameras, groups, activeCameraId, selectedEntityIds, sectionState, onSectionToggle, onSelectScene, onAddScene, onRenameScene, onDuplicateScene, onDeleteScene, onImportScene, onExportScene, onAddActor, onAddProp, onAddWall, onAddOpening, onAddSun, onAddCamera, onSetActiveCamera, onSelectEntity, onBeginEntityRename, shots, activeShotId, onCreateShot, onSelectShot, onRenameShot, onDuplicateShot, onDeleteShot, onMoveShot, onCaptureShotThumbnail, onShotNotesChange, onShotRangeChange, onPreviewShot, onAddShotToMaster }: V2ScenePanelProps) {
+type WorkspaceMenuState = {
+  kind: 'scene' | 'shot'
+  id: string
+  anchor: { top: number; bottom: number; left: number; right: number }
+}
+
+type ReorderDragState = {
+  kind: 'scene' | 'shot'
+  id: string
+  pointerId: number
+  startX: number
+  startY: number
+  active: boolean
+  targetId: string | null
+  before: boolean
+  completed: boolean
+  captureTarget: HTMLButtonElement
+}
+
+const REORDER_DRAG_THRESHOLD_PX = 4
+
+function releaseReorderPointerCapture(drag: ReorderDragState) {
+  if (drag.captureTarget.hasPointerCapture?.(drag.pointerId)) drag.captureTarget.releasePointerCapture(drag.pointerId)
+}
+
+export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, openings, lights, cameras, groups, activeCameraId, groupEditGroupId = null, selectedEntityIds, sectionState, onSectionToggle, onSelectScene, canEditOrdering = true, onReorderScene = () => {}, onInsertSceneRelative = () => {}, onAddScene, onRenameScene, onDuplicateScene, onDeleteScene, onImportScene, onExportScene, onAddActor, onAddProp, onAddWall, onAddOpening, onAddSun, onAddCamera, onSetActiveCamera, onSelectEntity, onEnterGroupEdit = () => {}, onBeginEntityRename, shots, activeShotId, onCreateShot, onSelectShot, onRenameShot, onDuplicateShot, onDeleteShot, onReorderShotWithinScene = () => {}, onInsertShotRelative = () => {}, onCaptureShotThumbnail, onShotNotesChange, onShotRangeChange, onPreviewShot, onAddShotToMaster }: V2ScenePanelProps) {
   const [addOpen, setAddOpen] = useState(false)
-  const [sceneMenuId, setSceneMenuId] = useState<string | null>(null)
+  const [workspaceMenu, setWorkspaceMenu] = useState<WorkspaceMenuState | null>(null)
+  const menuTriggerRef = useRef<HTMLButtonElement | null>(null)
   const [sceneAddMenuOpen, setSceneAddMenuOpen] = useState(false)
   const [sceneAddMenuPosition, setSceneAddMenuPosition] = useState<{ top: number; left: number } | null>(null)
   const sceneAddMenuButtonRef = useRef<HTMLButtonElement>(null)
-  const [shotMenuId, setShotMenuId] = useState<string | null>(null)
   const [editingSceneId, setEditingSceneId] = useState<string | null>(null)
   const [editingSceneName, setEditingSceneName] = useState('')
   const [editingShotId, setEditingShotId] = useState<string | null>(null)
   const [editingShotName, setEditingShotName] = useState('')
   const [entityMenu, setEntityMenu] = useState<{ entityId: string; x: number; y: number } | null>(null)
+  const [draggedSceneId, setDraggedSceneId] = useState<string | null>(null)
+  const [sceneDrop, setSceneDrop] = useState<{ sceneId: string; before: boolean } | null>(null)
+  const [draggedShotId, setDraggedShotId] = useState<string | null>(null)
+  const [shotDrop, setShotDrop] = useState<{ shotId: string; before: boolean } | null>(null)
+  const sceneListRef = useRef<HTMLDivElement>(null)
+  const shotListRef = useRef<HTMLDivElement>(null)
+  const reorderDragRef = useRef<ReorderDragState | null>(null)
+
+  const sceneMenuId = workspaceMenu?.kind === 'scene' ? workspaceMenu.id : null
+  const shotMenuId = workspaceMenu?.kind === 'shot' ? workspaceMenu.id : null
+
+  const menuScene = workspaceMenu?.kind === 'scene' ? scenes.find((scene) => scene.id === workspaceMenu.id) ?? null : null
+  const menuShot = workspaceMenu?.kind === 'shot' ? shots.find((shot) => shot.id === workspaceMenu.id) ?? null : null
+  const menuSceneIndex = menuScene ? scenes.findIndex((scene) => scene.id === menuScene.id) : -1
+  const menuShotSceneShots = menuShot ? shots.filter((shot) => shot.sceneId === menuShot.sceneId) : []
+  const menuShotIndex = menuShot ? menuShotSceneShots.findIndex((shot) => shot.id === menuShot.id) : -1
+
+  const clearReorderDrag = () => {
+    reorderDragRef.current = null
+    setDraggedSceneId(null)
+    setDraggedShotId(null)
+    setSceneDrop(null)
+    setShotDrop(null)
+  }
 
   useEffect(() => {
     if (!sceneAddMenuOpen) return
@@ -107,8 +165,25 @@ export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, open
     return () => window.removeEventListener('pointerdown', dismiss)
   }, [entityMenu])
 
+  useEffect(() => {
+    const cancelReorder = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !reorderDragRef.current) return
+      event.preventDefault()
+      releaseReorderPointerCapture(reorderDragRef.current)
+      clearReorderDrag()
+    }
+    window.addEventListener('keydown', cancelReorder)
+    return () => {
+      window.removeEventListener('keydown', cancelReorder)
+      if (reorderDragRef.current) releaseReorderPointerCapture(reorderDragRef.current)
+      clearReorderDrag()
+    }
+  }, [])
+
   const selectEntity = (entityId: string, additive = false) => {
     setEntityMenu(null)
+    const parentGroup = groups.find((group) => group.childIds.includes(entityId))
+    if (parentGroup) onEnterGroupEdit(parentGroup.id, entityId)
     onSelectEntity(entityId, additive)
   }
 
@@ -116,12 +191,14 @@ export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, open
     event.preventDefault()
     event.stopPropagation()
     if (selectedEntityIds.length > 1 && selectedEntityIds.includes(entityId)) return
+    const parentGroup = groups.find((group) => group.childIds.includes(entityId))
+    if (parentGroup) onEnterGroupEdit(parentGroup.id, entityId)
     onSelectEntity(entityId)
     setEntityMenu({ entityId, x: event.clientX, y: event.clientY })
   }
 
   const renameScene = (scene: ProjectSceneEntry) => {
-    setSceneMenuId(null)
+    closeWorkspaceMenu()
     setEditingSceneId(scene.id)
     setEditingSceneName(scene.name)
   }
@@ -136,8 +213,9 @@ export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, open
   const addCamera = () => { onAddCamera(); setAddOpen(false) }
   const addProp = (propType: NonNullable<PropDocument['propType']>) => { onAddProp(propType); setAddOpen(false) }
   const activeShot = shots.find((shot) => shot.id === activeShotId) ?? null
+  const hierarchyEntities = [...actors, ...props, ...walls, ...openings, ...cameras, ...lights]
   const beginShotRename = (shot: ShotDocument) => {
-    setShotMenuId(null)
+    closeWorkspaceMenu()
     setEditingShotId(shot.id)
     setEditingShotName(shot.name)
   }
@@ -145,6 +223,119 @@ export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, open
     if (!editingShotId) return
     onRenameShot(editingShotId, editingShotName)
     setEditingShotId(null)
+  }
+
+  const scrollDuringDrag = (container: HTMLDivElement | null, clientY: number) => {
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    const edge = 28
+    if (clientY < rect.top + edge) container.scrollBy({ top: -12 })
+    else if (clientY > rect.bottom - edge) container.scrollBy({ top: 12 })
+  }
+
+  const closeWorkspaceMenu = () => {
+    setWorkspaceMenu(null)
+    menuTriggerRef.current?.focus()
+    menuTriggerRef.current = null
+  }
+
+  const openWorkspaceMenu = (event: MouseEvent<HTMLButtonElement>, kind: WorkspaceMenuState['kind'], id: string) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const rect = event.currentTarget.getBoundingClientRect()
+    menuTriggerRef.current = event.currentTarget
+    setWorkspaceMenu({ kind, id, anchor: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right } })
+  }
+
+  const rowAtPoint = (kind: ReorderDragState['kind'], clientX: number, clientY: number): HTMLElement | null => {
+    if (typeof document === 'undefined') return null
+    const element = document.elementFromPoint(clientX, clientY)
+    const selector = kind === 'scene' ? '[data-scene-row-id]' : '[data-shot-row-id]'
+    const row = element?.closest<HTMLElement>(selector) ?? null
+    const list = kind === 'scene' ? sceneListRef.current : shotListRef.current
+    return row && list?.contains(row) ? row : null
+  }
+
+  const updateReorderDropTarget = (drag: ReorderDragState, clientX: number, clientY: number) => {
+    const row = rowAtPoint(drag.kind, clientX, clientY)
+    if (!row) {
+      drag.targetId = null
+      if (drag.kind === 'scene') setSceneDrop(null)
+      else setShotDrop(null)
+      return
+    }
+    const targetId = drag.kind === 'scene' ? row.dataset.sceneRowId ?? null : row.dataset.shotRowId ?? null
+    if (!targetId || targetId === drag.id) {
+      drag.targetId = null
+      if (drag.kind === 'scene') setSceneDrop(null)
+      else setShotDrop(null)
+      return
+    }
+    if (drag.kind === 'shot') {
+      const source = shots.find((shot) => shot.id === drag.id)
+      if (!source || row.dataset.shotSceneId !== source.sceneId) {
+        drag.targetId = null
+        setShotDrop(null)
+        return
+      }
+    }
+    const rect = row.getBoundingClientRect()
+    drag.targetId = targetId
+    drag.before = clientY < rect.top + rect.height / 2
+    if (drag.kind === 'scene') setSceneDrop({ sceneId: targetId, before: drag.before })
+    else setShotDrop({ shotId: targetId, before: drag.before })
+    scrollDuringDrag(drag.kind === 'scene' ? sceneListRef.current : shotListRef.current, clientY)
+  }
+
+  const beginReorderPointer = (event: PointerEvent<HTMLButtonElement>, kind: ReorderDragState['kind'], id: string) => {
+    if (!canEditOrdering || event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    closeWorkspaceMenu()
+    event.currentTarget.focus()
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    reorderDragRef.current = { kind, id, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, active: false, targetId: null, before: true, completed: false, captureTarget: event.currentTarget }
+  }
+
+  const moveReorderPointer = (event: PointerEvent<HTMLButtonElement>) => {
+    const drag = reorderDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId || !canEditOrdering) return
+    const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY)
+    if (!drag.active && distance < REORDER_DRAG_THRESHOLD_PX) return
+    event.preventDefault()
+    if (!drag.active) {
+      drag.active = true
+      if (drag.kind === 'scene') setDraggedSceneId(drag.id)
+      else setDraggedShotId(drag.id)
+    }
+    updateReorderDropTarget(drag, event.clientX, event.clientY)
+  }
+
+  const endReorderPointer = (event: PointerEvent<HTMLButtonElement>, cancelled = false) => {
+    const drag = reorderDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    if (!cancelled && drag.active) updateReorderDropTarget(drag, event.clientX, event.clientY)
+    if (!cancelled && drag.active && drag.targetId && drag.targetId !== drag.id) {
+      if (drag.kind === 'scene') {
+        const sourceIndex = scenes.findIndex((scene) => scene.id === drag.id)
+        const targetIndex = scenes.findIndex((scene) => scene.id === drag.targetId)
+        const rawIndex = targetIndex + (drag.before ? 0 : 1)
+        if (sourceIndex >= 0 && targetIndex >= 0) onReorderScene(drag.id, sourceIndex < rawIndex ? rawIndex - 1 : rawIndex)
+      } else {
+        const source = shots.find((shot) => shot.id === drag.id)
+        const target = shots.find((shot) => shot.id === drag.targetId)
+        if (source && target && source.sceneId === target.sceneId) {
+          const sceneShots = shots.filter((shot) => shot.sceneId === target.sceneId)
+          const sourceIndex = sceneShots.findIndex((shot) => shot.id === source.id)
+          const targetIndex = sceneShots.findIndex((shot) => shot.id === target.id)
+          const rawIndex = targetIndex + (drag.before ? 0 : 1)
+          if (sourceIndex >= 0 && targetIndex >= 0) onReorderShotWithinScene(source.id, sourceIndex < rawIndex ? rawIndex - 1 : rawIndex)
+        }
+      }
+    }
+    drag.completed = true
+    releaseReorderPointerCapture(drag)
+    clearReorderDrag()
   }
 
   return (
@@ -171,28 +362,34 @@ export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, open
       <SidebarSection section="scenes" label="Scenes" count={scenes.length} expanded={sectionState.scenes} onToggle={onSectionToggle} className="v2-scenes-section" actions={<>
         <button className="v2-section-action-button v2-inline-add" aria-label="Add or Import Scene" aria-expanded={sceneAddMenuOpen} aria-haspopup="menu" onClick={(event) => { event.stopPropagation(); setSceneAddMenuOpen((open) => !open) }} onPointerDown={(event) => event.stopPropagation()} ref={sceneAddMenuButtonRef} title="Add or Import Scene" type="button">+</button>
       </>}>
-        <div className="v2-scene-list">
-          {scenes.map((scene, index) => <div className={`v2-scene-row${scene.id === activeSceneId ? ' is-active' : ''}`} key={scene.id}>
-            <button className="v2-scene-select" onClick={() => onSelectScene(scene.id)} type="button"><span className="v2-scene-index">{String(index + 1).padStart(2, '0')}</span>{editingSceneId === scene.id ? <input autoFocus value={editingSceneName} onChange={(event) => setEditingSceneName(event.target.value)} onBlur={finishSceneRename} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); finishSceneRename() } if (event.key === 'Escape') setEditingSceneId(null) }} aria-label="Scene name" /> : <span>{scene.name}</span>}</button>
-            <button className="v2-scene-menu-button" aria-label={`Actions for ${scene.name}`} aria-expanded={sceneMenuId === scene.id} onClick={() => setSceneMenuId((current) => current === scene.id ? null : scene.id)} type="button">•••</button>
-            {sceneMenuId === scene.id ? <div className="v2-scene-row-menu"><button onClick={() => renameScene(scene)} type="button">Rename</button><button onClick={() => { onDuplicateScene(scene.id); setSceneMenuId(null) }} type="button">Duplicate</button><button onClick={() => { onExportScene(scene.id); setSceneMenuId(null) }} type="button">Export Scene</button><button className="is-danger" disabled={scenes.length <= 1} onClick={() => { onDeleteScene(scene.id); setSceneMenuId(null) }} type="button">Delete</button></div> : null}
+        <div className="v2-scene-list" ref={sceneListRef}>
+          {scenes.map((scene, index) => <div className={`v2-scene-row${scene.id === activeSceneId ? ' is-active' : ''}${draggedSceneId === scene.id ? ' is-dragging' : ''}`} data-scene-row-id={scene.id} key={scene.id}>
+            {sceneDrop?.sceneId === scene.id && sceneDrop.before ? <span className="v2-order-drop-indicator is-before" aria-hidden="true" /> : null}
+            <button className="v2-order-handle" aria-label={`Drag ${scene.name} to reorder`} onPointerDown={(event) => beginReorderPointer(event, 'scene', scene.id)} onPointerMove={moveReorderPointer} onPointerUp={endReorderPointer} onPointerCancel={(event) => endReorderPointer(event, true)} onLostPointerCapture={(event) => { if (!reorderDragRef.current?.completed) endReorderPointer(event, true) }} type="button">⠿</button>
+            <button className="v2-scene-select" title={scene.name} onClick={() => onSelectScene(scene.id)} type="button"><span className="v2-scene-index">{String(index + 1).padStart(2, '0')}</span>{editingSceneId === scene.id ? <input autoFocus value={editingSceneName} onChange={(event) => setEditingSceneName(event.target.value)} onBlur={finishSceneRename} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); finishSceneRename() } if (event.key === 'Escape') setEditingSceneId(null) }} aria-label="Scene name" /> : <span>{scene.name}</span>}</button>
+            <button className="v2-scene-menu-button" aria-label={`Actions for ${scene.name}`} aria-expanded={sceneMenuId === scene.id} aria-haspopup="menu" onClick={(event) => sceneMenuId === scene.id ? closeWorkspaceMenu() : openWorkspaceMenu(event, 'scene', scene.id)} type="button">•••</button>
+            {sceneDrop?.sceneId === scene.id && !sceneDrop.before ? <span className="v2-order-drop-indicator is-after" aria-hidden="true" /> : null}
           </div>)}
         </div>
       </SidebarSection>
       <SidebarSection section="shots" label="Shots" count={shots.length} expanded={sectionState.shots} onToggle={onSectionToggle} className="v2-shot-section" actions={<button className="v2-section-action-button v2-inline-add" aria-label="Add Shot" onClick={(event) => { event.stopPropagation(); onCreateShot() }} onPointerDown={(event) => event.stopPropagation()} type="button" title="Add Shot">+</button>}>
-        {shots.length === 0 ? <p>No Shots yet. Create one from the active Camera.</p> : <div className="v2-shot-list">
-          {shots.map((shot, index) => {
+        {shots.length === 0 ? <p>No Shots yet. Create one from the active Camera.</p> : <div className="v2-shot-list" ref={shotListRef}>
+          {shots.map((shot) => {
             const shotScene = scenes.find((scene) => scene.id === shot.sceneId)?.scene
+            const shotSceneName = scenes.find((scene) => scene.id === shot.sceneId)?.name ?? 'Missing Scene'
             const shotCamera = resolveShotCamera({ scenes }, shot).camera
-            const cameraLabel = shotCamera ? `${shotCamera.name} · ${Math.round(shotCamera.focalLengthMm)}mm` : 'Missing Camera'
+            const cameraLabel = shotCamera ? `${Math.round(shotCamera.focalLengthMm)}mm` : 'Missing Camera'
             const rate = shotScene?.timeline.frameRate ?? { numerator: 24, denominator: 1 }
-            return <div className={`v2-shot-row${shot.id === activeShotId ? ' is-active' : ''}`} key={shot.id}>
-              <button className="v2-shot-select" onClick={() => onSelectShot(shot.id)} type="button">
-                {shot.thumbnail ? <img src={shot.thumbnail.dataUrl} alt="" /> : <span className="v2-shot-thumb-placeholder">{String(index + 1).padStart(2, '0')}</span>}
-                <span className="v2-shot-copy"><strong>{editingShotId === shot.id ? <input autoFocus value={editingShotName} onChange={(event) => setEditingShotName(event.target.value)} onBlur={finishShotRename} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); finishShotRename() } if (event.key === 'Escape') setEditingShotId(null) }} aria-label="Shot name" /> : shot.name}</strong><small>{cameraLabel} · {frameToTimecode(shotDurationFrames(shot), rate)}</small></span>
+            const shotLabel = workspaceShotLabel(shot.name)
+            return <div className={`v2-shot-row${shot.id === activeShotId ? ' is-active' : ''}${draggedShotId === shot.id ? ' is-dragging' : ''}`} data-shot-row-id={shot.id} data-shot-scene-id={shot.sceneId} key={shot.id}>
+              {shotDrop?.shotId === shot.id && shotDrop.before ? <span className="v2-order-drop-indicator is-before" aria-hidden="true" /> : null}
+              <button className="v2-order-handle" aria-label={`Drag ${shot.name} within ${shotSceneName} to reorder`} onPointerDown={(event) => beginReorderPointer(event, 'shot', shot.id)} onPointerMove={moveReorderPointer} onPointerUp={endReorderPointer} onPointerCancel={(event) => endReorderPointer(event, true)} onLostPointerCapture={(event) => { if (!reorderDragRef.current?.completed) endReorderPointer(event, true) }} type="button">⠿</button>
+              <button className="v2-shot-select" title={`${shot.name} · ${shotSceneName} · ${cameraLabel} · ${frameToTimecode(shotDurationFrames(shot), rate)}`} onClick={() => onSelectShot(shot.id)} type="button">
+                {shot.thumbnail ? <img src={shot.thumbnail.dataUrl} alt="" /> : <span className="v2-shot-thumb-placeholder" aria-hidden="true">—</span>}
+                <span className="v2-shot-copy"><strong><span className="v2-shot-name">{editingShotId === shot.id ? <input autoFocus value={editingShotName} onChange={(event) => setEditingShotName(event.target.value)} onBlur={finishShotRename} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); finishShotRename() } if (event.key === 'Escape') setEditingShotId(null) }} aria-label="Shot name" /> : shotLabel}</span></strong><small>{shotSceneName} · {cameraLabel} · {frameToTimecode(shotDurationFrames(shot), rate)}</small></span>
               </button>
-              <button className="v2-scene-menu-button" aria-label={`Actions for ${shot.name}`} aria-expanded={shotMenuId === shot.id} onClick={() => setShotMenuId((current) => current === shot.id ? null : shot.id)} type="button">•••</button>
-              {shotMenuId === shot.id ? <div className="v2-scene-row-menu v2-shot-row-menu"><button onClick={() => { onAddShotToMaster(shot.id); setShotMenuId(null) }} type="button">Add to Master</button><button onClick={() => beginShotRename(shot)} type="button">Rename</button><button onClick={() => { onDuplicateShot(shot.id); setShotMenuId(null) }} type="button">Duplicate</button><button onClick={() => { onMoveShot(shot.id, -1); setShotMenuId(null) }} disabled={index === 0} type="button">Move Up</button><button onClick={() => { onMoveShot(shot.id, 1); setShotMenuId(null) }} disabled={index === shots.length - 1} type="button">Move Down</button><button onClick={() => { onCaptureShotThumbnail(shot.id); setShotMenuId(null) }} type="button">Capture Thumbnail</button><button className="is-danger" onClick={() => { onDeleteShot(shot.id); setShotMenuId(null) }} type="button">Delete</button></div> : null}
+              <button className="v2-scene-menu-button" aria-label={`Actions for ${shot.name}`} aria-expanded={shotMenuId === shot.id} aria-haspopup="menu" onClick={(event) => shotMenuId === shot.id ? closeWorkspaceMenu() : openWorkspaceMenu(event, 'shot', shot.id)} type="button">•••</button>
+              {shotDrop?.shotId === shot.id && !shotDrop.before ? <span className="v2-order-drop-indicator is-after" aria-hidden="true" /> : null}
             </div>
           })}
         </div>}
@@ -226,10 +423,59 @@ export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, open
           {lights.length === 0 ? <p>No lights in this Scene</p> : <div className="v2-entity-list">{lights.map((sun) => <button className={`v2-entity-row${selectedEntityIds.includes(sun.id) ? ' is-selected' : ''}`} key={sun.id} onClick={(event) => selectEntity(sun.id, event.shiftKey)} onContextMenu={(event) => openEntityMenu(event, sun.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: sun.color }} /><span>{sun.name}</span><small>Sun</small></button>)}</div>}
         </SidebarSection>
         <SidebarSection section="groups" label="Groups" count={groups.length} expanded={sectionState.groups} onToggle={onSectionToggle}>
-          {groups.length === 0 ? <p>No groups in this Scene</p> : <div className="v2-entity-list">{groups.map((group) => <button className={`v2-entity-row${selectedEntityIds.includes(group.id) ? ' is-selected' : ''}`} key={group.id} onClick={(event) => selectEntity(group.id, event.shiftKey)} onContextMenu={(event) => openEntityMenu(event, group.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: '#7d72cf' }} /><span>{group.name}</span><small>{group.childIds.length} items</small></button>)}</div>}
+          {groups.length === 0 ? <p>No groups in this Scene</p> : <div className="v2-entity-list v2-group-hierarchy">{groups.map((group) => <div className="v2-group-tree" key={group.id}>
+            <button className={`v2-entity-row${selectedEntityIds.includes(group.id) ? ' is-selected' : ''}`} onClick={(event) => selectEntity(group.id, event.shiftKey)} onContextMenu={(event) => openEntityMenu(event, group.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: '#7d72cf' }} /><span>{group.name}</span><small>{group.childIds.length} items</small></button>
+            <div className="v2-group-child-list" role="group" aria-label={`Children of ${group.name}`}>
+              {group.childIds.map((childId) => {
+                const child = hierarchyEntities.find((entity) => entity.id === childId)
+                if (!child) return null
+                const color = 'appearance' in child ? child.appearance.primaryColor : 'proxyColor' in child ? child.proxyColor : 'primaryColor' in child ? child.primaryColor : 'color' in child ? child.color : '#9aa6b8'
+                const kind = 'proxyColor' in child ? 'Camera' : 'appearance' in child ? 'Actor' : 'shape' in child ? ('propType' in child ? child.propType ?? child.shape : child.shape) : 'type' in child ? child.type : 'Sun'
+                return <button className={`v2-entity-row v2-group-child-row${selectedEntityIds.includes(child.id) ? ' is-selected' : ''}${groupEditGroupId === group.id ? ' is-editable' : ''}`} key={child.id} onClick={(event) => selectEntity(child.id, event.shiftKey)} onContextMenu={(event) => openEntityMenu(event, child.id)} type="button"><span className="v2-entity-swatch" style={{ backgroundColor: color }} /><span>{child.name}</span><small>{kind}</small></button>
+              })}
+            </div>
+          </div>)}</div>}
         </SidebarSection>
       </div>
       {entityMenu ? <div className="v2-entity-context-menu" role="menu" style={{ left: entityMenu.x, top: entityMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { onBeginEntityRename(entityMenu.entityId); setEntityMenu(null) }} type="button">Rename</button></div> : null}
+      {workspaceMenu && (menuScene || menuShot) && typeof document !== 'undefined' ? createPortal(
+        <WorkspaceFloatingMenu anchor={workspaceMenu.anchor} ariaLabel={menuScene ? `Actions for ${menuScene.name}` : `Actions for ${menuShot?.name ?? 'Shot'}`} onClose={closeWorkspaceMenu}>
+          {menuScene ? <>
+            <WorkspaceMenuLabel>Ordering</WorkspaceMenuLabel>
+            <WorkspaceMenuButton disabled={!canEditOrdering || menuSceneIndex <= 0} onClick={() => { onReorderScene(menuScene.id, menuSceneIndex - 1); closeWorkspaceMenu() }}>Move Up</WorkspaceMenuButton>
+            <WorkspaceMenuButton disabled={!canEditOrdering || menuSceneIndex < 0 || menuSceneIndex >= scenes.length - 1} onClick={() => { onReorderScene(menuScene.id, menuSceneIndex + 1); closeWorkspaceMenu() }}>Move Down</WorkspaceMenuButton>
+            <WorkspaceMenuSeparator />
+            <WorkspaceMenuLabel>Creation</WorkspaceMenuLabel>
+            <WorkspaceMenuButton disabled={!canEditOrdering} onClick={() => { onInsertSceneRelative(menuScene.id, 'before'); closeWorkspaceMenu() }}>Insert Scene Before</WorkspaceMenuButton>
+            <WorkspaceMenuButton disabled={!canEditOrdering} onClick={() => { onInsertSceneRelative(menuScene.id, 'after'); closeWorkspaceMenu() }}>Insert Scene After</WorkspaceMenuButton>
+            <WorkspaceMenuSeparator />
+            <WorkspaceMenuLabel>Management</WorkspaceMenuLabel>
+            <WorkspaceMenuButton disabled={!canEditOrdering} onClick={() => renameScene(menuScene)}>Rename</WorkspaceMenuButton>
+            <WorkspaceMenuButton disabled={!canEditOrdering} onClick={() => { onDuplicateScene(menuScene.id); closeWorkspaceMenu() }}>Duplicate</WorkspaceMenuButton>
+            <WorkspaceMenuButton onClick={() => { onExportScene(menuScene.id); closeWorkspaceMenu() }}>Export Scene</WorkspaceMenuButton>
+            <WorkspaceMenuSeparator />
+            <WorkspaceMenuButton danger disabled={!canEditOrdering || scenes.length <= 1} onClick={() => { onDeleteScene(menuScene.id); closeWorkspaceMenu() }}>Delete</WorkspaceMenuButton>
+          </> : menuShot ? <>
+            <WorkspaceMenuLabel>Ordering</WorkspaceMenuLabel>
+            <WorkspaceMenuButton disabled={!canEditOrdering || menuShotIndex <= 0} onClick={() => { onReorderShotWithinScene(menuShot.id, menuShotIndex - 1); closeWorkspaceMenu() }}>Move Up</WorkspaceMenuButton>
+            <WorkspaceMenuButton disabled={!canEditOrdering || menuShotIndex < 0 || menuShotIndex >= menuShotSceneShots.length - 1} onClick={() => { onReorderShotWithinScene(menuShot.id, menuShotIndex + 1); closeWorkspaceMenu() }}>Move Down</WorkspaceMenuButton>
+            <WorkspaceMenuSeparator />
+            <WorkspaceMenuLabel>Creation</WorkspaceMenuLabel>
+            <WorkspaceMenuButton disabled={!canEditOrdering} onClick={() => { onInsertShotRelative(menuShot.id, 'before'); closeWorkspaceMenu() }}>Insert Shot Before</WorkspaceMenuButton>
+            <WorkspaceMenuButton disabled={!canEditOrdering} onClick={() => { onInsertShotRelative(menuShot.id, 'after'); closeWorkspaceMenu() }}>Insert Shot After</WorkspaceMenuButton>
+            <WorkspaceMenuSeparator />
+            <WorkspaceMenuLabel>Management</WorkspaceMenuLabel>
+            <WorkspaceMenuButton disabled={!canEditOrdering} onClick={() => beginShotRename(menuShot)}>Rename</WorkspaceMenuButton>
+            <WorkspaceMenuButton disabled={!canEditOrdering} onClick={() => { onDuplicateShot(menuShot.id); closeWorkspaceMenu() }}>Duplicate</WorkspaceMenuButton>
+            <WorkspaceMenuButton disabled={!canEditOrdering} onClick={() => { onCaptureShotThumbnail(menuShot.id); closeWorkspaceMenu() }}>Capture Thumbnail</WorkspaceMenuButton>
+            <WorkspaceMenuSeparator />
+            <WorkspaceMenuButton danger disabled={!canEditOrdering} onClick={() => { onDeleteShot(menuShot.id); closeWorkspaceMenu() }}>Delete</WorkspaceMenuButton>
+            <WorkspaceMenuSeparator />
+            <WorkspaceMenuButton disabled={!canEditOrdering} onClick={() => { onAddShotToMaster(menuShot.id); closeWorkspaceMenu() }}>Add to Master</WorkspaceMenuButton>
+          </> : null}
+        </WorkspaceFloatingMenu>,
+        document.body,
+      ) : null}
       {sceneAddMenuOpen && sceneAddMenuPosition && typeof document !== 'undefined' ? createPortal(
         <div className="v2-section-popup-menu v2-scene-add-menu" role="menu" aria-label="Scene actions" style={{ top: sceneAddMenuPosition.top, left: sceneAddMenuPosition.left }} onPointerDown={(event) => event.stopPropagation()}>
           <button onClick={() => { onAddScene(); setSceneAddMenuOpen(false); sceneAddMenuButtonRef.current?.focus() }} role="menuitem" type="button">Add Scene</button>
@@ -239,6 +485,65 @@ export function V2ScenePanel({ scenes, activeSceneId, actors, props, walls, open
       ) : null}
     </aside>
   )
+}
+
+function WorkspaceFloatingMenu({ anchor, ariaLabel, onClose, children }: { anchor: WorkspaceMenuState['anchor']; ariaLabel: string; onClose: () => void; children: ReactNode }) {
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [style, setStyle] = useState<CSSProperties>({ position: 'fixed', top: anchor.bottom + 4, left: anchor.left, maxHeight: 'min(60vh, 380px)' })
+
+  useLayoutEffect(() => {
+    const updatePosition = () => {
+      const menu = menuRef.current
+      if (!menu) return
+      const margin = 8
+      const width = menu.offsetWidth
+      const height = menu.offsetHeight
+      const viewportWidth = window.innerWidth
+      const viewportHeight = window.innerHeight
+      const belowTop = anchor.bottom + 4
+      const aboveTop = anchor.top - height - 4
+      const top = belowTop + height <= viewportHeight - margin || aboveTop < margin ? belowTop : aboveTop
+      const preferredLeft = anchor.right - width
+      const left = preferredLeft >= margin ? preferredLeft : anchor.left
+      setStyle({ position: 'fixed', top: Math.max(margin, Math.min(top, viewportHeight - height - margin)), left: Math.max(margin, Math.min(left, viewportWidth - width - margin)), maxHeight: 'min(60vh, 380px)' })
+      if (anchor.bottom < 0 || anchor.top > viewportHeight) onClose()
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      onClose()
+    }
+    updatePosition()
+    menuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+    const dismiss = (event: globalThis.PointerEvent) => {
+      if (event.target instanceof Node && menuRef.current?.contains(event.target)) return
+      onClose()
+    }
+    window.addEventListener('pointerdown', dismiss)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
+      window.removeEventListener('pointerdown', dismiss)
+    }
+  }, [anchor, onClose])
+
+  return <div ref={menuRef} className="v2-floating-workspace-menu" role="menu" aria-label={ariaLabel} style={style} onPointerDown={(event) => event.stopPropagation()}>{children}</div>
+}
+
+function WorkspaceMenuLabel({ children }: { children: ReactNode }) {
+  return <span className="v2-floating-workspace-menu-label">{children}</span>
+}
+
+function WorkspaceMenuSeparator() {
+  return <span className="v2-floating-workspace-menu-separator" role="separator" aria-hidden="true" />
+}
+
+function WorkspaceMenuButton({ children, onClick, disabled = false, danger = false }: { children: ReactNode; onClick: () => void; disabled?: boolean; danger?: boolean }) {
+  return <button className={danger ? 'is-danger' : undefined} disabled={disabled} onClick={onClick} role="menuitem" type="button">{children}</button>
 }
 
 function SidebarSection({ section, label, count, expanded, onToggle, className, actions, children }: { section: WorkspaceSidebarSection; label: string; count: number; expanded: boolean; onToggle: (section: WorkspaceSidebarSection, expanded: boolean) => void; className?: string; actions?: ReactNode; children: ReactNode }) {

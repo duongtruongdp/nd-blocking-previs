@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import * as THREE from 'three'
 import { EditorHistory } from '../core/editorHistory'
 import { createActorDocument, createCameraDocument, createEmptySceneDocument } from '../core/sceneDocument'
 import { CAMERA_DATABASE } from '../core/cameraDatabase'
@@ -8,7 +9,7 @@ import { createPlaybackClock, playbackFrameAt, playbackFrameAtLoop, playbackReac
 import { timelineRulerLabelAlignment } from '../timeline/timelinePresentation'
 import { cameraDocumentWithTimelineEvaluation, evaluateTimeline, timelinePropertyIsAuthored } from '../timeline/timelineEvaluator'
 import { cameraDocumentForRecording } from '../phoneCamera/recordingScope'
-import { DEFAULT_TIMELINE_PIXELS_PER_SECOND, TIMELINE_FRAME_RATES, TIMELINE_ZOOM_LEVELS, clampTimelineKeyframeDelta, frameToSeconds, frameToTimecode, frameToTimelineX, interpolateAngleRadians, interpolateScalar, interpolateVector, moveTimelineKeyframe, moveTimelineKeyframes, removeTimelineKeyframes, secondsToFrame, setTimelineKeyframeEasing, setTimelineKeyframesEasing, setTimelineMark, timecodeToFrame, timelineCanvasModel, timelineCanvasModelForViewport, timelineCanvasXToFrame, timelineDurationEndX, timelineEasedProgress, timelineEasingMode, timelineFitPixelsPerSecond, timelineFrameToCanvasX, timelinePlaybackRange, timelineXToFrame, upsertTimelineKeyframe } from '../timeline/timelineMath'
+import { DEFAULT_TIMELINE_PIXELS_PER_SECOND, TIMELINE_FRAME_RATES, TIMELINE_ZOOM_LEVELS, canMoveTimelineKeyframes, clampTimelineKeyframeDelta, findTimelineKeyframeIdentityIssues, findTimelineTrackIdentityIssues, frameToSeconds, frameToTimecode, frameToTimelineX, interpolateAngleRadians, interpolateScalar, interpolateVector, moveTimelineKeyframe, moveTimelineKeyframes, removeTimelineKeyframes, secondsToFrame, setTimelineKeyframeEasing, setTimelineKeyframesEasing, setTimelineMark, timecodeToFrame, timelineCanvasModel, timelineCanvasModelForViewport, timelineCanvasXToFrame, timelineDurationEndX, timelineEasedProgress, timelineEasingMode, timelineFitPixelsPerSecond, timelineFrameToCanvasX, timelineKeyframeSelectionKey, timelinePlaybackRange, timelineXToFrame, upsertTimelineKeyframe } from '../timeline/timelineMath'
 
 describe('V2 timeline foundation', () => {
   it('keeps supported frame rates rational and converts frames without float time storage', () => {
@@ -206,6 +207,84 @@ describe('V2 timeline foundation', () => {
     expect(document.timeline.currentFrame).toBe(42)
   })
 
+  it('upserts the exact integer frame while preserving key identity and easing', () => {
+    const actor = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
+    let timeline = upsertTimelineKeyframe(createEmptySceneDocument().timeline, actor.id, 'Actor', 'position', 24, [1, 0, 0])
+    timeline = setTimelineKeyframeEasing(timeline, actor.id + ':position', actor.id + ':position:24', 'easeInOut')
+    const original = timeline.tracks[0].keyframes[0]
+    for (let edit = 0; edit < 10; edit += 1) timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 24.49, [edit, 0, 1])
+    const track = timeline.tracks.find((candidate) => candidate.entityId === actor.id && candidate.property === 'position')!
+    expect(track.keyframes).toHaveLength(1)
+    expect(track.keyframes[0].id).toBe(original.id)
+    expect(track.keyframes[0].frame).toBe(24)
+    expect(track.keyframes[0].value).toEqual([9, 0, 1])
+    expect(timelineEasingMode(track.keyframes[0])).toBe('easeInOut')
+  })
+
+  it('updates a legacy-ID channel instead of creating a duplicate Position track', () => {
+    const actor = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
+    const base = createEmptySceneDocument().timeline
+    const timeline = { ...base, tracks: [{ id: 'legacy-position-track', entityId: actor.id, entityType: 'Actor' as const, property: 'position' as const, keyframes: [{ id: 'legacy-key', frame: 24, value: [1, 0, 0] as [number, number, number], interpolation: 'linear' as const }] }] }
+    const next = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 24, [2, 0, 0])
+    expect(next.tracks).toHaveLength(1)
+    expect(next.tracks[0].id).toBe('legacy-position-track')
+    expect(next.tracks[0].keyframes[0]).toMatchObject({ id: 'legacy-key', frame: 24, value: [2, 0, 0] })
+  })
+
+  it('reports genuinely duplicated semantic tracks without discarding either one', () => {
+    const timeline = createEmptySceneDocument().timeline
+    const tracks = [
+      { id: 'position-a', entityId: 'actor-01', entityType: 'Actor' as const, property: 'position' as const, keyframes: [] },
+      { id: 'position-b', entityId: 'actor-01', entityType: 'Actor' as const, property: 'position' as const, keyframes: [] },
+    ]
+    expect(findTimelineTrackIdentityIssues(tracks)).toEqual([{ entityId: 'actor-01', property: 'position', trackIds: ['position-a', 'position-b'] }])
+    expect(timeline.tracks).toHaveLength(0)
+  })
+
+  it('reports historical same-frame keyframe duplicates without choosing a value', () => {
+    const actor = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
+    const track = {
+      id: `${actor.id}:position`,
+      entityId: actor.id,
+      entityType: 'Actor' as const,
+      property: 'position' as const,
+      keyframes: [
+        { id: 'position-a', frame: 24, value: [1, 0, 0] as [number, number, number], interpolation: 'linear' as const },
+        { id: 'position-b', frame: 24, value: [2, 0, 0] as [number, number, number], interpolation: 'linear' as const },
+      ],
+    }
+    expect(findTimelineKeyframeIdentityIssues([track])).toEqual([{ trackId: track.id, entityId: actor.id, property: 'position', frame: 24, keyframeIds: ['position-a', 'position-b'] }])
+  })
+
+  it('keeps Actor Position authoring from changing an evaluated Rotation quaternion', () => {
+    const actor = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 0, [0, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 120, [5, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'rotation', 0, [0.1, 0.2, 0.3])
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'rotation', 120, [0.4, 1.2, -0.2])
+    const before = { ...createEmptySceneDocument(), actors: [actor], timeline }
+    const beforeRotation = evaluateTimeline(before, 24)[actor.id].rotation
+    const afterTimeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 24, [2, 0, 1])
+    const after = { ...before, timeline: afterTimeline }
+    const beforeQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(...beforeRotation, 'XYZ'))
+    const afterRotation = evaluateTimeline(after, 24)[actor.id].rotation
+    const afterQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(...afterRotation, 'XYZ'))
+    expect(Math.abs(beforeQuaternion.dot(afterQuaternion))).toBeCloseTo(1, 8)
+  })
+
+  it('gives a full Rotation track precedence over a legacy Actor Heading track', () => {
+    const actor = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'heading', 0, 0.1)
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'heading', 120, 1.4)
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'rotation', 0, [0.2, 0.3, 0.4])
+    timeline = upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'rotation', 120, [0.8, 1.1, -0.3])
+    const evaluated = evaluateTimeline({ ...createEmptySceneDocument(), actors: [actor], timeline }, 60)[actor.id].rotation
+    expect(evaluated[0]).not.toBeCloseTo(0)
+    expect(evaluated[2]).not.toBeCloseTo(0)
+  })
+
   it('keeps Delivery Frame separate from physical FOV during focal animation', () => {
     const definition = CAMERA_DATABASE[0]
     const camera = createCameraDocument('camera-01', 'Camera 01', [0, 1, 5], [0, 0, 0], definition.id, definition.captureModes[0].id)
@@ -328,12 +407,32 @@ describe('V2 timeline foundation', () => {
     expect(moved.tracks.find((track) => track.id === 'actor-01:heading')?.keyframes[0].frame).toBe(7)
   })
 
-  it('replaces non-selected collisions atomically during group movement', () => {
+  it('rejects same-track collisions without deleting the destination key', () => {
     let timeline = createEmptySceneDocument().timeline
     timeline = upsertTimelineKeyframe(timeline, 'actor-01', 'Actor', 'position', 10, [1, 0, 0])
     timeline = upsertTimelineKeyframe(timeline, 'actor-01', 'Actor', 'position', 30, [9, 0, 0])
+    expect(canMoveTimelineKeyframes(timeline, [{ trackId: 'actor-01:position', keyframeId: 'actor-01:position:10' }], 20)).toBe(false)
     const moved = moveTimelineKeyframes(timeline, [{ trackId: 'actor-01:position', keyframeId: 'actor-01:position:10' }], 20)
-    expect(moved.tracks[0].keyframes).toEqual([{ id: 'actor-01:position:10', frame: 30, value: [1, 0, 0], interpolation: 'linear' }])
+    expect(moved).toBe(timeline)
+    expect(moved.tracks[0].keyframes.map((keyframe) => [keyframe.id, keyframe.frame])).toEqual([
+      ['actor-01:position:10', 10],
+      ['actor-01:position:30', 30],
+    ])
+  })
+
+  it('keeps Position and Rotation keyframes independent at the same frame', () => {
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, 'actor-01', 'Actor', 'position', 12, [1, 2, 3])
+    timeline = upsertTimelineKeyframe(timeline, 'actor-01', 'Actor', 'rotation', 24, [0, 0.5, 0])
+    const position = { trackId: 'actor-01:position', keyframeId: 'actor-01:position:12' }
+    const rotation = { trackId: 'actor-01:rotation', keyframeId: 'actor-01:rotation:24' }
+    expect(timelineKeyframeSelectionKey(position)).not.toBe(timelineKeyframeSelectionKey(rotation))
+    expect(canMoveTimelineKeyframes(timeline, [position], 12)).toBe(true)
+    const moved = moveTimelineKeyframes(timeline, [position], 12)
+    expect(moved.tracks.find((track) => track.id === position.trackId)?.keyframes[0].frame).toBe(24)
+    expect(moved.tracks.find((track) => track.id === rotation.trackId)?.keyframes[0].frame).toBe(24)
+    expect(moved.tracks.find((track) => track.id === position.trackId)?.keyframes[0].value).toEqual([1, 2, 3])
+    expect(moved.tracks.find((track) => track.id === rotation.trackId)?.keyframes[0].value).toEqual([0, 0.5, 0])
   })
 
   it('removes a multi-selection and applies one easing mode to the selected keys only', () => {

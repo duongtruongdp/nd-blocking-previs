@@ -30,6 +30,11 @@ export function pixelToMasterFrame(pixel: number, pixelsPerFrame: number, maxFra
   return Math.max(0, Math.min(Math.max(0, Math.round(maxFrame)), frame))
 }
 
+/** Maps a viewport client X coordinate to the canonical Master frame domain. */
+export function masterClientXToFrame(clientX: number, trackLeft: number, scrollLeft: number, trackOriginPadding: number, pixelsPerFrame: number, maxFrame: number): number {
+  return pixelToMasterFrame(clientX - trackLeft + scrollLeft - trackOriginPadding, pixelsPerFrame, maxFrame)
+}
+
 export function fitMasterPixelsPerFrame(viewportWidth: number, shotSequenceFrames: number, rate: RationalFrameRate, emptyMusicPreviewSeconds = 20): number {
   const fallbackFrames = Math.max(1, Math.round(emptyMusicPreviewSeconds * rate.numerator / rate.denominator))
   return Math.max(0.02, Math.min(24, viewportWidth / Math.max(1, shotSequenceFrames || fallbackFrames)))

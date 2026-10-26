@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { createMasterSequenceDocument, resolveMasterFrame, trimMasterClipToRange, type MasterSequenceDocument } from '../core/masterSequence'
+import { createMasterSequenceDocument, insertMasterClipAtFrame, resolveMasterFrame, trimMasterClipToRange, type MasterSequenceDocument } from '../core/masterSequence'
 import { createShotDocument } from '../core/shotDocument'
-import { duplicateMasterTimelineSelection, moveMasterTimelineSelection, previewMasterClipTrim, removeMasterTimelineSelection, type MasterTimelineItem } from '../core/masterTimelineEditing'
+import { applyMasterTimelineMarqueeSelection, duplicateMasterTimelineSelection, insertMasterClipWithRoomAtFrame, masterTimelineMarqueeItems, moveMasterTimelineSelection, previewMasterClipTrim, removeMasterTimelineSelection, type MasterTimelineItem } from '../core/masterTimelineEditing'
 
 const base = (clips: MasterSequenceDocument['clips']): MasterSequenceDocument => ({ ...createMasterSequenceDocument(), clips })
 
@@ -121,5 +121,45 @@ describe('Master Timeline NLE editing', () => {
     const removed = result ? removeMasterTimelineSelection(result.sequence, result.selection) : null
     expect(removed?.clips).toHaveLength(1)
     expect(removed?.imageClips).toHaveLength(1)
+  })
+
+  it('selects Shot clips with replace, add, and subtract marquee modes', () => {
+    const sequence = base([
+      { id: 'a', shotId: 'shot-a', sourceStartFrame: 0, sourceEndFrame: 20, startMasterFrame: 0, order: 0 },
+      { id: 'b', shotId: 'shot-b', sourceStartFrame: 0, sourceEndFrame: 20, startMasterFrame: 30, order: 1 },
+      { id: 'c', shotId: 'shot-c', sourceStartFrame: 0, sourceEndFrame: 20, startMasterFrame: 60, order: 2 },
+    ])
+    expect(masterTimelineMarqueeItems(sequence, 5, 50)).toEqual([{ kind: 'clip', id: 'a' }, { kind: 'clip', id: 'b' }])
+    expect(applyMasterTimelineMarqueeSelection(sequence, [{ kind: 'clip', id: 'a' }], 55, 80, 'add')).toEqual([{ kind: 'clip', id: 'a' }, { kind: 'clip', id: 'c' }])
+    expect(applyMasterTimelineMarqueeSelection(sequence, [{ kind: 'clip', id: 'a' }, { kind: 'clip', id: 'b' }], 25, 55, 'subtract')).toEqual([{ kind: 'clip', id: 'a' }])
+  })
+
+  it('inserts a Shot at an empty position without moving existing Shots', () => {
+    const shot = createShotDocument({ id: 'shot-x', name: 'Shot X', sceneId: 'scene-a', cameraId: null, startFrame: 0, endFrame: 12, order: 2, notes: '', thumbnail: null })
+    const sequence = base([
+      { id: 'a', shotId: 'shot-a', sourceStartFrame: 0, sourceEndFrame: 20, startMasterFrame: 0, order: 0 },
+      { id: 'b', shotId: 'shot-b', sourceStartFrame: 0, sourceEndFrame: 20, startMasterFrame: 40, order: 1 },
+    ])
+    const inserted = insertMasterClipAtFrame(sequence, shot, 22)
+    expect(inserted?.clips.find((clip) => clip.shotId === 'shot-x')?.startMasterFrame).toBe(22)
+    expect(inserted?.clips.find((clip) => clip.id === 'b')?.startMasterFrame).toBe(40)
+  })
+
+  it('inserts with room at a boundary and shifts only following Shots', () => {
+    const shot = createShotDocument({ id: 'shot-x', name: 'Shot X', sceneId: 'scene-a', cameraId: null, startFrame: 0, endFrame: 12, order: 2, notes: '', thumbnail: null })
+    const sequence = { ...base([
+      { id: 'a', shotId: 'shot-a', sourceStartFrame: 0, sourceEndFrame: 20, startMasterFrame: 0, order: 0 },
+      { id: 'b', shotId: 'shot-b', sourceStartFrame: 0, sourceEndFrame: 20, startMasterFrame: 20, order: 1 },
+    ]), imageClips: [{ id: 'image', trackId: 'graphics', assetId: 'asset', startMasterFrame: 20, durationFrames: 5, positionX: .5, positionY: .5, scale: 1, rotation: 0, opacity: 1, fadeInFrames: 0, fadeOutFrames: 0 }] }
+    const inserted = insertMasterClipWithRoomAtFrame(sequence, shot, 20)
+    expect(inserted?.clips.find((clip) => clip.shotId === 'shot-x')?.startMasterFrame).toBe(20)
+    expect(inserted?.clips.find((clip) => clip.id === 'b')?.startMasterFrame).toBe(32)
+    expect(inserted?.imageClips?.[0].startMasterFrame).toBe(20)
+  })
+
+  it('rejects insertion inside an existing Shot instead of splitting it', () => {
+    const shot = createShotDocument({ id: 'shot-x', name: 'Shot X', sceneId: 'scene-a', cameraId: null, startFrame: 0, endFrame: 12, order: 2, notes: '', thumbnail: null })
+    const sequence = base([{ id: 'a', shotId: 'shot-a', sourceStartFrame: 0, sourceEndFrame: 20, startMasterFrame: 0, order: 0 }])
+    expect(insertMasterClipWithRoomAtFrame(sequence, shot, 10)).toBeNull()
   })
 })

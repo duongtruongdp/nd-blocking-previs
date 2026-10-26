@@ -50,6 +50,18 @@ describe('Shot List presentation model', () => {
     expect(filterShotListCards(cards, null).map((card) => card.numberLabel)).toEqual(['01', '02'])
   })
 
+  it('preserves thumbnail source identity and project order for visual board consumers', () => {
+    const scene = sceneEntry('scene-a')
+    const thumbnail = { dataUrl: 'data:image/svg+xml;base64,synthetic-fixture', width: 960, height: 540, frame: 12 }
+    const project = { ...createProjectDocument('project-01', 'Previs', scene.scene), scenes: [scene], shots: [createShotDocument({ ...shot('shot-a', scene.id, 0), thumbnail })] }
+    const cards = buildShotListCards(project)
+
+    expect(cards.map((card) => card.shot.id)).toEqual(['shot-a'])
+    expect(cards[0].shot.thumbnail).toBe(thumbnail)
+    expect(cards[0].shot.thumbnail?.dataUrl).toBe(thumbnail.dataUrl)
+    expect(cards[0].shot.thumbnail).toMatchObject({ width: 960, height: 540 })
+  })
+
   it('resolves animated focal length at thumbnailFrame and marks the lens as animated', () => {
     const entry = sceneEntry('scene-a')
     const cameraId = entry.scene.cameras[0].id

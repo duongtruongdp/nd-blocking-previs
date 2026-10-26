@@ -40,6 +40,24 @@ export function timelinePlayPauseShortcut(key: string, isTextEditing: boolean): 
   return key === ' ' && !isTextEditing
 }
 
+export type GlobalPlaybackShortcutState = {
+  code: string
+  key: string
+  matchesConfiguredBinding?: boolean
+  repeat: boolean
+  isComposing: boolean
+  isTextEditing: boolean
+  inDialog: boolean
+  activeGesture: boolean
+}
+
+/** The application owns playback routing for both the Stage and timelines. */
+export function shouldHandleGlobalPlaybackShortcut(state: GlobalPlaybackShortcutState): boolean {
+  if (state.code !== 'Space' && state.key !== ' ' && !state.matchesConfiguredBinding) return false
+  if (state.repeat || state.isComposing || state.isTextEditing || state.inDialog || state.activeGesture) return false
+  return true
+}
+
 export type TimelineMarkShortcut = 'in' | 'out'
 
 export type TimelineZoomShortcut = 'out' | 'in'

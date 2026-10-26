@@ -251,5 +251,5 @@ function sanitizeRelayEndpoint(value: string): string {
 export { liveReviewRelayConfig, liveReviewRelayUrl }
 
 function isServerMessage(value: LiveReviewServerMessage | LiveReviewClientMessage): value is LiveReviewServerMessage {
-  return ['session_created', 'session_snapshot', 'project_update', 'present_state', 'transform_update', 'transform_preview', 'edit_transform_request', 'edit_shot_request', 'edit_result', 'presence', 'presence_snapshot', 'presence_update', 'role_updated', 'lease_granted', 'lease_denied', 'lease_update', 'lease_snapshot', 'host_editing_paused', 'host_disconnected', 'host_pointer', 'chat_message', 'chat_history', 'session_ended', 'pong', 'error'].includes(value.type)
+  return ['session_created', 'session_snapshot', 'project_update', 'project_edit_result', 'present_state', 'transform_update', 'transform_preview', 'edit_transform_request', 'edit_shot_request', 'edit_result', 'presence', 'presence_snapshot', 'presence_update', 'role_updated', 'lease_granted', 'lease_denied', 'lease_update', 'lease_snapshot', 'host_editing_paused', 'host_disconnected', 'host_pointer', 'chat_message', 'chat_history', 'session_ended', 'pong', 'error'].includes(value.type)
 }

@@ -1523,6 +1523,7 @@ position/rotation deltas. Children keep canonical world transforms. Timeline
 evaluation resolves child values first and then composes group deltas around the
 pivot for Stage, Camera View, and Master Preview; ungrouping bakes the visible
 delta into children. Groups are intentionally lightweight and do not introduce
-IK, physics, or a second runtime scene graph. Ctrl/Cmd plus left-drag on empty
-Stage provides marquee selection while preserving the accepted plain left-drag
-orbit gesture.
+IK, physics, or a second runtime scene graph. Left-drag on empty Stage provides
+marquee selection regardless of the active transform tool; Space plus left-drag
+remains the explicit orbit gesture, and Shift/Option provide additive and
+subtractive selection.

@@ -245,6 +245,43 @@ describe('StageEngine selection synchronization integration', () => {
     expect(snapshots.at(-1)?.marqueeNextSelectedIds).toEqual(['a'])
   })
 
+  it('starts empty-space marquee regardless of the active transform tool while preserving entity moves', () => {
+    const snapshots: StageEngineDebugSnapshot[] = []
+    engine = new StageEngine(new TestContainer() as unknown as HTMLElement, { debugEnabled: true, onDebug: (snapshot) => snapshots.push(snapshot) })
+    const root = entity('actor-1', [0, 0, 0])
+    engine.addEntity({ id: 'actor-1', type: 'Actor', root })
+
+    engine.setTool('move')
+    engine.canvas.dispatchEvent(marqueePointerEvent('pointerdown', 51, 4, 4))
+    expect(snapshots.at(-1)?.pointerMode).toBe('marquee')
+    engine.canvas.dispatchEvent(marqueePointerEvent('pointermove', 51, 80, 80))
+    expect(snapshots.at(-1)?.marqueePreviewActive).toBe(true)
+    engine.canvas.dispatchEvent(marqueePointerEvent('pointerup', 51, 80, 80))
+
+    engine.setSelection(['actor-1'])
+    const bounds = projectedBounds(engine, [root])
+    const centerX = (bounds.left + bounds.right) / 2
+    const centerY = (bounds.top + bounds.bottom) / 2
+    engine.canvas.dispatchEvent(marqueePointerEvent('pointerdown', 52, centerX, centerY))
+    expect(snapshots.at(-1)?.pointerMode).not.toBe('marquee')
+    engine.canvas.dispatchEvent(marqueePointerEvent('pointercancel', 52, centerX + 20, centerY + 20))
+  })
+
+  it('keeps Space+empty-drag as orbit instead of starting marquee', () => {
+    const snapshots: StageEngineDebugSnapshot[] = []
+    engine = new StageEngine(new TestContainer() as unknown as HTMLElement, { debugEnabled: true, onDebug: (snapshot) => snapshots.push(snapshot) })
+    engine.setTool('rotate')
+    window.dispatchEvent(pointerEvent('keydown', { code: 'Space', key: ' ' }))
+    // The actual application receives Space before the pointer gesture. The
+    // test keeps the same keyboard lifecycle and verifies the opt-in orbit
+    // path remains distinct from empty-space marquee selection.
+    engine.canvas.dispatchEvent(marqueePointerEvent('pointerdown', 61, 4, 4))
+    expect(snapshots.at(-1)?.pointerMode).toBe('orbit')
+    engine.canvas.dispatchEvent(marqueePointerEvent('pointermove', 61, 24, 20))
+    engine.canvas.dispatchEvent(marqueePointerEvent('pointerup', 61, 24, 20))
+    window.dispatchEvent(pointerEvent('keyup', { code: 'Space', key: ' ' }))
+  })
+
   it('uses logical group selection and excludes camera frustum geometry from marquee bounds', () => {
     const snapshots: StageEngineDebugSnapshot[] = []
     engine = new StageEngine(new TestContainer() as unknown as HTMLElement, {

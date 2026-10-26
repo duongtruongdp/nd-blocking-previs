@@ -163,11 +163,13 @@ Camera View, Master Preview, and Live Review continue to use serializable data.
 The group transform path is also applied to grouped filmmaking Cameras before
 their production pose is composed.
 
-On an empty Stage, Ctrl/Cmd plus left-drag provides a development/editor
-marquee selection gesture; ordinary left-drag remains the accepted orbit
-gesture. The marquee projects registered entity roots into the Stage viewport,
-excludes helpers, and uses Shift/Ctrl additive selection without creating a
-second selection model.
+On an empty Stage, left-drag provides marquee selection unless Space is held
+for the explicit orbit gesture. The behavior is independent of the active
+transform tool, while entity and gizmo hits retain their existing tool-specific
+behavior. Shift adds to the selection, Option subtracts, and Ctrl/Cmd remains
+accepted as a marquee modifier. The marquee projects registered entity roots
+into the Stage viewport, excludes helpers, and uses one canonical selection
+model.
 
 Camera View reconciliation remains ID-based and evaluated: each reconciliation
 removes runtime actor/scenic IDs absent from the current scene before adding or

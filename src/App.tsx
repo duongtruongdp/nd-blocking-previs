@@ -18,15 +18,16 @@ import { createDefaultProps } from './scene/testEntities'
 import { resolveFrameGuideSelection } from './core/frameGuideSelection'
 import { nextNumberedEntityName } from './core/entityNaming'
 import { applySceneEntityTransform, createActorDocument, createCameraDocument, createEmptySceneDocument, createOpeningDocument, createPropDocument, createSunDocument, createWallDocument, type ActorDocument, type ActorVector3, type CameraDocument, type OpeningDocument, type PropDocument, type RationalFrameRate, type SceneDocument, type SceneGroup, type ScenicPropType, type SunDocument, type TimelineEasingMode, type TimelineProperty, type WallDocument } from './core/sceneDocument'
-import { bakeGroupChildren, groupForChild, groupPivot } from './core/groupMath'
+import { bakeGroupChildren, groupForChild, groupPivot, removeGroupTransform } from './core/groupMath'
 import type { ProjectDocument, ProjectSceneEntry } from './core/projectDocument'
 import { cloneSceneWithIdentity, createProjectDocument } from './core/projectDocument'
 import { createShotDocument, createShotId, duplicateShotName, nextShotName, resolveShotThumbnailFrame, SHOT_THUMBNAIL_JPEG_QUALITY, SHOT_THUMBNAIL_TARGET_WIDTH, type ShotDocument } from './core/shotDocument'
 import { normalizeShotListSettings, type ShotListSettings } from './core/shotListSettings'
 import { reorderShotDocuments } from './core/shotListModel'
+import { insertSceneEntryAt, insertShotRelative, reorderSceneEntries, reorderShotsWithinScene, type RelativeInsertPosition } from './core/sceneShotOrdering'
 import { applyCollaborativePlanning, canEditCollaborativeShotCamera } from './core/collaborativePlanning'
 import { clampMasterTimelineBoundary, createMusicClip, effectiveMasterRenderRange, insertMasterClipAtFrame, masterClipDurationFrames, masterClipStartFrame, masterPlaybackFrameAt, masterSequenceFrameRate, masterSequenceVisualDurationFrames, orderedMasterClips, removeMasterClip, resolveMasterFrame, resolveMasterMusicTime, sameFrameRate, setMasterSequenceMark, trimMasterClipToRange, type MasterGraphicsTrackDocument, type MasterImageClipDocument } from './core/masterSequence'
-import { duplicateMasterTimelineSelection, masterTimelineItemStart, moveMasterTimelineSelection, removeMasterTimelineSelection, type MasterTimelineItem } from './core/masterTimelineEditing'
+import { duplicateMasterTimelineSelection, insertMasterClipWithRoomAtFrame, masterTimelineItemStart, moveMasterTimelineSelection, removeMasterTimelineSelection, type MasterTimelineItem } from './core/masterTimelineEditing'
 import { DEFAULT_IMAGE_CLIP_DURATION_FRAMES, clampFadeFrames } from './core/masterGraphics'
 import { createTimelineWorkspaceSessionState, getSceneTimelineWorkspace, pruneTimelineWorkspaceScenes, resetTimelineWorkspaceState, updateMasterTimelineWorkspace, updateSceneTimelineWorkspace, type TimelineWorkspaceSessionState } from './core/timelineWorkspaceSession'
 import { createWorkspaceSidebarState, updateWorkspaceSidebarSection, workspaceSidebarSessionKey, type WorkspaceSidebarSection, type WorkspaceSidebarSectionState } from './core/workspaceSidebarSession'
@@ -46,11 +47,11 @@ import { createEditorClipboard, pasteEditorClipboard, type EditorClipboard } fro
 import { type EditorHistorySnapshot } from './core/editorHistory'
 import { ProjectHistory } from './core/projectHistory'
 import { destructiveShortcutTarget, editorShortcutForKey, groupShortcutForKey, timelineZoomShortcutForKey, type TimelineZoomShortcutHandler } from './core/editorShortcuts'
-import { clampTimelineHeight, TIMELINE_HEIGHT_DEFAULT, timelineHeightBounds } from './core/workspaceLayout'
+import { clampTimelineHeight, clampWorkspaceSidebarWidth, TIMELINE_HEIGHT_DEFAULT, timelineHeightBounds, WORKSPACE_SIDEBAR_WIDTH_DEFAULT, WORKSPACE_SIDEBAR_WIDTH_MAX, WORKSPACE_SIDEBAR_WIDTH_MIN } from './core/workspaceLayout'
 import type { StageSelection, StageTool, StageTransform, StageTransformBatch } from './stage-engine'
 import { evaluateTimeline } from './timeline/timelineEvaluator'
 import { createPlaybackClock, playbackFrameAt, playbackFrameAtLoop, playbackLoopCycle, playbackReachedMarkOut, playbackStartFrame, type PlaybackClock } from './timeline/playbackClock'
-import { clampTimelineFrame, moveTimelineKeyframe, moveTimelineKeyframes, removeTimelineKeyframe, removeTimelineKeyframes, retimeCameraPathSegment, setTimelineKeyframesEasing, setTimelineMark, timelineEasingForMode, timelineEasingMode, timelineDurationFrames, timelinePlaybackRange, upsertTimelineKeyframe, type CameraRetimeMode, type TimelineKeyframeSelection, type TimelinePlaybackRange } from './timeline/timelineMath'
+import { clampTimelineFrame, moveTimelineKeyframe, moveTimelineKeyframes, removeTimelineKeyframe, removeTimelineKeyframes, retimeCameraPathSegment, setTimelineKeyframesEasing, setTimelineMark, timelineEasingForMode, timelineEasingMode, timelineDurationFrames, timelineKeyframeSelectionKey, timelinePlaybackRange, upsertTimelineKeyframe, type CameraRetimeMode, type TimelineKeyframeSelection, type TimelinePlaybackRange } from './timeline/timelineMath'
 import { createTimelineKeyframeClipboardGroup, pasteTimelineKeyframes, type TimelineKeyframeClipboard } from './timeline/timelineClipboard'
 import { captureTimelineValue, commitTimelineTransform, type SuspendedTimelineProperties, type TimelineTransformCommit } from './timeline/transformOwnership'
 import { V2ExportModal } from './components/V2ExportModal'
@@ -77,6 +78,8 @@ import { cameraStillFilename, type StillCaptureOptions } from './runtime/stillCa
 import { cameraPathSegmentForKeyframe, cameraPathSegmentForSelection, type CameraPathKeyframe, type CameraPathSegmentSelection } from './timeline/cameraPath'
 import { cameraMoveReviewRange, type CameraMoveReviewMode } from './timeline/cameraReview'
 import { shortcutLabel, shortcutMatches, shortcutPreferencesWithDefaults, SHORTCUT_COMMANDS, type ShortcutBinding, type ShortcutCommandId } from './core/shortcutRegistry'
+import { shouldHandleGlobalPlaybackShortcut } from './core/editorShortcuts'
+import { defaultLiveReviewFollowHost, mergeLiveProjectWorkspace, sharedProjectSnapshot, shouldApplyLivePresentation } from './core/liveReviewWorkspace'
 import { V2ShortcutSettings, type AboutUpdateState } from './components/V2ShortcutSettings'
 import { captureAndStoreProjectThumbnail } from './platform/projectThumbnail'
 import { createUnsavedRecoveryId, recoveryIdForProjectPath, RecoveryManager, type RecoveryInspection } from './platform/recovery'
@@ -93,7 +96,7 @@ import { LiveReviewTransport, type LiveReviewTransportStatus } from './liveRevie
 import { buildLiveReviewInviteUrl, liveReviewRelayConfig, parseLiveReviewInviteSession } from './liveReview/liveReviewConfig'
 import { createLiveReviewSnapshot } from './liveReview/projectSnapshot'
 import { MASTER_TIMELINE_DIAGNOSTICS_TOGGLE_EVENT, SELECTION_DIAGNOSTICS_TOGGLE_EVENT } from './runtime/buildIdentity'
-import { defaultLiveReviewState, randomLiveReviewId, type LiveReviewChatMessage, type LiveReviewCollaborativeEntityType, type LiveReviewEditResult, type LiveReviewLease, type LiveReviewParticipant, type LiveReviewPlanningCommit, type LiveReviewPlanningDraft, type LiveReviewPointer, type LiveReviewRole, type LiveReviewServerMessage, type LiveReviewShotField, type LiveReviewState, type LiveReviewTimelineCommit, type LiveReviewTimelineProperty, type LiveReviewTransform, type LiveReviewTransformCommit } from './liveReview/protocol'
+import { defaultLiveReviewState, randomLiveReviewId, type LiveReviewChatMessage, type LiveReviewCollaborativeEntityType, type LiveReviewEditResult, type LiveReviewLease, type LiveReviewParticipant, type LiveReviewPlanningCommit, type LiveReviewPlanningDraft, type LiveReviewPointer, type LiveReviewRole, type LiveReviewServerMessage, type LiveReviewShotField, type LiveReviewShotListView, type LiveReviewState, type LiveReviewTimelineCommit, type LiveReviewTimelineProperty, type LiveReviewTransform, type LiveReviewTransformCommit } from './liveReview/protocol'
 
 function createDefaultV2Scene(id = 'scene-01', name = 'Scene 01', includeDefaultProps = true, cameraModelId = CAMERA_DATABASE[0]?.id ?? ''): SceneDocument {
   const scene = createEmptySceneDocument()
@@ -183,6 +186,29 @@ function isMacOSDesktop(): boolean {
   return platformAdapter.kind === 'desktop' && typeof navigator !== 'undefined' && /Macintosh|Mac OS X/i.test(navigator.userAgent)
 }
 
+const WORKSPACE_SIDEBAR_WIDTH_KEY = 'nd-blocking-previs.workspace-sidebar-width'
+const SHOT_LIST_VIEW_MODE_KEY = 'nd-blocking-previs.shot-list-view-mode'
+
+function readShotListViewMode(): LiveReviewShotListView {
+  if (typeof window === 'undefined') return 'grid'
+  try {
+    const stored = window.localStorage.getItem(SHOT_LIST_VIEW_MODE_KEY)
+    return stored === 'board' || stored === 'grid' || stored === 'list' ? stored : 'grid'
+  } catch {
+    return 'grid'
+  }
+}
+
+function readWorkspaceSidebarWidth(): number {
+  if (typeof window === 'undefined') return WORKSPACE_SIDEBAR_WIDTH_DEFAULT
+  try {
+    const stored = Number(window.localStorage.getItem(WORKSPACE_SIDEBAR_WIDTH_KEY))
+    return Number.isFinite(stored) ? clampWorkspaceSidebarWidth(stored, window.innerWidth) : WORKSPACE_SIDEBAR_WIDTH_DEFAULT
+  } catch {
+    return WORKSPACE_SIDEBAR_WIDTH_DEFAULT
+  }
+}
+
 type CameraMoveReviewState = {
   mode: CameraMoveReviewMode
   sceneId: string
@@ -200,8 +226,12 @@ function V2EditorApp() {
   const [view, setView] = useState<'blocking' | 'camera' | 'shot-list'>('blocking')
   const [shotListSelectedId, setShotListSelectedId] = useState<string | null>(null)
   const [shotListPresentation, setShotListPresentation] = useState(false)
-  const [shotListViewMode, setShotListViewMode] = useState<'grid' | 'list'>('grid')
+  const [shotListViewMode, setShotListViewMode] = useState<LiveReviewShotListView>(readShotListViewMode)
   const [shotListSceneFilter, setShotListSceneFilter] = useState<string | null>(null)
+  const changeShotListViewMode = (next: LiveReviewShotListView) => {
+    setShotListViewMode(next)
+    try { window.localStorage.setItem(SHOT_LIST_VIEW_MODE_KEY, next) } catch { /* Optional UI preference. */ }
+  }
   const [workspaceMode, setWorkspaceMode] = useState<'library' | 'editor'>(() => platformAdapter.kind === 'desktop' ? 'library' : 'editor')
   const [projectDocument, setProjectDocument] = useState(createDefaultV2Project)
   const activeSceneEntry = projectDocument.scenes.find((entry) => entry.id === projectDocument.activeSceneId) ?? projectDocument.scenes[0]
@@ -231,6 +261,7 @@ function V2EditorApp() {
   }
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null)
   const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([])
+  const [groupEditGroupId, setGroupEditGroupId] = useState<string | null>(null)
   const [renameRequest, setRenameRequest] = useState<{ entityId: string; token: number } | null>(null)
   const [selectedFrameGuideId, setSelectedFrameGuideId] = useState<string | null>(null)
   const [selectedTimelineKeyframes, setSelectedTimelineKeyframes] = useState<TimelineKeyframeSelection[]>([])
@@ -364,6 +395,8 @@ function V2EditorApp() {
   const [exportSettings, setExportSettings] = useState<VideoExportSettings>(() => ({ source: 'scene', cameraId: null, markIn: 0, markOut: 120, frameRate: { numerator: 24, denominator: 1 }, deliveryAspectRatio: '16:9', width: 1920, format: 'mp4', quality: 'standard', includeMusic: false, shotInfoBurnIn: loadShotInfoBurnInSettings() }))
   const [timelineHeight, setTimelineHeight] = useState(TIMELINE_HEIGHT_DEFAULT)
   const [isResizingTimeline, setIsResizingTimeline] = useState(false)
+  const [workspaceSidebarWidth, setWorkspaceSidebarWidth] = useState(readWorkspaceSidebarWidth)
+  const [isResizingWorkspaceSidebar, setIsResizingWorkspaceSidebar] = useState(false)
   const [shortcutBindings, setShortcutBindings] = useState(() => shortcutPreferencesWithDefaults())
   const [shortcutSettingsOpen, setShortcutSettingsOpen] = useState(false)
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
@@ -413,6 +446,7 @@ function V2EditorApp() {
   const liveTimelineEditActiveRef = useRef(false)
   const liveLeaseRenewedAtRef = useRef(0)
   const livePointerSentAtRef = useRef(0)
+  const isScrubbingRef = useRef(false)
   const liveInviteSession = useState<string | null>(() => typeof window === 'undefined' ? null : parseLiveReviewInviteSession(window.location.href))[0]
   const isDirtyRef = useRef(isDirty)
   const workspaceModeRef = useRef(workspaceMode)
@@ -425,6 +459,7 @@ function V2EditorApp() {
   const unsavedDialogPromiseRef = useRef<{ promise: Promise<UnsavedDialogChoice>; resolve: (choice: UnsavedDialogChoice) => void } | null>(null)
   const selectedEntityIdRef = useRef<string | null>(selectedEntityId)
   const selectedEntityIdsRef = useRef<string[]>(selectedEntityIds)
+  const groupEditGroupIdRef = useRef<string | null>(groupEditGroupId)
   const renameRequestTokenRef = useRef(0)
   const selectedTimelineKeyframesRef = useRef<TimelineKeyframeSelection[]>(selectedTimelineKeyframes)
   const shortcutBindingsRef = useRef(shortcutBindings)
@@ -432,7 +467,7 @@ function V2EditorApp() {
   const keyframeClipboardRef = useRef<TimelineKeyframeClipboard | null>(null)
   const projectHistoryRef = useRef<ProjectHistory>(new ProjectHistory(100))
   const groupCommandsRef = useRef<{ create: () => void; ungroup: () => void }>({ create: () => {}, ungroup: () => {} })
-  const transformTransactionRef = useRef<{ before: SceneDocument; beforeSelection: string | null; beforeSelectionIds: string[] } | null>(null)
+  const transformTransactionRef = useRef<{ before: SceneDocument; beforeSelection: string | null; beforeSelectionIds: string[]; editedProperty?: TimelineTransformCommit['editedProperty'] } | null>(null)
   const cameraPathTransactionRef = useRef<{ before: SceneDocument; cameraId: string; keyframe: CameraPathKeyframe } | null>(null)
   const playbackRef = useRef<PlaybackClock | null>(null)
   const playbackRangeRef = useRef<TimelinePlaybackRange | null>(null)
@@ -479,6 +514,7 @@ function V2EditorApp() {
   const masterTimelineZoomShortcutRef = useRef<TimelineZoomShortcutHandler | null>(null)
   const timelineModeRef = useRef(timelineMode)
   const timelineResizeRef = useRef<{ startY: number; startHeight: number } | null>(null)
+  const workspaceSidebarResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const registerSceneTimelineZoomShortcut = useCallback((handler: TimelineZoomShortcutHandler | null) => { sceneTimelineZoomShortcutRef.current = handler }, [])
   const registerMasterTimelineZoomShortcut = useCallback((handler: TimelineZoomShortcutHandler | null) => { masterTimelineZoomShortcutRef.current = handler }, [])
   const updateTimelineWorkspace = useCallback((update: { master?: Parameters<typeof updateMasterTimelineWorkspace>[1]; scene?: { sceneId: string; patch: Parameters<typeof updateSceneTimelineWorkspace>[2] } }) => {
@@ -541,6 +577,7 @@ function V2EditorApp() {
     sceneDocumentRef.current = sceneDocument
     selectedEntityIdRef.current = selectedEntityId
     selectedEntityIdsRef.current = selectedEntityIds
+    groupEditGroupIdRef.current = groupEditGroupId
     selectedTimelineKeyframesRef.current = selectedTimelineKeyframes
     shortcutBindingsRef.current = shortcutBindings
     isDirtyRef.current = isDirty
@@ -549,7 +586,7 @@ function V2EditorApp() {
     masterFrameRef.current = masterFrame
     masterTimelineSelectionRef.current = masterTimelineSelection
     recentProjectsRef.current = recentProjects
-  }, [projectDocument, sceneDocument, selectedEntityId, selectedEntityIds, selectedTimelineKeyframes, shortcutBindings, isDirty, workspaceMode, timelineMode, recentProjects, masterFrame, masterTimelineSelection])
+  }, [projectDocument, sceneDocument, selectedEntityId, selectedEntityIds, groupEditGroupId, selectedTimelineKeyframes, shortcutBindings, isDirty, workspaceMode, timelineMode, recentProjects, masterFrame, masterTimelineSelection])
 
   // Keep the visible dirty indicator tied to the last confirmed save, rather
   // than to the timing of a button click. Fingerprint equality also allows an
@@ -725,8 +762,41 @@ function V2EditorApp() {
     setTimelineHeight(clampTimelineHeight(requestedHeight, availableWorkspaceHeight()))
   }
 
+  const startWorkspaceSidebarResize = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    workspaceSidebarResizeRef.current = { startX: event.clientX, startWidth: workspaceSidebarWidth }
+    setIsResizingWorkspaceSidebar(true)
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  useEffect(() => {
+    if (!isResizingWorkspaceSidebar) return
+    const handlePointerMove = (event: globalThis.PointerEvent) => {
+      const resize = workspaceSidebarResizeRef.current
+      if (!resize) return
+      setWorkspaceSidebarWidth(clampWorkspaceSidebarWidth(resize.startWidth + event.clientX - resize.startX, window.innerWidth))
+    }
+    const finishResize = () => {
+      workspaceSidebarResizeRef.current = null
+      setIsResizingWorkspaceSidebar(false)
+    }
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', finishResize)
+    window.addEventListener('pointercancel', finishResize)
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', finishResize)
+      window.removeEventListener('pointercancel', finishResize)
+    }
+  }, [isResizingWorkspaceSidebar])
+
+  useEffect(() => {
+    try { window.localStorage.setItem(WORKSPACE_SIDEBAR_WIDTH_KEY, String(workspaceSidebarWidth)) } catch { /* Optional UI preference. */ }
+  }, [workspaceSidebarWidth])
+
   const replaceProjectDocument = (next: ProjectDocument, options: { allowViewer?: boolean } = {}) => {
-    if ((liveRoleRef.current === 'viewer' || liveRoleRef.current === 'editor') && !options.allowViewer) return
+    if (liveRoleRef.current === 'viewer' && !options.allowViewer) return
     const previousFingerprint = creativeProjectFingerprint(projectDocumentRef.current)
     const nextFingerprint = creativeProjectFingerprint(next)
     if (previousFingerprint !== nextFingerprint) projectRevisionRef.current += 1
@@ -792,42 +862,64 @@ function V2EditorApp() {
   }
 
   const publishLiveProject = (project: ProjectDocument) => {
-    if (liveRoleRef.current !== 'host' || !liveTransportRef.current?.connected) return
-    const snapshot = createLiveReviewSnapshot(project)
+    const role = liveRoleRef.current
+    if ((role !== 'host' && role !== 'editor') || !liveTransportRef.current?.connected) return
+    const publishableProject = role === 'editor' ? sharedProjectSnapshot(project, liveLatestProjectRef.current) : project
+    const snapshot = createLiveReviewSnapshot(publishableProject)
     if (snapshot.bytes > 16 * 1024 * 1024) {
       setLiveError('This project is too large for the Live Review relay limit.')
       return
     }
-    liveProjectRevisionRef.current += 1
-    liveProjectFingerprintRef.current = creativeProjectFingerprint(project)
-    liveTransportRef.current?.send({ type: 'host_project_snapshot', revision: liveProjectRevisionRef.current, project: snapshot.project })
-    sendLiveState(true)
+    liveProjectFingerprintRef.current = creativeProjectFingerprint(publishableProject)
+    if (role === 'host') {
+      liveProjectRevisionRef.current += 1
+      liveTransportRef.current?.send({ type: 'host_project_snapshot', revision: liveProjectRevisionRef.current, project: snapshot.project })
+      sendLiveState(true)
+    } else {
+      liveTransportRef.current?.send({ type: 'editor_project_snapshot', baseRevision: liveProjectRevisionRef.current, project: snapshot.project })
+    }
   }
 
-  const applyLiveProject = (project: ProjectDocument) => {
+  const applyLiveProject = (project: ProjectDocument, options: { preserveWorkspace?: boolean } = {}) => {
     if (liveTimelineEditActiveRef.current) {
       liveTimelineEditActiveRef.current = false
       liveTimelineEditTargetRef.current = null
       if (liveActiveLeaseRef.current?.targetType === 'Timeline') releaseLiveLease(liveActiveLeaseRef.current)
     }
     const normalizedProject = { ...project, cameraDefaults: normalizeCameraDefaults(project) }
-    const scene = normalizedProject.scenes.find((entry) => entry.id === normalizedProject.activeSceneId) ?? normalizedProject.scenes[0]
+    const currentProject = projectDocumentRef.current
+    const mergedProject = mergeLiveProjectWorkspace(normalizedProject, currentProject, options.preserveWorkspace === true)
+    const scene = mergedProject.scenes.find((entry) => entry.id === mergedProject.activeSceneId) ?? mergedProject.scenes[0]
     if (!scene) return
-    if (normalizedProject.id !== projectDocumentRef.current.id) clearTimelineWorkspace()
-    projectDocumentRef.current = normalizedProject
+    if (mergedProject.id !== projectDocumentRef.current.id) clearTimelineWorkspace()
+    projectDocumentRef.current = mergedProject
     sceneDocumentRef.current = scene.scene
-    const fingerprint = creativeProjectFingerprint(normalizedProject)
+    const fingerprint = creativeProjectFingerprint(mergedProject)
     projectRevisionRef.current += 1
-    savedProjectFingerprintRef.current = fingerprint
-    savedProjectCheckpointRef.current = checkpointForSuccessfulSave(projectRevisionRef.current, fingerprint)
-    replaceProjectDocument(normalizedProject, { allowViewer: true })
-    setSelectedEntityId(null)
-    setSelectedEntityIds([])
-    setSelectedFrameGuideId(null)
-    setSelectedTimelineKeyframes([])
-    setSelectedCameraPathSegment(null)
-    setShotListSelectedId(normalizedProject.activeShotId)
-    setIsDirty(false)
+    if (!options.preserveWorkspace) {
+      savedProjectFingerprintRef.current = fingerprint
+      savedProjectCheckpointRef.current = checkpointForSuccessfulSave(projectRevisionRef.current, fingerprint)
+    }
+    replaceProjectDocument(mergedProject, { allowViewer: true })
+    const validEntityIds = new Set([...scene.scene.actors, ...scene.scene.props, ...scene.scene.walls, ...scene.scene.openings, ...scene.scene.cameras, ...scene.scene.lights, ...scene.scene.groups].map((entity) => entity.id))
+    if (!options.preserveWorkspace) {
+      setSelectedEntityId(null)
+      setSelectedEntityIds([])
+      setSelectedFrameGuideId(null)
+    } else {
+      const keptIds = selectedEntityIdsRef.current.filter((id) => validEntityIds.has(id))
+      const keptPrimary = selectedEntityIdRef.current && keptIds.includes(selectedEntityIdRef.current) ? selectedEntityIdRef.current : keptIds[keptIds.length - 1] ?? null
+      selectedEntityIdRef.current = keptPrimary
+      selectedEntityIdsRef.current = keptIds
+      setSelectedEntityId(keptPrimary)
+      setSelectedEntityIds(keptIds)
+    }
+    if (!options.preserveWorkspace) {
+      setSelectedTimelineKeyframes([])
+      setSelectedCameraPathSegment(null)
+    }
+    setShotListSelectedId(mergedProject.activeShotId)
+    if (!options.preserveWorkspace) setIsDirty(false)
   }
 
   const applyLiveState = (state: LiveReviewState) => {
@@ -855,12 +947,14 @@ function V2EditorApp() {
   }
 
   const applyLiveTransform = (transform: LiveReviewTransform) => {
-    if (transform.sceneId !== projectDocumentRef.current.activeSceneId) return
-    const scene = sceneDocumentRef.current
+    const currentProject = projectDocumentRef.current
+    const sceneEntry = currentProject.scenes.find((entry) => entry.id === transform.sceneId)
+    if (!sceneEntry) return
+    const scene = sceneEntry.scene
     const nextScene = applySceneEntityTransform(scene, { entityId: transform.entityId, position: transform.position, rotation: transform.rotation, ...(transform.scale ? { scale: transform.scale } : {}) })
     if (nextScene === scene) return
-    sceneDocumentRef.current = nextScene
-    const nextProject = { ...projectDocumentRef.current, scenes: projectDocumentRef.current.scenes.map((entry) => entry.id === scene.metadata.id ? { ...entry, scene: nextScene } : entry) }
+    const nextProject = { ...currentProject, scenes: currentProject.scenes.map((entry) => entry.id === sceneEntry.id ? { ...entry, scene: nextScene } : entry) }
+    if (sceneEntry.id === currentProject.activeSceneId) sceneDocumentRef.current = nextScene
     replaceProjectDocument(nextProject, { allowViewer: true })
   }
 
@@ -947,7 +1041,7 @@ function V2EditorApp() {
       sceneId: projectDocumentRef.current.activeSceneId,
       targetType,
       entityId: change.entityId,
-      mode: transformTool === 'rotate' ? 'rotate' : transformTool === 'scale' ? 'scale' : 'move',
+      mode: change.mode ?? (transformTool === 'rotate' ? 'rotate' : transformTool === 'scale' ? 'scale' : 'move'),
       position: change.position,
       rotation: change.rotation,
       scale: change.scale,
@@ -957,27 +1051,37 @@ function V2EditorApp() {
   }
 
   const applyHostCollaborativeTransform = (commit: LiveReviewTransformCommit): LiveReviewEditResult => {
-    if (commit.sceneId !== projectDocumentRef.current.activeSceneId) return { operationId: commit.operationId, accepted: false, reason: 'target_missing', projectRevision: liveProjectRevisionRef.current }
-    const before = sceneDocumentRef.current
+    const sceneEntry = projectDocumentRef.current.scenes.find((entry) => entry.id === commit.sceneId)
+    if (!sceneEntry) return { operationId: commit.operationId, accepted: false, reason: 'target_missing', projectRevision: liveProjectRevisionRef.current }
+    const before = sceneEntry.scene
     const exists = commit.targetType === 'Actor' ? before.actors.some((entity) => entity.id === commit.entityId) : commit.targetType === 'Prop' ? before.props.some((entity) => entity.id === commit.entityId) : before.cameras.some((entity) => entity.id === commit.entityId)
     if (!exists) return { operationId: commit.operationId, accepted: false, reason: 'target_missing', projectRevision: liveProjectRevisionRef.current }
-    const editedProperty: TimelineTransformCommit['editedProperty'] = commit.mode === 'move' ? 'position' : commit.mode === 'rotate' ? (commit.targetType === 'Actor' ? 'heading' : 'rotation') : commit.mode === 'scale' && commit.targetType === 'Prop' ? 'scale' : undefined
+    const editedProperty: TimelineTransformCommit['editedProperty'] = commit.mode === 'move' ? 'position' : commit.mode === 'rotate' ? 'rotation' : commit.mode === 'scale' && commit.targetType === 'Prop' ? 'scale' : undefined
     const result = commitTimelineTransform(before, { entityId: commit.entityId, position: commit.position, rotation: commit.rotation, scale: commit.scale ?? [1, 1, 1], editedProperty })
     let after = { ...result.document, metadata: { ...result.document.metadata, updatedAt: new Date().toISOString() } }
     if (commit.targetType === 'Camera' && commit.mode === 'rotate') {
       const camera = before.cameras.find((entity) => entity.id === commit.entityId)
       if (camera?.lockTarget) after = { ...after, cameras: after.cameras.map((entity) => entity.id === commit.entityId ? { ...entity, lockTarget: false } : entity) }
     }
-    recordAction(`Collaborative ${commit.mode} ${liveEntityLabelForId(commit.entityId, before)}`, before, selectedEntityIdRef.current, after, commit.entityId)
+    recordAction(`Collaborative ${commit.mode} ${liveEntityLabelForId(commit.entityId, before)}`, before, selectedEntityIdRef.current, after, commit.entityId, commit.sceneId)
     const suspendedIds = new Set(suspendedTimelineEntityIds)
     if (result.suspendEvaluation) suspendedIds.add(commit.entityId)
     else suspendedIds.delete(commit.entityId)
-    applyEditorSnapshot({ document: after, selectedEntityId: commit.entityId }, suspendedIds)
+    const nextProject = { ...projectDocumentRef.current, scenes: projectDocumentRef.current.scenes.map((entry) => entry.id === commit.sceneId ? { ...entry, name: after.metadata.name, scene: after } : entry) }
+    if (commit.sceneId === projectDocumentRef.current.activeSceneId) applyEditorSnapshot({ document: after, selectedEntityId: commit.entityId }, suspendedIds)
+    else replaceProjectDocument(nextProject)
     publishLiveProject(projectDocumentRef.current)
     return { operationId: commit.operationId, accepted: true, projectRevision: liveProjectRevisionRef.current }
   }
 
-  const canonicalTimelineProperty = (entityType: LiveReviewCollaborativeEntityType, property: LiveReviewTimelineProperty): TimelineProperty => entityType === 'Actor' && property === 'rotation' ? 'heading' : property
+  const canonicalTimelineProperty = (entityType: LiveReviewCollaborativeEntityType, property: LiveReviewTimelineProperty, scene?: SceneDocument, entityId?: string): TimelineProperty => {
+    if (entityType === 'Actor' && property === 'rotation' && scene && entityId) {
+      const hasRotation = scene.timeline.tracks.some((track) => track.entityType === 'Actor' && track.entityId === entityId && track.property === 'rotation')
+      const hasLegacyHeading = scene.timeline.tracks.some((track) => track.entityType === 'Actor' && track.entityId === entityId && track.property === 'heading')
+      if (!hasRotation && hasLegacyHeading) return 'heading'
+    }
+    return property
+  }
 
   const timelineLeaseTargetId = (sceneId: string, entityType: LiveReviewCollaborativeEntityType, entityId: string, property: LiveReviewTimelineProperty) => `${sceneId}:${entityType.toLowerCase()}:${entityId}:${property}`
 
@@ -1009,11 +1113,12 @@ function V2EditorApp() {
   const timelineValueForCommit = (commit: LiveReviewTimelineCommit): ActorVector3 | undefined => commit.value ? [...commit.value] as ActorVector3 : undefined
 
   const applyHostCollaborativeTimeline = (commit: LiveReviewTimelineCommit): LiveReviewEditResult => {
-    if (commit.sceneId !== projectDocumentRef.current.activeSceneId) return { operationId: commit.operationId, accepted: false, reason: 'target_missing', projectRevision: liveProjectRevisionRef.current }
-    const before = sceneDocumentRef.current
+    const sceneEntry = projectDocumentRef.current.scenes.find((entry) => entry.id === commit.sceneId)
+    if (!sceneEntry) return { operationId: commit.operationId, accepted: false, reason: 'target_missing', projectRevision: liveProjectRevisionRef.current }
+    const before = sceneEntry.scene
     const entity = timelineEntityForCommit(before, commit)
     if (!entity) return { operationId: commit.operationId, accepted: false, reason: 'target_missing', projectRevision: liveProjectRevisionRef.current }
-    const property = canonicalTimelineProperty(commit.entityType, commit.property)
+    const property = canonicalTimelineProperty(commit.entityType, commit.property, before, commit.entityId)
     const track = before.timeline.tracks.find((candidate) => candidate.entityId === commit.entityId && candidate.property === property)
     let timeline = before.timeline
     if (commit.operation === 'add') {
@@ -1032,13 +1137,15 @@ function V2EditorApp() {
     } else {
       const source = track.keyframes.find((keyframe) => keyframe.id === commit.keyframeId)
       const vector = timelineValueForCommit(commit)
-      const value = commit.entityType === 'Actor' && commit.property === 'rotation' ? vector?.[1] : vector
+      const value = property === 'heading' ? vector?.[1] : vector
       if (!source || value === undefined) return { operationId: commit.operationId, accepted: false, reason: 'invalid_payload', projectRevision: liveProjectRevisionRef.current }
       timeline = upsertTimelineKeyframe(before.timeline, commit.entityId, commit.entityType, property, source.frame, value)
     }
     const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, timeline }
-    recordAction(`${commit.operation === 'add' ? 'Add' : commit.operation === 'move' ? 'Move' : commit.operation === 'delete' ? 'Delete' : 'Update'} ${commit.entityType} ${commit.property} keyframe`, before, selectedEntityIdRef.current, after, commit.entityId)
-    applyEditorSnapshot({ document: after, selectedEntityId: commit.entityId })
+    recordAction(`${commit.operation === 'add' ? 'Add' : commit.operation === 'move' ? 'Move' : commit.operation === 'delete' ? 'Delete' : 'Update'} ${commit.entityType} ${commit.property} keyframe`, before, selectedEntityIdRef.current, after, commit.entityId, commit.sceneId)
+    const nextProject = { ...projectDocumentRef.current, scenes: projectDocumentRef.current.scenes.map((entry) => entry.id === commit.sceneId ? { ...entry, name: after.metadata.name, scene: after } : entry) }
+    if (commit.sceneId === projectDocumentRef.current.activeSceneId) applyEditorSnapshot({ document: after, selectedEntityId: commit.entityId })
+    else replaceProjectDocument(nextProject)
     publishLiveProject(projectDocumentRef.current)
     return { operationId: commit.operationId, accepted: true, projectRevision: liveProjectRevisionRef.current }
   }
@@ -1089,6 +1196,22 @@ function V2EditorApp() {
     await sendEditorPlanningCommit({ operation: 'shot_update', shotId, patch: { [field]: value } })
   }
 
+  const setLiveRoleState = (role: LiveReviewRole | null) => {
+    liveRoleRef.current = role
+    setLiveRole(role)
+    if (role) {
+      const follow = defaultLiveReviewFollowHost(role)
+      liveFollowHostRef.current = follow
+      setLiveFollowHost(follow)
+    }
+  }
+
+  const applyLiveProjectForRole = (project: ProjectDocument) => {
+    const preserveWorkspace = liveRoleRef.current !== null
+    applyLiveProject(project, { preserveWorkspace })
+    liveProjectFingerprintRef.current = creativeProjectFingerprint(projectDocumentRef.current)
+  }
+
   const handleLiveMessage = (message: LiveReviewServerMessage) => {
     if (message.type === 'error') {
       setLiveError(message.message)
@@ -1104,7 +1227,7 @@ function V2EditorApp() {
       setLiveViewerCount(message.participants.filter((participant) => participant.role === 'viewer' && participant.status === 'connected').length)
       setLiveHostConnected(message.hostConnected)
       const own = message.participants.find((participant) => participant.participantId === liveTransportRef.current?.participantId)
-      if (own && own.role !== liveRoleRef.current) { liveRoleRef.current = own.role; setLiveRole(own.role); if (own.role !== 'editor') { liveTimelineEditActiveRef.current = false; liveTimelineEditTargetRef.current = null } }
+      if (own && own.role !== liveRoleRef.current) { setLiveRoleState(own.role); if (own.role !== 'editor') { liveTimelineEditActiveRef.current = false; liveTimelineEditTargetRef.current = null } }
       return
     }
     if (message.type === 'presence_update') {
@@ -1112,19 +1235,18 @@ function V2EditorApp() {
         const without = current.filter((participant) => participant.participantId !== message.participant.participantId)
         return message.action === 'left' ? without : [...without, message.participant]
       })
-      if (message.participant.participantId === liveTransportRef.current?.participantId) { liveRoleRef.current = message.participant.role; setLiveRole(message.participant.role); if (message.participant.role !== 'editor') { liveTimelineEditActiveRef.current = false; liveTimelineEditTargetRef.current = null } }
+      if (message.participant.participantId === liveTransportRef.current?.participantId) { setLiveRoleState(message.participant.role); if (message.participant.role !== 'editor') { liveTimelineEditActiveRef.current = false; liveTimelineEditTargetRef.current = null } }
       return
     }
     if (message.type === 'role_updated') {
       setLiveParticipants((current) => current.map((participant) => participant.participantId === message.participant.participantId ? message.participant : participant))
-      if (message.participant.participantId === liveTransportRef.current?.participantId) { liveRoleRef.current = message.participant.role; setLiveRole(message.participant.role); if (message.participant.role !== 'editor') { liveTimelineEditActiveRef.current = false; liveTimelineEditTargetRef.current = null } }
+      if (message.participant.participantId === liveTransportRef.current?.participantId) { setLiveRoleState(message.participant.role); if (message.participant.role !== 'editor') { liveTimelineEditActiveRef.current = false; liveTimelineEditTargetRef.current = null } }
       return
     }
     if (message.type === 'session_snapshot') {
       const assignedRole = message.participants.find((participant) => participant.participantId === message.participantId)?.role ?? liveRoleRef.current
       if (assignedRole === 'viewer' && !liveBeforeProjectRef.current) liveBeforeProjectRef.current = projectDocumentRef.current
-      liveRoleRef.current = assignedRole
-      setLiveRole(assignedRole)
+      setLiveRoleState(assignedRole)
       liveProjectRevisionRef.current = message.projectRevision
       liveLatestProjectRef.current = message.project as ProjectDocument
       liveLatestStateRef.current = message.state
@@ -1134,21 +1256,27 @@ function V2EditorApp() {
       setLivePointer(message.pointer)
       setLiveLeases(message.leases)
       setLiveHostConnected(message.hostConnected)
-      if (assignedRole !== 'viewer' || liveFollowHostRef.current) {
-        applyLiveProject(message.project as ProjectDocument)
-        applyLiveState(message.state)
-      }
+      applyLiveProjectForRole(message.project as ProjectDocument)
+      if (shouldApplyLivePresentation(assignedRole, liveFollowHostRef.current)) applyLiveState(message.state)
       return
     }
     if (message.type === 'project_update') {
       liveProjectRevisionRef.current = message.revision
       liveLatestProjectRef.current = message.project as ProjectDocument
-      if (liveRoleRef.current !== 'viewer' || liveFollowHostRef.current) applyLiveProject(message.project as ProjectDocument)
+      applyLiveProjectForRole(message.project as ProjectDocument)
+      return
+    }
+    if (message.type === 'project_edit_result') {
+      liveProjectRevisionRef.current = message.result.projectRevision
+      if (!message.result.accepted) {
+        setLiveError(`Shared edit rejected: ${(message.result.reason ?? 'unknown error').replaceAll('_', ' ')}.`)
+        liveTransportRef.current?.send({ type: 'request_snapshot' })
+      }
       return
     }
     if (message.type === 'present_state') {
       liveLatestStateRef.current = message.state
-      if (liveRoleRef.current !== 'viewer' || liveFollowHostRef.current) applyLiveState(message.state)
+      if (shouldApplyLivePresentation(liveRoleRef.current, liveFollowHostRef.current)) applyLiveState(message.state)
       return
     }
     if (message.type === 'transform_update') {
@@ -1440,8 +1568,9 @@ function V2EditorApp() {
   })
 
   useEffect(() => {
-    if (liveRole !== 'host' || liveStatus !== 'live') return
-    const fingerprint = creativeProjectFingerprint(projectDocument)
+    if ((liveRole !== 'host' && liveRole !== 'editor') || liveStatus !== 'live') return
+    const publishableProject = liveRole === 'editor' ? sharedProjectSnapshot(projectDocument, liveLatestProjectRef.current) : projectDocument
+    const fingerprint = creativeProjectFingerprint(publishableProject)
     if (fingerprint !== liveProjectFingerprintRef.current) publishLiveProjectRef.current(projectDocument)
   }, [projectDocument, liveRole, liveStatus])
 
@@ -1655,6 +1784,7 @@ function V2EditorApp() {
   useEffect(() => {
     const handleViewportResize = () => {
       setTimelineHeight((currentHeight) => clampTimelineHeight(currentHeight, availableWorkspaceHeight()))
+      setWorkspaceSidebarWidth((currentWidth) => clampWorkspaceSidebarWidth(currentWidth, window.innerWidth))
     }
     window.addEventListener('resize', handleViewportResize)
     return () => window.removeEventListener('resize', handleViewportResize)
@@ -1771,13 +1901,13 @@ function V2EditorApp() {
     applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current })
   }
 
-  const recordAction = (label: string, before: SceneDocument, beforeSelection: string | null, after: SceneDocument, afterSelection: string | null) => {
+  const recordAction = (label: string, before: SceneDocument, beforeSelection: string | null, after: SceneDocument, afterSelection: string | null, sceneId = projectDocumentRef.current.activeSceneId) => {
     const current = projectDocumentRef.current
     const currentFrame = sceneDocumentRef.current.timeline.currentFrame
     const historyScene = (scene: SceneDocument): SceneDocument => ({ ...scene, timeline: { ...scene.timeline, currentFrame } })
     const withScene = (project: ProjectDocument, scene: SceneDocument): ProjectDocument => ({
       ...project,
-      scenes: project.scenes.map((entry) => entry.id === project.activeSceneId ? { ...entry, name: scene.metadata.name, scene: historyScene(scene) } : entry),
+      scenes: project.scenes.map((entry) => entry.id === sceneId ? { ...entry, name: scene.metadata.name, scene: historyScene(scene) } : entry),
     })
     projectHistoryRef.current.record({ label, before: withScene(current, before), after: withScene(current, after), beforeSelection, afterSelection })
     if (creativeSceneChanged(before, after)) setIsDirty(true)
@@ -1873,7 +2003,7 @@ function V2EditorApp() {
     setSuspendedTimelineEntityIds(new Set())
     setSuspendedTimelineProperties({})
     sceneDocumentRef.current = target.scene
-    replaceProjectDocument({ ...current, activeSceneId: target.id, activeShotId: activatingShotId })
+    replaceProjectDocument({ ...current, activeSceneId: target.id, activeShotId: activatingShotId }, { allowViewer: true })
   }
 
   const persistRecentProjects = async (entries: readonly RecentProjectEntry[]) => {
@@ -2361,7 +2491,7 @@ function V2EditorApp() {
   }
 
   const updateProjectCameraDefault = (cameraModelId: string) => {
-    if (liveRoleRef.current === 'viewer' || liveRoleRef.current === 'editor') return
+    if (liveRoleRef.current === 'viewer') return
     const current = projectDocumentRef.current
     const definition = resolveCameraDefinition(cameraModelId)
     if (!definition || current.cameraDefaults.cameraModelId === definition.id) return
@@ -2378,7 +2508,51 @@ function V2EditorApp() {
     const id = `scene-${String(number).padStart(2, '0')}`
     const name = `Scene ${String(number).padStart(2, '0')}`
     const scene = createDefaultV2Scene(id, name, false, current.cameraDefaults.cameraModelId)
-    resetEditorForProject({ ...current, scenes: [...current.scenes, { id, name, scene }], activeSceneId: id, updatedAt: new Date().toISOString() }, false)
+    const next = { ...current, scenes: [...current.scenes, { id, name, scene }], activeSceneId: id, activeShotId: null, updatedAt: new Date().toISOString() }
+    projectHistoryRef.current.record({ label: 'Add Scene', before: current, after: next, beforeSelection: selectedEntityIdRef.current, afterSelection: scene.activeCameraId })
+    sceneDocumentRef.current = scene
+    replaceProjectDocument(next)
+    selectedEntityIdRef.current = scene.activeCameraId
+    selectedEntityIdsRef.current = scene.activeCameraId ? [scene.activeCameraId] : []
+    setSelectedEntityId(scene.activeCameraId)
+    setSelectedEntityIds(scene.activeCameraId ? [scene.activeCameraId] : [])
+    setSelectedFrameGuideId(scene.activeCameraId ? resolveFrameGuideSelection(scene.cameras.find((camera) => camera.id === scene.activeCameraId)?.frameGuides ?? [], null) : null)
+    setIsDirty(true)
+    setView('blocking')
+  }
+
+  const reorderScenes = (sceneId: string, targetIndex: number) => {
+    const current = projectDocumentRef.current
+    const scenes = reorderSceneEntries(current.scenes, sceneId, targetIndex)
+    if (scenes.every((scene, index) => scene.id === current.scenes[index]?.id)) return
+    const next = { ...current, updatedAt: new Date().toISOString(), scenes }
+    projectHistoryRef.current.record({ label: 'Reorder Scene', before: current, after: next, beforeSelection: selectedEntityIdRef.current, afterSelection: selectedEntityIdRef.current })
+    replaceProjectDocument(next)
+    setIsDirty(true)
+  }
+
+  const insertSceneRelative = (sceneId: string, position: RelativeInsertPosition) => {
+    const current = projectDocumentRef.current
+    const referenceIndex = current.scenes.findIndex((scene) => scene.id === sceneId)
+    if (referenceIndex < 0) return
+    const usedIds = new Set(current.scenes.map((scene) => scene.id))
+    let number = nextSceneNumber(current.scenes)
+    let id = `scene-${String(number).padStart(2, '0')}`
+    while (usedIds.has(id)) { number += 1; id = `scene-${String(number).padStart(2, '0')}` }
+    const name = `Scene ${String(number).padStart(2, '0')}`
+    const scene = createDefaultV2Scene(id, name, false, current.cameraDefaults.cameraModelId)
+    const entry: ProjectSceneEntry = { id, name, scene }
+    const scenes = insertSceneEntryAt(current.scenes, entry, referenceIndex + (position === 'after' ? 1 : 0))
+    const next = { ...current, updatedAt: new Date().toISOString(), scenes, activeSceneId: id, activeShotId: null }
+    projectHistoryRef.current.record({ label: `Insert Scene ${position === 'before' ? 'Before' : 'After'}`, before: current, after: next, beforeSelection: selectedEntityIdRef.current, afterSelection: scene.activeCameraId })
+    sceneDocumentRef.current = scene
+    replaceProjectDocument(next)
+    selectedEntityIdRef.current = scene.activeCameraId
+    selectedEntityIdsRef.current = scene.activeCameraId ? [scene.activeCameraId] : []
+    setSelectedEntityId(scene.activeCameraId)
+    setSelectedEntityIds(scene.activeCameraId ? [scene.activeCameraId] : [])
+    setSelectedFrameGuideId(scene.activeCameraId ? resolveFrameGuideSelection(scene.cameras.find((camera) => camera.id === scene.activeCameraId)?.frameGuides ?? [], null) : null)
+    setIsDirty(true)
     setView('blocking')
   }
 
@@ -2437,7 +2611,7 @@ function V2EditorApp() {
     if (!shot) return
     const target = current.scenes.find((entry) => entry.id === shot.sceneId)
     if (!target) {
-      replaceProjectDocument({ ...current, activeShotId: shot.id })
+      replaceProjectDocument({ ...current, activeShotId: shot.id }, { allowViewer: true })
       setSceneFileError(`Shot “${shot.name}” references a missing Scene.`)
       return
     }
@@ -2459,7 +2633,7 @@ function V2EditorApp() {
       ? { ...scene, activeCameraId: camera.id, timeline: { ...scene.timeline, currentFrame: Math.max(scene.timeline.startFrame, Math.min(scene.timeline.endFrame, shot.startFrame)) } }
       : { ...scene, timeline: { ...scene.timeline, currentFrame: Math.max(scene.timeline.startFrame, Math.min(scene.timeline.endFrame, shot.startFrame)) } }
     sceneDocumentRef.current = nextScene
-    replaceProjectDocument({ ...project, activeShotId: shot.id, scenes: project.scenes.map((entry) => entry.id === project.activeSceneId ? { ...entry, scene: nextScene } : entry) })
+    replaceProjectDocument({ ...project, activeShotId: shot.id, scenes: project.scenes.map((entry) => entry.id === project.activeSceneId ? { ...entry, scene: nextScene } : entry) }, { allowViewer: true })
     if (camera) {
       setSelectedEntityId(camera.id)
       setSelectedEntityIds([camera.id])
@@ -2485,6 +2659,7 @@ function V2EditorApp() {
     const nextScene = current.activeCameraId === camera.id ? current : { ...current, activeCameraId: camera.id }
     sceneDocumentRef.current = nextScene
     const next = { ...projectDocumentRef.current, updatedAt: new Date().toISOString(), scenes: projectDocumentRef.current.scenes.map((entry) => entry.id === projectDocumentRef.current.activeSceneId ? { ...entry, scene: nextScene } : entry), shots: [...projectDocumentRef.current.shots, shot], activeShotId: shot.id }
+    projectHistoryRef.current.record({ label: 'Add Shot', before: projectDocumentRef.current, after: next, beforeSelection: selectedEntityIdRef.current, afterSelection: camera.id })
     replaceProjectDocument(next)
     setSelectedEntityId(camera.id)
     setSelectedEntityIds([camera.id])
@@ -2561,6 +2736,43 @@ function V2EditorApp() {
     if (newClip) { setMasterSelection({ kind: 'clip', id: newClip.id }); setMasterTimelineSelection([{ kind: 'clip', id: newClip.id }]) }
     switchTimelineMode('master')
     setSceneFileError(null)
+    setIsDirty(true)
+  }
+
+  const insertShotIntoMasterWithRoom = (shotId: string, insertionFrame: number) => {
+    if (isMasterPlaying) stopMasterPlayback(false)
+    const current = projectDocumentRef.current
+    const shot = current.shots.find((item) => item.id === shotId)
+    const scene = shot ? current.scenes.find((entry) => entry.id === shot.sceneId) : null
+    if (!shot || !scene) {
+      setSceneFileError('This Shot cannot be inserted because its Scene is missing.')
+      return
+    }
+    const fallbackRate = sceneDocumentRef.current.timeline.frameRate
+    const currentRate = masterSequenceFrameRate(current.masterSequence, current.shots, current.scenes, fallbackRate).rate
+    if (current.masterSequence.clips.length > 0 && !sameFrameRate(currentRate, scene.scene.timeline.frameRate)) {
+      setSceneFileError('Master Sequence requires all Shots to use the same FPS.')
+      return
+    }
+    const nextSequence = insertMasterClipWithRoomAtFrame(current.masterSequence, shot, insertionFrame)
+    if (!nextSequence) {
+      setSceneFileError('Insert & Make Room requires an empty gap or a Shot boundary; it cannot split a Shot.')
+      return
+    }
+    const newClip = nextSequence.clips.find((clip) => !current.masterSequence.clips.some((existing) => existing.id === clip.id))
+    const next = { ...current, updatedAt: new Date().toISOString(), masterSequence: nextSequence }
+    projectHistoryRef.current.record({ label: 'Insert Master Shot and Make Room', before: current, after: next })
+    replaceProjectDocument(next)
+    if (newClip) {
+      const selection = [{ kind: 'clip' as const, id: newClip.id }]
+      setMasterSelection({ kind: 'clip', id: newClip.id })
+      masterTimelineSelectionRef.current = selection
+      setMasterTimelineSelection(selection)
+    }
+    switchTimelineMode('master')
+    const rate = masterSequenceFrameRate(nextSequence, next.shots, next.scenes, fallbackRate).rate
+    const contentEnd = masterSequenceVisualDurationFrames(nextSequence, rate)
+    setSceneFileError(nextSequence.markOutFrame !== null && nextSequence.markOutFrame !== undefined && contentEnd > nextSequence.markOutFrame ? 'Master content now extends beyond Mark Out.' : null)
     setIsDirty(true)
   }
 
@@ -3147,18 +3359,6 @@ function V2EditorApp() {
     removeMasterTimelineSelectionAction()
   }
 
-  const moveShot = (shotId: string, direction: -1 | 1) => {
-    const current = projectDocumentRef.current
-    const index = current.shots.findIndex((shot) => shot.id === shotId)
-    const targetIndex = index + direction
-    if (index < 0 || targetIndex < 0 || targetIndex >= current.shots.length) return
-    const shots = [...current.shots]
-    const [moved] = shots.splice(index, 1)
-    shots.splice(targetIndex, 0, moved)
-    replaceProjectDocument({ ...current, updatedAt: new Date().toISOString(), shots: shots.map((shot, order) => ({ ...shot, order })) })
-    setIsDirty(true)
-  }
-
   const reorderShot = (shotId: string, targetIndex: number) => {
     const current = projectDocumentRef.current
     const shots = reorderShotDocuments(current.shots, shotId, targetIndex)
@@ -3168,6 +3368,37 @@ function V2EditorApp() {
     replaceProjectDocument(next)
     setShotListSelectedId(shotId)
     setIsDirty(true)
+  }
+
+  const reorderShotWithinScene = (shotId: string, targetIndex: number) => {
+    const current = projectDocumentRef.current
+    const shots = reorderShotsWithinScene(current.shots, shotId, targetIndex)
+    if (shots.every((shot, index) => shot.id === current.shots[index]?.id)) return
+    const next = { ...current, updatedAt: new Date().toISOString(), shots }
+    projectHistoryRef.current.record({ label: 'Reorder Shot in Scene', before: current, after: next, beforeSelection: selectedEntityIdRef.current, afterSelection: selectedEntityIdRef.current })
+    replaceProjectDocument(next)
+    setShotListSelectedId(shotId)
+    setIsDirty(true)
+  }
+
+  const insertShotRelativeTo = (shotId: string, position: RelativeInsertPosition) => {
+    const current = projectDocumentRef.current
+    const reference = current.shots.find((shot) => shot.id === shotId)
+    const sceneEntry = reference ? current.scenes.find((entry) => entry.id === reference.sceneId) : null
+    if (!reference || !sceneEntry) return
+    const camera = (sceneEntry.scene.activeCameraId ? sceneEntry.scene.cameras.find((candidate) => candidate.id === sceneEntry.scene.activeCameraId) : null) ?? sceneEntry.scene.cameras[0]
+    if (!camera) { setSceneFileError('Insert Shot requires a Camera in the target Scene.'); return }
+    const range = shotCreationRange(sceneEntry.scene.timeline)
+    const id = createShotId(new Set(current.shots.map((shot) => shot.id)))
+    const shot = createShotDocument({ id, name: nextShotName(current.shots), sceneId: reference.sceneId, cameraId: camera.id, startFrame: range.startFrame, endFrame: range.endFrame, order: current.shots.length, notes: '', thumbnail: null })
+    const shots = insertShotRelative(current.shots, shot, reference.id, position)
+    if (shots.length === current.shots.length) return
+    const next = { ...current, updatedAt: new Date().toISOString(), shots, activeShotId: id }
+    projectHistoryRef.current.record({ label: `Insert Shot ${position === 'before' ? 'Before' : 'After'}`, before: current, after: next, beforeSelection: selectedEntityIdRef.current, afterSelection: camera.id })
+    replaceProjectDocument(next)
+    setIsDirty(true)
+    setSceneFileError(null)
+    activateShot(id)
   }
 
   function updateShotNotes(shotId: string, notes: string) {
@@ -3785,9 +4016,25 @@ function V2EditorApp() {
     if (camera) void sendEditorPlanningCommit({ operation: 'shot_create', sceneId: projectDocumentRef.current.activeSceneId, cameraId: camera.id })
   }
 
+  const reorderSceneForRole = (sceneId: string, targetIndex: number) => {
+    if (liveRoleRef.current !== 'viewer') reorderScenes(sceneId, targetIndex)
+  }
+
+  const insertSceneRelativeForRole = (sceneId: string, position: RelativeInsertPosition) => {
+    if (liveRoleRef.current !== 'viewer') insertSceneRelative(sceneId, position)
+  }
+
   const reorderShotForRole = (shotId: string, targetIndex: number) => {
     if (liveRoleRef.current === 'editor') void sendEditorPlanningCommit({ operation: 'shot_reorder', shotId, targetIndex })
     else if (canEditLiveTarget('Shot', shotId)) reorderShot(shotId, targetIndex)
+  }
+
+  const reorderShotWithinSceneForRole = (shotId: string, targetIndex: number) => {
+    if (liveRoleRef.current !== 'viewer') reorderShotWithinScene(shotId, targetIndex)
+  }
+
+  const insertShotRelativeForRole = (shotId: string, position: RelativeInsertPosition) => {
+    if (liveRoleRef.current !== 'viewer') insertShotRelativeTo(shotId, position)
   }
 
   const updateShotRangeForRole = (shotId: string, startFrame: number, endFrame: number) => {
@@ -3809,8 +4056,19 @@ function V2EditorApp() {
     else addShotToMaster(shotId, startMasterFrame)
   }
 
+  const insertShotIntoMasterWithRoomForRole = (shotId: string, startMasterFrame: number) => {
+    if (liveRoleRef.current === 'editor') void sendEditorPlanningCommit({ operation: 'master_clip_add', shotId, targetIndex: projectDocumentRef.current.masterSequence.clips.length })
+    else if (liveRoleRef.current !== 'viewer') insertShotIntoMasterWithRoom(shotId, startMasterFrame)
+  }
+
+  const updateMasterMarqueeSelection = (selection: MasterTimelineItem[]) => {
+    masterTimelineSelectionRef.current = selection
+    setMasterTimelineSelection(selection)
+    const last = selection.at(-1) ?? null
+    setMasterSelection(last ? { kind: last.kind, id: last.id } : null)
+  }
+
   const moveMasterClipForRole = (clipId: string, startMasterFrame: number) => {
-    if (liveRoleRef.current === 'editor') return
     if (liveRoleRef.current === 'viewer') return
     moveMasterClipAction(clipId, startMasterFrame)
   }
@@ -4119,6 +4377,11 @@ function V2EditorApp() {
     const validIds = new Set([...sceneDocumentRef.current.actors, ...sceneDocumentRef.current.props, ...sceneDocumentRef.current.walls, ...sceneDocumentRef.current.openings, ...sceneDocumentRef.current.cameras, ...sceneDocumentRef.current.lights, ...sceneDocumentRef.current.groups].map((entity) => entity.id))
     const normalizedIds = ids.filter((id, index) => validIds.has(id) && ids.indexOf(id) === index)
     const primaryId = requestedPrimary && normalizedIds.includes(requestedPrimary) ? requestedPrimary : normalizedIds[normalizedIds.length - 1] ?? null
+    const editingGroup = groupEditGroupIdRef.current ? sceneDocumentRef.current.groups.find((group) => group.id === groupEditGroupIdRef.current) ?? null : null
+    if (editingGroup && normalizedIds.some((id) => !editingGroup.childIds.includes(id))) {
+      groupEditGroupIdRef.current = null
+      setGroupEditGroupId(null)
+    }
     selectedEntityIdRef.current = primaryId
     selectedEntityIdsRef.current = normalizedIds
     setSelectedEntityId(primaryId)
@@ -4128,6 +4391,19 @@ function V2EditorApp() {
     if (review && (!camera || camera.id !== review.cameraId)) stopPlaybackSession()
     setSelectedFrameGuideId((current) => resolveFrameGuideSelection(camera?.frameGuides ?? [], current))
     if (!camera) setSelectedCameraPathSegment(null)
+  }
+
+  const enterGroupEdit = (groupId: string, childId: string) => {
+    const group = sceneDocumentRef.current.groups.find((candidate) => candidate.id === groupId)
+    if (!group || !group.childIds.includes(childId)) return
+    groupEditGroupIdRef.current = groupId
+    setGroupEditGroupId(groupId)
+    handleSelectionChange({ ids: [childId], primaryId: childId })
+  }
+
+  const exitGroupEdit = () => {
+    groupEditGroupIdRef.current = null
+    setGroupEditGroupId(null)
   }
 
   const beginEntityRename = (entityId: string) => {
@@ -4158,12 +4434,12 @@ function V2EditorApp() {
   const canTransformGroup = (entityIds: readonly string[]): boolean => {
     const role = liveRoleRef.current
     if (role === 'viewer') return false
-    if (role === 'host' || !role) return true
+    if (role === 'host' || role === 'editor' || !role) return true
     return entityIds.length === 1 && canTransformEntity(entityIds[0] ?? '')
   }
 
   const requestTransformPermission = async (entityId: string): Promise<boolean> => {
-    if (sceneDocumentRef.current.groups.some((group) => group.id === entityId)) return liveRoleRef.current !== 'viewer' && liveRoleRef.current !== 'editor'
+    if (sceneDocumentRef.current.groups.some((group) => group.id === entityId)) return liveRoleRef.current !== 'viewer'
     if (liveRoleRef.current === 'host' || liveRoleRef.current === null) {
       if (!canTransformEntity(entityId)) return false
       const targetType = liveEntityTypeForId(entityId)
@@ -4188,13 +4464,34 @@ function V2EditorApp() {
     if (liveRoleRef.current === 'host') releaseLiveLease(liveActiveLeaseRef.current)
   }
 
-  const handleTransformStart = (_change: StageTransform) => {
+  const transformEditedProperty = (scene: SceneDocument, change: StageTransform, fallbackTool: StageTool = transformTool): TimelineTransformCommit['editedProperty'] => {
+    const mode = change.mode ?? (fallbackTool === 'rotate' ? 'rotate' : fallbackTool === 'scale' ? 'scale' : fallbackTool === 'move' ? 'move' : undefined)
+    if (mode === 'move') return 'position'
+    if (mode === 'rotate') return 'rotation'
+    if (mode === 'scale' && scene.props.some((item) => item.id === change.entityId)) return 'scale'
+    return undefined
+  }
+
+  const baseTransformForGroupChild = (scene: SceneDocument, change: StageTransform): StageTransform => {
+    const editingGroupId = groupEditGroupIdRef.current
+    const baseGroup = editingGroupId ? scene.groups.find((group) => group.id === editingGroupId && group.childIds.includes(change.entityId)) ?? null : null
+    if (!baseGroup) return change
+    const evaluatedGroupState = evaluateTimeline(scene, scene.timeline.currentFrame)[baseGroup.id]
+    const group = evaluatedGroupState
+      ? { ...baseGroup, position: [...evaluatedGroupState.position] as ActorVector3, rotation: [...evaluatedGroupState.rotation] as ActorVector3 }
+      : baseGroup
+    const local = removeGroupTransform({ id: change.entityId, position: change.position, rotation: change.rotation }, group)
+    return { ...change, position: local.position, rotation: local.rotation }
+  }
+
+  const handleTransformStart = (change: StageTransform) => {
     setSnapPreviewWallId(null)
-    setTransformingEntityId(_change.entityId)
+    setTransformingEntityId(change.entityId)
     transformTransactionRef.current = {
       before: sceneDocumentRef.current,
       beforeSelection: selectedEntityIdRef.current,
       beforeSelectionIds: [...selectedEntityIdsRef.current],
+      editedProperty: transformEditedProperty(sceneDocumentRef.current, change),
     }
   }
 
@@ -4205,6 +4502,7 @@ function V2EditorApp() {
       before: sceneDocumentRef.current,
       beforeSelection: selectedEntityIdRef.current,
       beforeSelectionIds: [...selectedEntityIdsRef.current],
+      editedProperty: batch.changes[0] ? transformEditedProperty(sceneDocumentRef.current, batch.changes[0]) : undefined,
     }
   }
 
@@ -4245,8 +4543,9 @@ function V2EditorApp() {
       const snap = opening ? nearestWallForOpening(change.position, after.walls, WALL_SNAP_THRESHOLD, opening.width) : null
       const resolved = opening && snap ? resolveOpeningAgainstWalls({ ...opening, position: change.position, rotation: change.rotation, wallId: snap.wallId, offsetAlongWallMeters: snap.offset }, after.walls) : null
       const effectiveChange: StageTransform = resolved ? { ...change, position: resolved.position, rotation: resolved.rotation } : change
-      const editedProperty: TimelineTransformCommit['editedProperty'] = transformTool === 'move' ? 'position' : transformTool === 'rotate' ? actor ? 'heading' : 'rotation' : transformTool === 'scale' && prop ? 'scale' : undefined
-      const result = commitTimelineTransform(after, { ...effectiveChange, editedProperty } as TimelineTransformCommit)
+      const persistedChange = baseTransformForGroupChild(before, effectiveChange)
+      const editedProperty = transaction.editedProperty ?? transformEditedProperty(before, change)
+      const result = commitTimelineTransform(after, { ...persistedChange, editedProperty } as TimelineTransformCommit)
       after = result.document
       if (camera && transformTool === 'rotate' && camera.lockTarget) after = { ...after, cameras: after.cameras.map((item) => item.id === camera.id ? { ...item, lockTarget: false } : item) }
       if (result.suspendEvaluation) suspendedIds.add(change.entityId)
@@ -4312,7 +4611,7 @@ function V2EditorApp() {
       return
     }
     if (group) {
-      const editedProperty: TimelineTransformCommit['editedProperty'] = transformTool === 'move' ? 'position' : transformTool === 'rotate' ? 'rotation' : undefined
+      const editedProperty = transaction.editedProperty ?? transformEditedProperty(before, change)
       const result = commitTimelineTransform(before, { entityId: group.id, position: change.position, rotation: change.rotation, editedProperty })
       const after = { ...result.document, metadata: { ...result.document.metadata, updatedAt: new Date().toISOString() } }
       setLastTransformDebug({ entityId: group.id, runtimeFinal: formatTransform(change.position, change.rotation), baseDocumentFinal: formatTransform(change.position, change.rotation), timelineEvaluated: 'GROUP', valueAppliedAfterTransform: result.changedKeyframe ? 'KEYFRAME' : 'BASE' })
@@ -4326,13 +4625,9 @@ function V2EditorApp() {
       const effectiveChange: StageTransform = opening && snap
         ? { ...change, position: resolveOpeningAgainstWalls({ ...opening, position: change.position, rotation: change.rotation, wallId: snap.wallId, offsetAlongWallMeters: snap.offset }, before.walls).position, rotation: resolveOpeningAgainstWalls({ ...opening, position: change.position, rotation: change.rotation, wallId: snap.wallId, offsetAlongWallMeters: snap.offset }, before.walls).rotation }
         : change
-      const editedProperty: TimelineTransformCommit['editedProperty'] = transformTool === 'move'
-        ? 'position'
-        : transformTool === 'rotate'
-          ? actor ? 'heading' : 'rotation'
-          : transformTool === 'scale' && prop ? 'scale'
-          : undefined
-      const result = commitTimelineTransform(before, { ...effectiveChange, editedProperty } as TimelineTransformCommit)
+      const persistedChange = baseTransformForGroupChild(before, effectiveChange)
+      const editedProperty = transaction.editedProperty ?? transformEditedProperty(before, change)
+      const result = commitTimelineTransform(before, { ...persistedChange, editedProperty } as TimelineTransformCommit)
       let after = { ...result.document, metadata: { ...result.document.metadata, updatedAt: new Date().toISOString() } }
       if (camera && transformTool === 'rotate' && camera.lockTarget) after = { ...after, cameras: after.cameras.map((item) => item.id === camera.id ? { ...item, lockTarget: false } : item) }
       if (opening) {
@@ -4356,7 +4651,7 @@ function V2EditorApp() {
     }
     const after = applySceneEntityTransform(sceneDocumentRef.current, change)
     const entity = [...after.actors, ...after.props, ...after.walls, ...after.openings, ...after.cameras].find((item) => item.id === change.entityId)
-    const action = transformTool === 'rotate' ? 'Rotate' : transformTool === 'scale' ? 'Scale' : 'Move'
+    const action = transaction.editedProperty === 'rotation' ? 'Rotate' : transaction.editedProperty === 'scale' ? 'Scale' : 'Move'
     setLastTransformDebug({ entityId: change.entityId, runtimeFinal: formatTransform(change.position, change.rotation), baseDocumentFinal: formatTransform(after.props.find((item) => item.id === change.entityId)?.position ?? change.position, after.props.find((item) => item.id === change.entityId)?.rotation ?? change.rotation), timelineEvaluated: '—', valueAppliedAfterTransform: 'BASE' })
     recordAction(`${action} ${entity?.name ?? change.entityId}`, before, transaction.beforeSelection, after, change.entityId)
     applyEditorSnapshot({ document: after, selectedEntityId: change.entityId })
@@ -4405,9 +4700,9 @@ function V2EditorApp() {
     } else if (!additive) {
       next = [selection]
     } else {
-      const identity = `${selection.trackId}:${selection.keyframeId}`
-      next = current.some((item) => `${item.trackId}:${item.keyframeId}` === identity)
-        ? current.filter((item) => `${item.trackId}:${item.keyframeId}` !== identity)
+      const identity = timelineKeyframeSelectionKey(selection)
+      next = current.some((item) => timelineKeyframeSelectionKey(item) === identity)
+        ? current.filter((item) => timelineKeyframeSelectionKey(item) !== identity)
         : [...current, selection]
     }
     selectedTimelineKeyframesRef.current = next
@@ -4451,7 +4746,9 @@ function V2EditorApp() {
     const before = sceneDocumentRef.current
     const valid = selections.filter((selection) => before.timeline.tracks.some((track) => track.id === selection.trackId && track.keyframes.some((keyframe) => keyframe.id === selection.keyframeId)))
     if (valid.length === 0 || deltaFrames === 0) return
-    const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, timeline: moveTimelineKeyframes(before.timeline, valid, deltaFrames) }
+    const timeline = moveTimelineKeyframes(before.timeline, valid, deltaFrames)
+    if (timeline === before.timeline) return
+    const after = { ...before, metadata: { ...before.metadata, updatedAt: new Date().toISOString() }, timeline }
     recordAction(valid.length === 1 ? 'Move Keyframe' : `Move ${valid.length} Keyframes`, before, selectedEntityIdRef.current, after, selectedEntityIdRef.current)
     applyEditorSnapshot({ document: after, selectedEntityId: selectedEntityIdRef.current })
   }
@@ -4895,8 +5192,9 @@ function V2EditorApp() {
         saveProjectAsRef.current()
         return
       }
-      if (!isTextEditing && event.code === 'Space' && target?.closest('.v2-stage-viewport')) return
-      if (!isTextEditing && shortcutMatches(event, bindings.playPause) && !event.repeat) {
+      const activeGesture = Boolean(transformTransactionRef.current || isScrubbingRef.current || document.querySelector('[data-master-drag-mode]') || (liveRoleRef.current === 'viewer' && liveFollowHostRef.current))
+      const isPlaybackShortcut = event.code === 'Space' || shortcutMatches(event, bindings.playPause)
+      if (shouldHandleGlobalPlaybackShortcut({ code: event.code, key: event.key, matchesConfiguredBinding: shortcutMatches(event, bindings.playPause), repeat: event.repeat, isComposing: event.isComposing, isTextEditing, inDialog: Boolean(target?.closest('[role="dialog"], .v2-shot-list-options')) || Boolean(unsavedDialogPromiseRef.current), activeGesture }) && isPlaybackShortcut) {
         event.preventDefault()
         togglePlaybackRef.current()
         return
@@ -4987,17 +5285,18 @@ function V2EditorApp() {
   }
 
   const timelineBounds = timelineHeightBounds(typeof window === 'undefined' ? 900 : window.innerHeight)
-  const appShellStyle = { '--v2-timeline-height': `${timelineHeight}px` } as CSSProperties
+  const appShellStyle = { '--v2-timeline-height': `${timelineHeight}px`, '--v2-workspace-sidebar-width': `${workspaceSidebarWidth}px` } as CSSProperties
   const selectedShotLease = shotListSelectedId ? liveLeases.find((lease) => lease.targetKey === `shot:${shotListSelectedId}` && lease.participantId !== liveTransportRef.current?.participantId) ?? null : null
   const selectedShotLeaseReason = selectedShotLease ? `Shot is being edited by ${selectedShotLease.displayName}` : null
 
   return (
-    <>{unsavedDialog}<main ref={appShellRef} className={`v2-app-shell${isResizingTimeline ? ' is-resizing-timeline' : ''}${shotListPresentation ? ' is-shot-presentation' : ''}`} style={appShellStyle}>
+    <>{unsavedDialog}<main ref={appShellRef} className={`v2-app-shell${isResizingTimeline ? ' is-resizing-timeline' : ''}${isResizingWorkspaceSidebar ? ' is-resizing-workspace-sidebar' : ''}${shotListPresentation ? ' is-shot-presentation' : ''}`} style={appShellStyle}>
       {desktopDropState === 'valid' ? <div className="v2-desktop-drop-feedback" role="status">Drop .ndblock or .ndpack to open this Project</div> : null}
       {updateNotice ? <V2UpdateNotice release={updateNotice} downloadStatus={downloadStatus} downloadError={downloadError} onDownload={() => downloadUpdate(updateNotice)} onLater={dismissUpdate} /> : null}
-      <V2TopBar projectName={projectDocument.name} sceneName={view === 'shot-list' ? 'Shot List' : sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} saveState={projectSaveStatus} view={view} onViewChange={handleViewChange} onNewProject={newProject} onBackToLibrary={returnToLibrary} onSaveProject={saveProject} onSaveProjectAs={saveProjectAs} onLoadProject={loadProject} onOpenProjectSettings={() => setProjectSettingsOpen(true)} onOpenMediaManager={() => setMediaManagerOpen(true)} onExportProjectPackage={openProjectPackage} missingMediaCount={mediaHealth.filter((item) => item.status !== 'available').length} onProjectNameChange={renameProject} onExport={openExport} onOpenAbout={() => setShortcutSettingsOpen(true)} onToggleSelectionDiagnostics={() => window.dispatchEvent(new Event(SELECTION_DIAGNOSTICS_TOGGLE_EVENT))} selectionDiagnosticsAvailable={platformAdapter.kind === 'desktop' || import.meta.env.DEV} onToggleMasterTimelineDiagnostics={() => window.dispatchEvent(new Event(MASTER_TIMELINE_DIAGNOSTICS_TOGGLE_EVENT))} masterTimelineDiagnosticsAvailable={timelineMode === 'master' && (platformAdapter.kind === 'desktop' || import.meta.env.DEV)} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'encoding' || exportStatus === 'finalizing' || exportStatus === 'saving'} readOnly={liveRole !== null && liveRole !== 'host'} liveStatus={liveStatus} liveRole={liveRole} liveViewerCount={liveViewerCount} onOpenLive={() => setLivePanelOpen(true)} />
-      {view === 'shot-list' ? <V2ShotListWorkspace project={projectDocument} selectedShotId={shotListSelectedId} presentation={shotListPresentation} controlledView={shotListViewMode} controlledSceneFilter={shotListSceneFilter} onViewChange={setShotListViewMode} onSceneFilterChange={setShotListSceneFilter} onSelectShot={setShotListSelectedId} onPresentationChange={setShotListPresentation} onOpenShot={activateShot} onPreviewShot={previewShot} onCaptureThumbnail={(shotId) => { if (liveRole !== 'editor') void captureShotThumbnail(shotId) }} onRenameShot={liveRole === 'viewer' ? () => {} : renameShotForRole} onNotesChange={liveRole === 'viewer' ? () => {} : updateShotNotesForRole} onShotMetadataChange={liveRole === 'viewer' ? () => {} : updateShotMetadataForRole} onShotCameraChange={liveRole === 'viewer' ? () => {} : updateShotCameraForRole} canEditShotCamera={canEditCollaborativeShotCamera(liveRole, Boolean(selectedShotLease))} shotCameraEditDisabledReason={liveRole === 'editor' ? selectedShotLeaseReason : null} onDuplicateShot={liveRole === null || liveRole === 'host' ? duplicateShot : () => {}} onDeleteShot={liveRole === null || liveRole === 'host' ? deleteShot : () => {}} onReorderShot={liveRole === 'viewer' ? () => {} : reorderShotForRole} onShotListSettingsChange={liveRole === null || liveRole === 'host' ? updateShotListSettings : () => {}} onExportShotList={(format, scope) => { void exportShotList(format, scope) }} onExportShotListPdf={exportShotListPdf} onRevealShotListPdf={platformAdapter.revealFile} shotListPdfRevealLabel={platformAdapter.revealFileLabel} desktop={platformAdapter.kind === 'desktop'} onOpenBlocking={() => setView('blocking')} /> : <>
-      {timelineMode === 'master' ? <V2MasterShotBin shots={projectDocument.shots} scenes={projectDocument.scenes} activeShotId={activeMasterClipId ? projectDocument.masterSequence.clips.find((clip) => clip.id === activeMasterClipId)?.shotId ?? null : null} onSelectShot={(shotId) => { const clip = projectDocument.masterSequence.clips.find((candidate) => candidate.shotId === shotId); if (clip) selectMasterClip(clip.id, 0) }} onAddShot={liveRole === 'viewer' ? () => {} : addShotToMasterForRole} /> : <V2ScenePanel scenes={projectDocument.scenes} activeSceneId={projectDocument.activeSceneId} actors={sceneDocument.actors} props={sceneDocument.props} walls={sceneDocument.walls} openings={sceneDocument.openings} lights={sceneDocument.lights} cameras={sceneDocument.cameras} groups={sceneDocument.groups} activeCameraId={sceneDocument.activeCameraId} selectedEntityIds={selectedEntityIds} sectionState={workspaceSidebarState} onSectionToggle={setWorkspaceSidebarSection} onSelectScene={switchScene} onAddScene={liveRole === null || liveRole === 'host' ? addScene : () => {}} onRenameScene={liveRole === null || liveRole === 'host' ? renameScene : () => {}} onDuplicateScene={liveRole === null || liveRole === 'host' ? duplicateScene : () => {}} onDeleteScene={liveRole === null || liveRole === 'host' ? deleteScene : () => {}} onImportScene={liveRole === null || liveRole === 'host' ? importScene : () => {}} onExportScene={exportScene} onAddActor={liveRole === null || liveRole === 'host' ? addActor : () => {}} onAddProp={liveRole === null || liveRole === 'host' ? addProp : () => {}} onAddWall={liveRole === null || liveRole === 'host' ? addWall : () => {}} onAddOpening={liveRole === null || liveRole === 'host' ? addOpening : () => {}} onAddSun={liveRole === null || liveRole === 'host' ? addSun : () => {}} onAddCamera={liveRole === null || liveRole === 'host' ? addCamera : () => {}} onSetActiveCamera={liveRole === null || liveRole === 'host' ? setActiveCamera : () => {}} onSelectEntity={handleSelectionChange} onBeginEntityRename={liveRole === null || liveRole === 'host' ? beginEntityRename : () => {}} shots={projectDocument.shots} activeShotId={projectDocument.activeShotId} onCreateShot={liveRole === 'viewer' ? () => {} : createShotForRole} onSelectShot={activateShot} onRenameShot={liveRole === 'viewer' ? () => {} : renameShotForRole} onDuplicateShot={liveRole === null || liveRole === 'host' ? duplicateShot : () => {}} onDeleteShot={liveRole === null || liveRole === 'host' ? deleteShot : () => {}} onMoveShot={liveRole === 'viewer' ? () => {} : (shotId, direction) => { const shot = projectDocument.shots.find((candidate) => candidate.id === shotId); if (shot) reorderShotForRole(shotId, shot.order + direction) }} onCaptureShotThumbnail={(shotId) => { if (liveRole !== 'editor') void captureShotThumbnail(shotId) }} onShotNotesChange={liveRole === 'viewer' ? () => {} : updateShotNotesForRole} onShotRangeChange={liveRole === 'viewer' ? () => {} : updateShotRangeForRole} onPreviewShot={previewShot} onAddShotToMaster={liveRole === 'viewer' ? () => {} : addShotToMasterForRole} />}
+      <V2TopBar projectName={projectDocument.name} sceneName={view === 'shot-list' ? 'Shot List' : sceneDocument.metadata.name} isDirty={isDirty} fileError={sceneFileError} saveState={projectSaveStatus} view={view} onViewChange={handleViewChange} onNewProject={newProject} onBackToLibrary={returnToLibrary} onSaveProject={saveProject} onSaveProjectAs={saveProjectAs} onLoadProject={loadProject} onOpenProjectSettings={() => setProjectSettingsOpen(true)} onOpenMediaManager={() => setMediaManagerOpen(true)} onExportProjectPackage={openProjectPackage} missingMediaCount={mediaHealth.filter((item) => item.status !== 'available').length} onProjectNameChange={renameProject} onExport={openExport} onOpenAbout={() => setShortcutSettingsOpen(true)} onToggleSelectionDiagnostics={() => window.dispatchEvent(new Event(SELECTION_DIAGNOSTICS_TOGGLE_EVENT))} selectionDiagnosticsAvailable={platformAdapter.kind === 'desktop' || import.meta.env.DEV} onToggleMasterTimelineDiagnostics={() => window.dispatchEvent(new Event(MASTER_TIMELINE_DIAGNOSTICS_TOGGLE_EVENT))} masterTimelineDiagnosticsAvailable={timelineMode === 'master' && (platformAdapter.kind === 'desktop' || import.meta.env.DEV)} exportDisabled={exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'encoding' || exportStatus === 'finalizing' || exportStatus === 'saving'} readOnly={liveRole === 'viewer'} liveStatus={liveStatus} liveRole={liveRole} liveViewerCount={liveViewerCount} onOpenLive={() => setLivePanelOpen(true)} />
+      {view === 'shot-list' ? <V2ShotListWorkspace project={projectDocument} selectedShotId={shotListSelectedId} presentation={shotListPresentation} controlledView={shotListViewMode} controlledSceneFilter={shotListSceneFilter} onViewChange={changeShotListViewMode} onSceneFilterChange={setShotListSceneFilter} onSelectShot={setShotListSelectedId} onPresentationChange={setShotListPresentation} onOpenShot={activateShot} onPreviewShot={previewShot} onCaptureThumbnail={(shotId) => { if (liveRole !== 'editor') void captureShotThumbnail(shotId) }} onRenameShot={liveRole === 'viewer' ? () => {} : renameShotForRole} onNotesChange={liveRole === 'viewer' ? () => {} : updateShotNotesForRole} onShotMetadataChange={liveRole === 'viewer' ? () => {} : updateShotMetadataForRole} onShotCameraChange={liveRole === 'viewer' ? () => {} : updateShotCameraForRole} canEditShotCamera={canEditCollaborativeShotCamera(liveRole, Boolean(selectedShotLease))} shotCameraEditDisabledReason={liveRole === 'editor' ? selectedShotLeaseReason : null} onDuplicateShot={liveRole === null || liveRole === 'host' ? duplicateShot : () => {}} onDeleteShot={liveRole === null || liveRole === 'host' ? deleteShot : () => {}} onReorderShot={liveRole === 'viewer' ? () => {} : reorderShotForRole} onShotListSettingsChange={liveRole === null || liveRole === 'host' ? updateShotListSettings : () => {}} onExportShotList={(format, scope) => { void exportShotList(format, scope) }} onExportShotListPdf={exportShotListPdf} onRevealShotListPdf={platformAdapter.revealFile} shotListPdfRevealLabel={platformAdapter.revealFileLabel} desktop={platformAdapter.kind === 'desktop'} onOpenBlocking={() => setView('blocking')} /> : <>
+      {timelineMode === 'master' ? <V2MasterShotBin shots={projectDocument.shots} scenes={projectDocument.scenes} activeShotId={activeMasterClipId ? projectDocument.masterSequence.clips.find((clip) => clip.id === activeMasterClipId)?.shotId ?? null : null} onSelectShot={(shotId) => { const clip = projectDocument.masterSequence.clips.find((candidate) => candidate.shotId === shotId); if (clip) selectMasterClip(clip.id, 0) }} onAddShot={liveRole === 'viewer' ? () => {} : addShotToMasterForRole} /> : <V2ScenePanel scenes={projectDocument.scenes} activeSceneId={projectDocument.activeSceneId} actors={sceneDocument.actors} props={sceneDocument.props} walls={sceneDocument.walls} openings={sceneDocument.openings} lights={sceneDocument.lights} cameras={sceneDocument.cameras} groups={sceneDocument.groups} activeCameraId={sceneDocument.activeCameraId} groupEditGroupId={groupEditGroupId} selectedEntityIds={selectedEntityIds} sectionState={workspaceSidebarState} onSectionToggle={setWorkspaceSidebarSection} onSelectScene={switchScene} canEditOrdering={liveRole !== 'viewer'} onReorderScene={liveRole === 'viewer' ? () => {} : reorderSceneForRole} onInsertSceneRelative={liveRole === 'viewer' ? () => {} : insertSceneRelativeForRole} onAddScene={liveRole !== 'viewer' ? addScene : () => {}} onRenameScene={liveRole !== 'viewer' ? renameScene : () => {}} onDuplicateScene={liveRole !== 'viewer' ? duplicateScene : () => {}} onDeleteScene={liveRole !== 'viewer' ? deleteScene : () => {}} onImportScene={liveRole !== 'viewer' ? importScene : () => {}} onExportScene={exportScene} onAddActor={liveRole !== 'viewer' ? addActor : () => {}} onAddProp={liveRole !== 'viewer' ? addProp : () => {}} onAddWall={liveRole !== 'viewer' ? addWall : () => {}} onAddOpening={liveRole !== 'viewer' ? addOpening : () => {}} onAddSun={liveRole !== 'viewer' ? addSun : () => {}} onAddCamera={liveRole !== 'viewer' ? addCamera : () => {}} onSetActiveCamera={liveRole !== 'viewer' ? setActiveCamera : () => {}} onSelectEntity={handleSelectionChange} onEnterGroupEdit={enterGroupEdit} onBeginEntityRename={liveRole !== 'viewer' ? beginEntityRename : () => {}} shots={projectDocument.shots} activeShotId={projectDocument.activeShotId} onCreateShot={liveRole === 'viewer' ? () => {} : createShotForRole} onSelectShot={activateShot} onRenameShot={liveRole === 'viewer' ? () => {} : renameShotForRole} onDuplicateShot={liveRole !== 'viewer' ? duplicateShot : () => {}} onDeleteShot={liveRole !== 'viewer' ? deleteShot : () => {}} onReorderShotWithinScene={liveRole === 'viewer' ? () => {} : reorderShotWithinSceneForRole} onInsertShotRelative={liveRole === 'viewer' ? () => {} : insertShotRelativeForRole} onCaptureShotThumbnail={(shotId) => { if (liveRole !== 'editor') void captureShotThumbnail(shotId) }} onShotNotesChange={liveRole === 'viewer' ? () => {} : updateShotNotesForRole} onShotRangeChange={liveRole === 'viewer' ? () => {} : updateShotRangeForRole} onPreviewShot={previewShot} onAddShotToMaster={liveRole === 'viewer' ? () => {} : addShotToMasterForRole} />}
+      {timelineMode === 'scene' ? <div className="v2-workspace-sidebar-resize-handle" role="separator" aria-label="Resize Workspace" aria-orientation="vertical" aria-valuemin={WORKSPACE_SIDEBAR_WIDTH_MIN} aria-valuemax={WORKSPACE_SIDEBAR_WIDTH_MAX} aria-valuenow={workspaceSidebarWidth} tabIndex={0} onPointerDown={startWorkspaceSidebarResize} onDoubleClick={() => setWorkspaceSidebarWidth(clampWorkspaceSidebarWidth(WORKSPACE_SIDEBAR_WIDTH_DEFAULT, window.innerWidth))} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setWorkspaceSidebarWidth((current) => clampWorkspaceSidebarWidth(current - 16, window.innerWidth)) } else if (event.key === 'ArrowRight') { event.preventDefault(); setWorkspaceSidebarWidth((current) => clampWorkspaceSidebarWidth(current + 16, window.innerWidth)) } else if (event.key === 'Home') { event.preventDefault(); setWorkspaceSidebarWidth(clampWorkspaceSidebarWidth(WORKSPACE_SIDEBAR_WIDTH_DEFAULT, window.innerWidth)) } }} onLostPointerCapture={() => { if (isResizingWorkspaceSidebar) { workspaceSidebarResizeRef.current = null; setIsResizingWorkspaceSidebar(false) } }}><span aria-hidden="true" /></div> : null}
       <V2Stage
         view={view}
         activeSceneId={projectDocument.activeSceneId}
@@ -5010,10 +5309,13 @@ function V2EditorApp() {
         cameras={sceneDocument.cameras}
         groups={sceneDocument.groups}
         activeCameraId={sceneDocument.activeCameraId}
+        groupEditGroupId={groupEditGroupId}
         selectedEntityId={selectedEntityId}
         selectedEntityIds={selectedEntityIds}
         tool={liveRole === 'viewer' ? 'select' : transformTool}
         onSelectionChange={handleSelectionChange}
+        onEnterGroupEdit={enterGroupEdit}
+        onExitGroupEdit={exitGroupEdit}
         onMarqueeChange={() => {}}
         onBeginEntityRename={beginEntityRename}
         onToolChange={liveRole === 'viewer' ? () => {} : setTransformTool}
@@ -5069,7 +5371,7 @@ function V2EditorApp() {
         livePointerActive={liveRole === 'host' && livePointerActive}
         onLivePointerMove={(point) => publishLivePointer({ ...point, participantId: '', displayName: '', surface: 'stage', updatedAt: Date.now() })}
       />
-      {timelineMode === 'master' ? <V2MasterInspector sequence={projectDocument.masterSequence} shots={projectDocument.shots} scenes={projectDocument.scenes} selection={masterSelection} rate={masterSequenceFrameRate(projectDocument.masterSequence, projectDocument.shots, projectDocument.scenes, sceneDocument.timeline.frameRate).rate} onOpenShot={openMasterClip} onDuplicateClip={liveRole === 'viewer' ? () => {} : duplicateMasterClipForRole} onRemoveClip={liveRole === 'viewer' ? () => {} : removeMasterClipForRole} onTrimClip={liveRole === 'viewer' ? () => {} : trimMasterClipForRole} onMusicChange={liveRole === null || liveRole === 'host' ? updateMasterMusic : () => {}} onRemoveMusic={liveRole === null || liveRole === 'host' ? removeMasterMusic : () => {}} onImageChange={liveRole === 'viewer' ? () => {} : updateMasterImage} onRemoveImage={liveRole === 'viewer' ? () => {} : removeMasterImage} onDuplicateImage={liveRole === 'viewer' ? () => {} : duplicateMasterImage} onReplaceImageSource={liveRole === 'viewer' ? () => {} : requestMasterImageSourceReplacement} onReplaceImageClip={liveRole === 'viewer' ? () => {} : requestMasterImageReplacement} /> : <V2DetailsPanel actor={selectedActor} prop={selectedProp} wall={selectedWall} opening={selectedOpening} sun={selectedSun} camera={selectedCamera} group={selectedGroup} selectedEntityIds={selectedEntityIds} selectedTypeCounts={selectedTypeCounts} timeline={sceneDocument.timeline} selectedTimelineKeyframes={selectedTimelineKeyframes} selectedCameraPathSegment={selectedCameraPathSegment} cameraPathVisible={cameraPathVisible} onCameraPathVisibleChange={setCameraPathVisible} onCameraPathSegmentSelect={handleCameraPathSegmentSelect} onCameraPathRetime={liveRole === null || liveRole === 'host' ? handleCameraPathRetime : () => null} cameraMoveReview={cameraMoveReview} onCameraMoveReview={startCameraMoveReview} onCameraMoveReviewStop={() => stopPlaybackSession()} onCameraMoveReviewPose={goToCameraMovePose} onActorChange={liveRole === 'viewer' ? () => {} : updateActorForRole} onPropChange={liveRole === 'viewer' ? () => {} : updatePropForRole} onCameraChange={liveRole === 'viewer' ? () => {} : updateCameraForRole} onAimAtTarget={liveRole === null || liveRole === 'host' ? aimCameraAtTarget : () => {}} onMoveCameraBlocking={liveRole === null || liveRole === 'host' ? moveCameraBlocking : () => {}} onFrameCamera={liveRole === null || liveRole === 'host' ? frameCameraOnActor : () => {}} cameraTargets={cameraTargetEntities} cameraSubjectDistance={selectedCameraSubjectDistance} onWallChange={liveRole === null || liveRole === 'host' ? updateWall : () => {}} onOpeningChange={liveRole === null || liveRole === 'host' ? updateOpening : () => {}} onSunChange={liveRole === null || liveRole === 'host' ? updateSun : () => {}} onDuplicateEntity={liveRole === null || liveRole === 'host' ? duplicateEntity : () => {}} onDeleteEntity={liveRole === null || liveRole === 'host' ? deleteEntity : () => {}} onDeleteSelected={liveRole === null || liveRole === 'host' ? deleteSelectedEntities : () => {}} onCreateGroup={createGroupFromSelection} onUpdateGroup={updateGroup} onUngroup={dissolveGroup} onSetActiveCamera={liveRole === null || liveRole === 'host' ? setActiveCamera : () => {}} onAddKeyframe={addKeyframeForRole} activeCameraId={sceneDocument.activeCameraId} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={setSelectedFrameGuideId} renameRequest={renameRequest} phoneCamera={{ enabled: platformAdapter.kind === 'desktop' && liveRole !== 'viewer' && liveRole !== 'editor', state: phoneCameraState, onPair: () => { try { phoneCameraControllerRef.current?.beginPairing() } catch (error) { if (import.meta.env.DEV) console.error('[phone-camera] pairing failed', error) } }, onDisconnect: () => phoneCameraControllerRef.current?.disconnect(), onRecenter: () => phoneCameraControllerRef.current?.recenter(), onControlChannels: (channels) => phoneCameraControllerRef.current?.setControlChannels(channels), onMovementScale: (value) => phoneCameraControllerRef.current?.setMovementScale(value), onRotationSensitivity: (value) => phoneCameraControllerRef.current?.setRotationSensitivity(value), onSetCameraKey: setPhoneCameraKey, onStartRecording: startPhoneCameraRecording, onStopRecording: stopPhoneCameraRecording }} />}
+      {timelineMode === 'master' ? <V2MasterInspector sequence={projectDocument.masterSequence} shots={projectDocument.shots} scenes={projectDocument.scenes} selection={masterSelection} rate={masterSequenceFrameRate(projectDocument.masterSequence, projectDocument.shots, projectDocument.scenes, sceneDocument.timeline.frameRate).rate} onOpenShot={openMasterClip} onDuplicateClip={liveRole === 'viewer' ? () => {} : duplicateMasterClipForRole} onRemoveClip={liveRole === 'viewer' ? () => {} : removeMasterClipForRole} onTrimClip={liveRole === 'viewer' ? () => {} : trimMasterClipForRole} onMusicChange={liveRole !== 'viewer' ? updateMasterMusic : () => {}} onRemoveMusic={liveRole !== 'viewer' ? removeMasterMusic : () => {}} onImageChange={liveRole === 'viewer' ? () => {} : updateMasterImage} onRemoveImage={liveRole === 'viewer' ? () => {} : removeMasterImage} onDuplicateImage={liveRole === 'viewer' ? () => {} : duplicateMasterImage} onReplaceImageSource={liveRole === 'viewer' ? () => {} : requestMasterImageSourceReplacement} onReplaceImageClip={liveRole === 'viewer' ? () => {} : requestMasterImageReplacement} /> : <V2DetailsPanel actor={selectedActor} prop={selectedProp} wall={selectedWall} opening={selectedOpening} sun={selectedSun} camera={selectedCamera} group={selectedGroup} selectedEntityIds={selectedEntityIds} selectedTypeCounts={selectedTypeCounts} timeline={sceneDocument.timeline} selectedTimelineKeyframes={selectedTimelineKeyframes} selectedCameraPathSegment={selectedCameraPathSegment} cameraPathVisible={cameraPathVisible} onCameraPathVisibleChange={setCameraPathVisible} onCameraPathSegmentSelect={handleCameraPathSegmentSelect} onCameraPathRetime={liveRole !== 'viewer' ? handleCameraPathRetime : () => null} cameraMoveReview={cameraMoveReview} onCameraMoveReview={startCameraMoveReview} onCameraMoveReviewStop={() => stopPlaybackSession()} onCameraMoveReviewPose={goToCameraMovePose} onActorChange={liveRole === 'viewer' ? () => {} : updateActorForRole} onPropChange={liveRole === 'viewer' ? () => {} : updatePropForRole} onCameraChange={liveRole === 'viewer' ? () => {} : updateCameraForRole} onAimAtTarget={liveRole !== 'viewer' ? aimCameraAtTarget : () => {}} onMoveCameraBlocking={liveRole !== 'viewer' ? moveCameraBlocking : () => {}} onFrameCamera={liveRole !== 'viewer' ? frameCameraOnActor : () => {}} cameraTargets={cameraTargetEntities} cameraSubjectDistance={selectedCameraSubjectDistance} onWallChange={liveRole !== 'viewer' ? updateWall : () => {}} onOpeningChange={liveRole !== 'viewer' ? updateOpening : () => {}} onSunChange={liveRole !== 'viewer' ? updateSun : () => {}} onDuplicateEntity={liveRole !== 'viewer' ? duplicateEntity : () => {}} onDeleteEntity={liveRole !== 'viewer' ? deleteEntity : () => {}} onDeleteSelected={liveRole !== 'viewer' ? deleteSelectedEntities : () => {}} onCreateGroup={createGroupFromSelection} onUpdateGroup={updateGroup} onUngroup={dissolveGroup} onSetActiveCamera={liveRole !== 'viewer' ? setActiveCamera : () => {}} onAddKeyframe={addKeyframeForRole} activeCameraId={sceneDocument.activeCameraId} selectedFrameGuideId={selectedFrameGuideId} onFrameGuideSelection={setSelectedFrameGuideId} renameRequest={renameRequest} phoneCamera={{ enabled: platformAdapter.kind === 'desktop' && liveRole !== 'viewer' && liveRole !== 'editor', state: phoneCameraState, onPair: () => { try { phoneCameraControllerRef.current?.beginPairing() } catch (error) { if (import.meta.env.DEV) console.error('[phone-camera] pairing failed', error) } }, onDisconnect: () => phoneCameraControllerRef.current?.disconnect(), onRecenter: () => phoneCameraControllerRef.current?.recenter(), onControlChannels: (channels) => phoneCameraControllerRef.current?.setControlChannels(channels), onMovementScale: (value) => phoneCameraControllerRef.current?.setMovementScale(value), onRotationSensitivity: (value) => phoneCameraControllerRef.current?.setRotationSensitivity(value), onSetCameraKey: setPhoneCameraKey, onStartRecording: startPhoneCameraRecording, onStopRecording: stopPhoneCameraRecording }} />}
       <div
         className="v2-timeline-resize-handle"
         role="separator"
@@ -5095,17 +5397,17 @@ function V2EditorApp() {
         }}
       ><span aria-hidden="true" /></div>
       <div className="v2-timeline-shell">
-      {timelineMode === 'scene' ? <V2Timeline key={`${projectDocument.id}:${projectDocument.createdAt}:${sceneDocument.metadata.id}`} timeline={sceneDocument.timeline} tracks={sceneDocument.timeline.tracks} entities={timelineEntities} selectedEntityId={selectedEntityId} isPlaying={isPlaying} isLooping={isLooping} onFrameChange={liveRole === 'viewer' && liveFollowHost ? () => {} : setCurrentFrame} onDurationChange={liveRole === null || liveRole === 'host' ? changeTimelineDuration : () => {}} onFrameRateChange={liveRole === null || liveRole === 'host' ? changeFrameRate : () => {}} onTogglePlayback={liveRole === null || liveRole === 'host' ? togglePlayback : () => {}} onStopPlayback={liveRole === null || liveRole === 'host' ? () => stopPlaybackSession() : () => {}} onMarkIn={liveRole === null || liveRole === 'host' ? () => changeMark('in') : () => {}} onMarkOut={liveRole === null || liveRole === 'host' ? () => changeMark('out') : () => {}} onToggleLoop={liveRole === null || liveRole === 'host' ? () => setIsLooping((current) => !current) : () => {}} onMoveKeyframes={moveKeyframesForRole} onKeyframeInterpolationChange={changeKeyframeEasingForRole} canEditKeyframe={liveRole === 'editor' ? canEditTimelineSelection : undefined} canEditTimelineStructure={liveRole === null || liveRole === 'host'} canEditTimelineInterpolation={liveRole === null || liveRole === 'host'} onKeyframeEditStart={beginTimelineKeyframeLease} onKeyframeEditActivity={renewActiveLiveLease} onKeyframeEditEnd={endTimelineKeyframeLease} selectedKeyframes={selectedTimelineKeyframes} onKeyframeSelect={selectTimelineKeyframe} onEntitySelect={handleSelectionChange} onScrubStart={() => setIsScrubbing(true)} onScrubEnd={() => setIsScrubbing(false)} onSwitchToScene={() => switchTimelineMode('scene')} onSwitchToMaster={() => switchTimelineMode('master')} initialWorkspaceState={getSceneTimelineWorkspace(timelineWorkspaceSessionRef.current, sceneDocument.metadata.id)} onWorkspaceStateChange={(patch) => updateTimelineWorkspace({ scene: { sceneId: sceneDocument.metadata.id, patch } })} onRegisterZoomShortcut={registerSceneTimelineZoomShortcut} /> : <V2MasterTimeline key={`${projectDocument.id}:${projectDocument.createdAt}`} projectId={projectDocument.id} sequence={projectDocument.masterSequence} shots={projectDocument.shots} scenes={projectDocument.scenes} activeClipId={activeMasterClipId} selectedItems={masterTimelineSelection} onClearSelection={clearMasterTimelineSelection} onTimelineFocusChange={(focused) => { masterTimelineFocusedRef.current = focused }} onTrimClip={liveRole === 'viewer' ? () => {} : trimMasterClipForRole} masterFrame={masterFrame} fallbackRate={sceneDocument.timeline.frameRate} isPlaying={isMasterPlaying} isLooping={isMasterLooping} musicPeaks={masterMusicPeaks} onSelectClip={selectMasterClip} onSelectMusic={selectMasterMusic} onDeleteMusicTrack={liveRole === null || liveRole === 'host' ? deleteMusicTrack : () => {}} onAddMusicTrack={liveRole === null || liveRole === 'host' ? addMusicTrack : () => {}} onSetMasterFrame={liveRole === null || liveRole === 'host' ? setMasterPlayhead : () => {}} onReturnToStart={liveRole === null || liveRole === 'host' ? returnMasterToStart : () => {}} onAddShot={liveRole === 'viewer' ? () => {} : addShotToMasterForRole} onMoveClip={liveRole === 'viewer' ? () => {} : moveMasterClipForRole} onImportMusic={liveRole === null || liveRole === 'host' ? (file) => { void importMasterMusic(file) } : () => {}} onPlay={liveRole === null || liveRole === 'host' ? playMasterPlayback : () => {}} onPause={liveRole === null || liveRole === 'host' ? pauseMasterPlayback : () => {}} onStop={liveRole === null || liveRole === 'host' ? () => stopMasterPlayback(false) : () => {}} onToggleLoop={liveRole === null || liveRole === 'host' ? () => setIsMasterLooping((current) => !current) : () => {}} onMarkIn={liveRole === null || liveRole === 'host' ? () => changeMasterMark('in') : () => {}} onMarkOut={liveRole === null || liveRole === 'host' ? () => changeMasterMark('out') : () => {}} onSwitchToScene={() => switchTimelineMode('scene')} onSwitchToMaster={() => switchTimelineMode('master')} activeImageClipId={activeMasterImageClipId} onSelectImage={selectMasterImageTimeline} onAddGraphicsTrack={addGraphicsTrack} onImportImage={(trackId, file) => { void importMasterImage(trackId, file) }} imageHealth={mediaHealth} onMoveImage={liveRole === 'viewer' ? () => {} : moveMasterImage} onTrimImage={liveRole === 'viewer' ? () => {} : trimMasterImage} onChangeImageFade={liveRole === 'viewer' ? () => {} : changeMasterImageFade} onGraphicsTrackChange={liveRole === 'viewer' ? () => {} : updateGraphicsTrack} onDeleteGraphicsTrack={liveRole === 'viewer' ? () => {} : deleteGraphicsTrack} initialWorkspaceState={timelineWorkspaceSessionRef.current.master} onWorkspaceStateChange={(patch) => updateTimelineWorkspace({ master: patch })} onRegisterZoomShortcut={registerMasterTimelineZoomShortcut} />}
+      {timelineMode === 'scene' ? <V2Timeline key={`${projectDocument.id}:${projectDocument.createdAt}:${sceneDocument.metadata.id}`} timeline={sceneDocument.timeline} tracks={sceneDocument.timeline.tracks} entities={timelineEntities} selectedEntityId={selectedEntityId} isPlaying={isPlaying} isLooping={isLooping} onFrameChange={liveRole === 'viewer' && liveFollowHost ? () => {} : setCurrentFrame} onDurationChange={liveRole !== 'viewer' ? changeTimelineDuration : () => {}} onFrameRateChange={liveRole !== 'viewer' ? changeFrameRate : () => {}} onTogglePlayback={liveRole !== 'viewer' ? togglePlayback : () => {}} onStopPlayback={liveRole !== 'viewer' ? () => stopPlaybackSession() : () => {}} onMarkIn={liveRole !== 'viewer' ? () => changeMark('in') : () => {}} onMarkOut={liveRole !== 'viewer' ? () => changeMark('out') : () => {}} onToggleLoop={liveRole !== 'viewer' ? () => setIsLooping((current) => !current) : () => {}} onMoveKeyframes={moveKeyframesForRole} onKeyframeInterpolationChange={changeKeyframeEasingForRole} canEditKeyframe={liveRole === 'editor' ? canEditTimelineSelection : undefined} canEditTimelineStructure={liveRole !== 'viewer'} canEditTimelineInterpolation={liveRole !== 'viewer'} onKeyframeEditStart={beginTimelineKeyframeLease} onKeyframeEditActivity={renewActiveLiveLease} onKeyframeEditEnd={endTimelineKeyframeLease} selectedKeyframes={selectedTimelineKeyframes} onKeyframeSelect={selectTimelineKeyframe} onEntitySelect={handleSelectionChange} onScrubStart={() => { isScrubbingRef.current = true; setIsScrubbing(true) }} onScrubEnd={() => { isScrubbingRef.current = false; setIsScrubbing(false) }} onSwitchToScene={() => switchTimelineMode('scene')} onSwitchToMaster={() => switchTimelineMode('master')} initialWorkspaceState={getSceneTimelineWorkspace(timelineWorkspaceSessionRef.current, sceneDocument.metadata.id)} onWorkspaceStateChange={(patch) => updateTimelineWorkspace({ scene: { sceneId: sceneDocument.metadata.id, patch } })} onRegisterZoomShortcut={registerSceneTimelineZoomShortcut} /> : <V2MasterTimeline key={`${projectDocument.id}:${projectDocument.createdAt}`} projectId={projectDocument.id} sequence={projectDocument.masterSequence} shots={projectDocument.shots} scenes={projectDocument.scenes} activeClipId={activeMasterClipId} selectedItems={masterTimelineSelection} onClearSelection={clearMasterTimelineSelection} onMarqueeSelection={updateMasterMarqueeSelection} onOpenShot={openMasterClip} onTimelineFocusChange={(focused) => { masterTimelineFocusedRef.current = focused }} onTrimClip={liveRole === 'viewer' ? () => {} : trimMasterClipForRole} masterFrame={masterFrame} fallbackRate={sceneDocument.timeline.frameRate} isPlaying={isMasterPlaying} isLooping={isMasterLooping} musicPeaks={masterMusicPeaks} onSelectClip={selectMasterClip} onSelectMusic={selectMasterMusic} onDeleteMusicTrack={liveRole !== 'viewer' ? deleteMusicTrack : () => {}} onAddMusicTrack={liveRole !== 'viewer' ? addMusicTrack : () => {}} onSetMasterFrame={liveRole !== 'viewer' ? setMasterPlayhead : () => {}} onReturnToStart={liveRole !== 'viewer' ? returnMasterToStart : () => {}} onAddShot={liveRole === 'viewer' ? () => {} : addShotToMasterForRole} onInsertShotWithRoom={liveRole === 'viewer' ? () => {} : insertShotIntoMasterWithRoomForRole} onMoveClip={liveRole === 'viewer' ? () => {} : moveMasterClipForRole} onImportMusic={liveRole === null || liveRole === 'host' ? (file) => { void importMasterMusic(file) } : () => {}} onPlay={liveRole !== 'viewer' ? playMasterPlayback : () => {}} onPause={liveRole !== 'viewer' ? pauseMasterPlayback : () => {}} onStop={liveRole !== 'viewer' ? () => stopMasterPlayback(false) : () => {}} onToggleLoop={liveRole !== 'viewer' ? () => setIsMasterLooping((current) => !current) : () => {}} onMarkIn={liveRole !== 'viewer' ? () => changeMasterMark('in') : () => {}} onMarkOut={liveRole !== 'viewer' ? () => changeMasterMark('out') : () => {}} onSwitchToScene={() => switchTimelineMode('scene')} onSwitchToMaster={() => switchTimelineMode('master')} activeImageClipId={activeMasterImageClipId} onSelectImage={selectMasterImageTimeline} onAddGraphicsTrack={addGraphicsTrack} onImportImage={(trackId, file) => { void importMasterImage(trackId, file) }} imageHealth={mediaHealth} onMoveImage={liveRole === 'viewer' ? () => {} : moveMasterImage} onTrimImage={liveRole === 'viewer' ? () => {} : trimMasterImage} onChangeImageFade={liveRole === 'viewer' ? () => {} : changeMasterImageFade} onGraphicsTrackChange={liveRole === 'viewer' ? () => {} : updateGraphicsTrack} onDeleteGraphicsTrack={liveRole === 'viewer' ? () => {} : deleteGraphicsTrack} initialWorkspaceState={timelineWorkspaceSessionRef.current.master} onWorkspaceStateChange={(patch) => updateTimelineWorkspace({ master: patch })} onRegisterZoomShortcut={registerMasterTimelineZoomShortcut} />}
       </div>
       {exportStatus === 'preparing' || exportStatus === 'exporting' || exportStatus === 'encoding' || exportStatus === 'finalizing' || exportStatus === 'saving' ? <div className="v2-export-lock" aria-hidden="true" /> : null}
       </>}
       {exportOpen ? <V2ExportModal document={sceneDocument} project={projectDocument} projectName={projectDocument.name} sceneName={sceneDocument.metadata.name} settings={exportSettings} status={exportStatus} progress={exportProgress} error={exportError} success={exportSuccess} revealError={exportRevealError} revealLabel={platformAdapter.revealFileLabel} onSettingsChange={(next) => { setExportSettings(next); if (next.shotInfoBurnIn) saveShotInfoBurnInSettings(next.shotInfoBurnIn) }} onExport={startExport} onCancel={cancelExport} onClose={() => setExportOpen(false)} onOpenMediaManager={() => { setExportOpen(false); setMediaManagerOpen(true) }} onReveal={() => { void revealExport() }} desktop={platformAdapter.kind === 'desktop'} /> : null}
       {projectPackageStatus ? <V2ProjectPackageModal status={projectPackageStatus} result={projectPackageResult} error={projectPackageError} revealError={projectPackageRevealError} revealLabel={platformAdapter.revealFileLabel} onRetry={() => { void runProjectPackageExport() }} onCancel={cancelProjectPackage} onClose={() => { setProjectPackageStatus(null); setProjectPackageResult(null); setProjectPackageError(null); setProjectPackageRevealError(null) }} onReveal={() => { if (!projectPackageResult?.path) return; void platformAdapter.revealFile(projectPackageResult.path).catch((error: unknown) => setProjectPackageRevealError(error instanceof Error ? error.message : 'The Project Package could not be revealed.')) }} onOpenMediaManager={() => { setProjectPackageStatus(null); setMediaManagerOpen(true) }} /> : null}
-      {projectSettingsOpen ? <V2ProjectSettings cameraModelId={projectDocument.cameraDefaults.cameraModelId} readOnly={liveRole !== null && liveRole !== 'host'} onCameraModelChange={updateProjectCameraDefault} onClose={() => setProjectSettingsOpen(false)} /> : null}
+      {projectSettingsOpen ? <V2ProjectSettings cameraModelId={projectDocument.cameraDefaults.cameraModelId} readOnly={liveRole === 'viewer'} onCameraModelChange={updateProjectCameraDefault} onClose={() => setProjectSettingsOpen(false)} /> : null}
       <LiveReviewPanel open={livePanelOpen} role={liveRole} status={liveStatus} session={liveSession} inviteUrl={liveInviteUrl} viewerCount={liveViewerCount} participants={liveParticipants} leases={liveLeases} hostConnected={liveHostConnected} chatMessages={liveChatMessages} followHost={liveFollowHost} pointerActive={livePointerActive} inviteSession={liveInviteSession} error={liveError} canStart={liveRelayConfig.url !== null} pendingAction={livePendingAction} configurationError={liveRelayConfig.error} onStart={(name) => { void startLiveReview(name) }} onJoin={(name) => { void joinLiveReview(name) }} onFollowHost={changeLiveFollowHost} onTogglePointer={() => { setLivePointerActive((active) => { if (active) clearLivePointer(); return !active }) }} onSendChat={sendLiveChat} onEnd={endLiveReview} onLeave={leaveLiveReview} onClose={() => setLivePanelOpen(false)} onRoleChange={changeLiveParticipantRole} onTakeControl={takeLiveLeaseControl} />
       {shortcutSettingsOpen ? <V2ShortcutSettings bindings={shortcutBindings} onChange={updateShortcut} onReset={resetShortcuts} onClose={() => setShortcutSettingsOpen(false)} recoveryEnabled={recoveryEnabled} onRecoveryEnabledChange={platformAdapter.kind === 'desktop' ? setRecoveryPreference : undefined} showMacosBetaHelp={isMacOSDesktop()} appVersion={APP_VERSION} websiteUrl={APP_WEBSITE_URL} contactEmail={APP_CONTACT_EMAIL} onOpenExternalUrl={(url) => { void platformAdapter.openExternalUrl(url) }} updateState={updateState} onCheckForUpdates={() => { void checkForUpdates() }} onDownloadUpdate={() => downloadUpdate()} onLaterUpdate={dismissUpdate} downloadStatus={downloadStatus} downloadError={downloadError} autoUpdateChecks={updatePreferences.autoCheck} onAutoUpdateChecksChange={platformAdapter.kind === 'desktop' ? saveUpdatePreference : undefined} /> : null}
       {recoveryModalOpen && recoveryEntries.length > 0 ? <V2RecoveryCenter entries={recoveryEntries} requestedPath={recoveryRequestedPath} onRecover={(entry) => { void recoverProject(entry) }} onDiscard={(entry) => { void discardRecoveryEntry(entry) }} onOpenSaved={(entry) => { void openSavedVersion(entry) }} onClose={() => setRecoveryModalOpen(false)} /> : null}
-      {mediaManagerOpen ? <V2MediaManager projectName={projectDocument.name} sequence={projectDocument.masterSequence} health={mediaHealth} scanning={mediaScanning} error={mediaManagerError} readOnly={liveRole !== null && liveRole !== 'host'} onRefresh={() => { setMediaManagerError(null); setMediaScanToken((value) => value + 1) }} onRelinkAsset={relinkMasterImage} onRelinkAll={relinkAllMasterImages} onClose={() => { setMediaManagerError(null); setMediaManagerOpen(false) }} /> : null}
+      {mediaManagerOpen ? <V2MediaManager projectName={projectDocument.name} sequence={projectDocument.masterSequence} health={mediaHealth} scanning={mediaScanning} error={mediaManagerError} readOnly={liveRole === 'viewer'} onRefresh={() => { setMediaManagerError(null); setMediaScanToken((value) => value + 1) }} onRelinkAsset={relinkMasterImage} onRelinkAll={relinkAllMasterImages} onClose={() => { setMediaManagerError(null); setMediaManagerOpen(false) }} /> : null}
       <input ref={mediaReplaceInputRef} hidden type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" onChange={(event) => handleMasterImageReplacement(event.target.files?.[0])} />
     </main></>
   )

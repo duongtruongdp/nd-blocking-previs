@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage } from 'node:http'
 import { WebSocketServer, WebSocket, type RawData } from 'ws'
-import { acceptLiveReviewProject, addLiveReviewParticipant, appendLiveReviewChat, clearLiveReviewEphemeralState, connectedLiveReviewParticipants, createLiveReviewRoom, isLiveReviewRoomExpired, publicLiveReviewLeases, publicLiveReviewParticipants, rememberLiveReviewOperation, setLiveReviewState, type LiveReviewRoom, type LiveReviewRoomParticipant } from './sessionStore.js'
+import { acceptLiveReviewProject, addLiveReviewParticipant, appendLiveReviewChat, canAcceptLiveReviewEditorProject, clearLiveReviewEphemeralState, connectedLiveReviewParticipants, createLiveReviewRoom, isLiveReviewRoomExpired, publicLiveReviewLeases, publicLiveReviewParticipants, rememberLiveReviewOperation, setLiveReviewState, type LiveReviewRoom, type LiveReviewRoomParticipant } from './sessionStore.js'
 import { clientIp, liveRelayConfig, originAllowed } from './config.js'
 import { isLiveReviewChatText, isLiveReviewCollaborativeTransform, isLiveReviewLeaseTarget, isLiveReviewPlanningCommit, isLiveReviewPointer, isLiveReviewProject, isLiveReviewShotPatch, isLiveReviewState, isLiveReviewTimelineCommit, isLiveReviewTransform, isLiveReviewTransformPreview, LIVE_REVIEW_PROTOCOL_VERSION, liveReviewMessageVersion, normalizeLiveReviewDisplayName, parseLiveReviewMessage, randomLiveReviewId, serializeLiveReviewMessage, type LiveReviewClientMessage, type LiveReviewEditRejection, type LiveReviewEditResult, type LiveReviewLease, type LiveReviewLeaseTargetType, type LiveReviewParticipant, type LiveReviewServerMessage } from '../src/liveReview/protocol.js'
 
@@ -134,6 +134,27 @@ function handleMessage(socket: WebSocket, raw: RawData): void {
   if (message.type === 'host_project_snapshot') {
     if (peer.role !== 'host' || !isLiveReviewProject(message.project) || !acceptLiveReviewProject(peer.room, message.project, message.revision, Date.now(), config.sessionTtlMs)) return reject(socket, 'host_only_or_stale', 'Only the Host can publish a newer project snapshot.')
     if (peer.room.project) broadcast(peer.room, { v: LIVE_REVIEW_PROTOCOL_VERSION, type: 'project_update', project: peer.room.project, revision: peer.room.revision }, socket)
+    broadcastPresence(peer.room)
+    return
+  }
+  if (message.type === 'editor_project_snapshot') {
+    const participant = peer.room.participants.get(peer.participantId)
+    const role = participant?.role
+    if (!canAcceptLiveReviewEditorProject(role, message.baseRevision, peer.room.revision, peer.room.hostConnected)) {
+      const reason = role !== 'editor' ? 'permission_denied' : !peer.room.hostConnected ? 'host_unavailable' : 'stale_revision'
+      send(socket, { v: LIVE_REVIEW_PROTOCOL_VERSION, type: 'project_edit_result', result: { accepted: false, reason, projectRevision: peer.room.revision } })
+      return
+    }
+    if (!isLiveReviewProject(message.project)) {
+      send(socket, { v: LIVE_REVIEW_PROTOCOL_VERSION, type: 'project_edit_result', result: { accepted: false, reason: 'invalid_payload', projectRevision: peer.room.revision } })
+      return
+    }
+    if (!acceptLiveReviewProject(peer.room, message.project, peer.room.revision + 1, Date.now(), config.sessionTtlMs)) {
+      send(socket, { v: LIVE_REVIEW_PROTOCOL_VERSION, type: 'project_edit_result', result: { accepted: false, reason: 'stale_revision', projectRevision: peer.room.revision } })
+      return
+    }
+    send(socket, { v: LIVE_REVIEW_PROTOCOL_VERSION, type: 'project_edit_result', result: { accepted: true, projectRevision: peer.room.revision } })
+    broadcast(peer.room, { v: LIVE_REVIEW_PROTOCOL_VERSION, type: 'project_update', project: peer.room.project!, revision: peer.room.revision })
     broadcastPresence(peer.room)
     return
   }
@@ -574,7 +595,7 @@ function allowInvalidMessage(meta: SocketMeta): boolean {
 }
 
 function isKnownClientMessage(value: LiveReviewClientMessage | LiveReviewServerMessage): value is LiveReviewClientMessage {
-  return ['create_session', 'join_session', 'participant_profile', 'host_project_snapshot', 'host_present_state', 'host_transform', 'host_pointer', 'chat_send', 'participant_role_update', 'lease_request', 'lease_renew', 'lease_release', 'lease_take_control', 'editor_transform_preview', 'editor_transform_commit', 'editor_shot_patch', 'editor_planning_commit', 'editor_timeline_commit', 'host_edit_result', 'request_snapshot', 'end_session', 'leave_session', 'ping'].includes(value.type)
+  return ['create_session', 'join_session', 'participant_profile', 'host_project_snapshot', 'editor_project_snapshot', 'host_present_state', 'host_transform', 'host_pointer', 'chat_send', 'participant_role_update', 'lease_request', 'lease_renew', 'lease_release', 'lease_take_control', 'editor_transform_preview', 'editor_transform_commit', 'editor_shot_patch', 'editor_planning_commit', 'editor_timeline_commit', 'host_edit_result', 'request_snapshot', 'end_session', 'leave_session', 'ping'].includes(value.type)
 }
 
 

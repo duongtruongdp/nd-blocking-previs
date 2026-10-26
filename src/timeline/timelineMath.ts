@@ -266,19 +266,73 @@ export function timelineTrackId(entityId: string, property: TimelineProperty): s
   return `${entityId}:${property}`
 }
 
+export function canonicalTimelineFrame(frame: number): number {
+  return Number.isFinite(frame) ? Math.round(frame) : 0
+}
+
 export function trackHasKeyframe(timeline: TimelineDocument, entityId: string, property: TimelineProperty, frame: number): boolean {
-  return timeline.tracks.some((track) => track.entityId === entityId && track.property === property && track.keyframes.some((keyframe) => keyframe.frame === frame))
+  const targetFrame = canonicalTimelineFrame(frame)
+  return timeline.tracks.some((track) => track.entityId === entityId && track.property === property && track.keyframes.some((keyframe) => keyframe.frame === targetFrame))
+}
+
+export type TimelineTrackIdentityIssue = {
+  entityId: string
+  property: TimelineProperty
+  trackIds: string[]
+}
+
+/** Finds malformed duplicate channels without mutating or discarding any data. */
+export function findTimelineTrackIdentityIssues(tracks: readonly TimelineTrack[]): TimelineTrackIdentityIssue[] {
+  const grouped = new Map<string, TimelineTrack[]>()
+  tracks.forEach((track) => {
+    const key = `${track.entityId}:${track.property}`
+    const group = grouped.get(key) ?? []
+    group.push(track)
+    grouped.set(key, group)
+  })
+  return [...grouped.values()]
+    .filter((group) => group.length > 1)
+    .map((group) => ({ entityId: group[0].entityId, property: group[0].property, trackIds: group.map((track) => track.id) }))
+}
+
+export type TimelineKeyframeIdentityIssue = {
+  trackId: string
+  entityId: string
+  property: TimelineProperty
+  frame: number
+  keyframeIds: string[]
+}
+
+/** Finds historical same-frame duplicates without choosing a value to keep. */
+export function findTimelineKeyframeIdentityIssues(tracks: readonly TimelineTrack[]): TimelineKeyframeIdentityIssue[] {
+  return tracks.flatMap((track) => {
+    const grouped = new Map<number, string[]>()
+    track.keyframes.forEach((keyframe) => {
+      const ids = grouped.get(keyframe.frame) ?? []
+      ids.push(keyframe.id)
+      grouped.set(keyframe.frame, ids)
+    })
+    return [...grouped.entries()]
+      .filter(([, keyframeIds]) => keyframeIds.length > 1)
+      .map(([frame, keyframeIds]) => ({ trackId: track.id, entityId: track.entityId, property: track.property, frame, keyframeIds }))
+  })
 }
 
 export function upsertTimelineKeyframe(timeline: TimelineDocument, entityId: string, entityType: TimelineEntityType, property: TimelineProperty, frame: number, value: TimelineValue, interpolation: TimelineInterpolation = 'linear', easing?: TimelineEasing): TimelineDocument {
   const id = timelineTrackId(entityId, property)
-  const existingTrack = timeline.tracks.find((track) => track.id === id)
+  const targetFrame = canonicalTimelineFrame(frame)
+  // Prefer the canonical track ID, but fall back to the semantic identity.
+  // Older files can contain a valid entity/property track with a legacy ID;
+  // creating a second track in that case is the source of duplicate labels.
+  const trackIndex = timeline.tracks.findIndex((track) => track.id === id)
+  const semanticTrackIndex = trackIndex >= 0 ? trackIndex : timeline.tracks.findIndex((track) => track.entityId === entityId && track.property === property)
+  const existingTrack = semanticTrackIndex >= 0 ? timeline.tracks[semanticTrackIndex] : undefined
   const keyframes = existingTrack ? [...existingTrack.keyframes] : []
-  const existingIndex = keyframes.findIndex((keyframe) => keyframe.frame === frame)
+  const existingIndex = keyframes.findIndex((keyframe) => keyframe.frame === targetFrame)
   const existing = existingIndex >= 0 ? keyframes[existingIndex] : undefined
   const nextKeyframe = {
-    id: existing?.id ?? `${id}:${frame}`,
-    frame,
+    id: existing?.id ?? `${id}:${targetFrame}`,
+    frame: targetFrame,
     value: cloneValue(value),
     interpolation: existing && easing === undefined ? existing.interpolation : interpolation,
     ...(easing !== undefined ? { easeIn: easing.easeIn, easeOut: easing.easeOut } : existing ? { easeIn: existing.easeIn, easeOut: existing.easeOut } : {}),
@@ -286,12 +340,11 @@ export function upsertTimelineKeyframe(timeline: TimelineDocument, entityId: str
   if (existingIndex >= 0) keyframes[existingIndex] = nextKeyframe
   else keyframes.push(nextKeyframe)
   keyframes.sort((a, b) => a.frame - b.frame)
-  const nextTrack = { id, entityId, entityType, property, keyframes }
-  const trackIndex = timeline.tracks.findIndex((track) => track.id === id)
+  const nextTrack = { id: existingTrack?.id ?? id, entityId, entityType, property, keyframes }
   const tracks = [...timeline.tracks]
-  if (trackIndex >= 0) tracks[trackIndex] = nextTrack
+  if (semanticTrackIndex >= 0) tracks[semanticTrackIndex] = nextTrack
   else tracks.push(nextTrack)
-  return extendTimelineToFrame({ ...timeline, tracks }, frame)
+  return extendTimelineToFrame({ ...timeline, tracks }, targetFrame)
 }
 
 export function removeTimelineKeyframe(timeline: TimelineDocument, trackId: string, keyframeId: string): TimelineDocument {
@@ -343,10 +396,16 @@ export function moveTimelineKeyframe(timeline: TimelineDocument, trackId: string
 
 export type TimelineKeyframeSelection = { trackId: string; keyframeId: string }
 
+/** Stable UI identity for one keyframe. Track identity is part of the key so
+ * keys on different properties may share a frame without becoming coupled. */
+export function timelineKeyframeSelectionKey(selection: TimelineKeyframeSelection): string {
+  return `${selection.trackId}:${selection.keyframeId}`
+}
+
 function selectedKeyframes(timeline: TimelineDocument, selections: readonly TimelineKeyframeSelection[]) {
   const seen = new Set<string>()
   return selections.flatMap((selection) => {
-    const identity = `${selection.trackId}:${selection.keyframeId}`
+    const identity = timelineKeyframeSelectionKey(selection)
     if (seen.has(identity)) return []
     seen.add(identity)
     const track = timeline.tracks.find((candidate) => candidate.id === selection.trackId)
@@ -363,12 +422,41 @@ export function clampTimelineKeyframeDelta(timeline: TimelineDocument, selection
   return Math.max(timeline.startFrame - earliest, Math.round(deltaFrames))
 }
 
-/** Moves a selection as one atomic time-only operation, replacing non-selected collisions. */
+/** Returns false when a move would place two keys on the same track/frame. */
+export function canMoveTimelineKeyframes(timeline: TimelineDocument, selections: readonly TimelineKeyframeSelection[], deltaFrames: number): boolean {
+  const selected = selectedKeyframes(timeline, selections)
+  if (selected.length === 0) return false
+  const delta = Math.max(timeline.startFrame - Math.min(...selected.map(({ keyframe }) => keyframe.frame)), Math.round(deltaFrames))
+  const selectedIdsByTrack = new Map<string, Set<string>>()
+  const destinationFramesByTrack = new Map<string, Set<number>>()
+  selected.forEach(({ track, keyframe }) => {
+    const selectedIds = selectedIdsByTrack.get(track.id) ?? new Set<string>()
+    selectedIds.add(keyframe.id)
+    selectedIdsByTrack.set(track.id, selectedIds)
+    const destinations = destinationFramesByTrack.get(track.id) ?? new Set<number>()
+    destinations.add(keyframe.frame + delta)
+    destinationFramesByTrack.set(track.id, destinations)
+  })
+  for (const track of timeline.tracks) {
+    const selectedIds = selectedIdsByTrack.get(track.id)
+    if (!selectedIds) continue
+    const occupied = new Set(track.keyframes.filter((keyframe) => !selectedIds.has(keyframe.id)).map((keyframe) => keyframe.frame))
+    const destinations = destinationFramesByTrack.get(track.id) ?? new Set<number>()
+    if (destinations.size !== selected.filter((item) => item.track.id === track.id).length) return false
+    for (const frame of destinations) if (occupied.has(frame)) return false
+  }
+  return true
+}
+
+/** Moves a selection as one atomic time-only operation. Same-track collisions
+ * are rejected by returning the original document; different tracks may share
+ * a frame. */
 export function moveTimelineKeyframes(timeline: TimelineDocument, selections: readonly TimelineKeyframeSelection[], deltaFrames: number): TimelineDocument {
   const selected = selectedKeyframes(timeline, selections)
   if (selected.length === 0) return timeline
   const selectedLatest = Math.max(...selected.map(({ keyframe }) => keyframe.frame))
   const delta = Math.max(timeline.startFrame - Math.min(...selected.map(({ keyframe }) => keyframe.frame)), Math.round(deltaFrames))
+  if (!canMoveTimelineKeyframes(timeline, selections, delta)) return timeline
   const nextEndFrame = Math.max(timeline.endFrame, selectedLatest + delta)
   const selectedIdsByTrack = new Map<string, Set<string>>()
   const destinationFramesByTrack = new Map<string, Set<number>>()

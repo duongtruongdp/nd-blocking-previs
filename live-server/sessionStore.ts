@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { LIVE_REVIEW_CHAT_HISTORY_LIMIT, LIVE_REVIEW_SESSION_TTL_MS, type LiveReviewChatMessage, type LiveReviewLease, type LiveReviewParticipant, type LiveReviewPointer, type LiveReviewProjectSnapshot, type LiveReviewState } from '../src/liveReview/protocol.js'
+import { LIVE_REVIEW_CHAT_HISTORY_LIMIT, LIVE_REVIEW_SESSION_TTL_MS, type LiveReviewChatMessage, type LiveReviewLease, type LiveReviewParticipant, type LiveReviewPointer, type LiveReviewProjectSnapshot, type LiveReviewRole, type LiveReviewState } from '../src/liveReview/protocol.js'
 
 export type LiveReviewRoomParticipant = LiveReviewParticipant & {
   participantToken: string
@@ -97,6 +97,10 @@ export function acceptLiveReviewProject(room: LiveReviewRoom, project: LiveRevie
   room.expiresAt = now + ttlMs
   if (room.state) room.state = { ...room.state, projectRevision: revision }
   return true
+}
+
+export function canAcceptLiveReviewEditorProject(role: LiveReviewRole | undefined, baseRevision: number, currentRevision: number, hostConnected: boolean): boolean {
+  return role === 'editor' && hostConnected && Number.isInteger(baseRevision) && baseRevision === currentRevision
 }
 
 export function setLiveReviewState(room: LiveReviewRoom, state: LiveReviewState, now = Date.now(), ttlMs = LIVE_REVIEW_SESSION_TTL_MS): boolean {

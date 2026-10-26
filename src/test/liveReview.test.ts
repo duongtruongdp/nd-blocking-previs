@@ -4,15 +4,46 @@ import { createEmptySceneDocument } from '../core/sceneDocument'
 import { parseProjectFile } from '../core/projectPersistence'
 import { createLiveReviewSnapshot } from '../liveReview/projectSnapshot'
 import { defaultLiveReviewState, isLiveReviewChatText, isLiveReviewCollaborativeTransform, isLiveReviewPlanningCommit, isLiveReviewPointer, isLiveReviewProject, isLiveReviewShotPatch, isLiveReviewState, isLiveReviewTimelineCommit, LIVE_REVIEW_MAX_MESSAGE_BYTES, liveReviewMessageVersion, normalizeLiveReviewDisplayName, parseLiveReviewMessage, serializeLiveReviewMessage } from '../liveReview/protocol'
-import { acceptLiveReviewProject, addLiveReviewParticipant, appendLiveReviewChat, connectedLiveReviewParticipants, createLiveReviewRoom, isLiveReviewRoomExpired, publicLiveReviewParticipants, rememberLiveReviewOperation, setLiveReviewState } from '../../live-server/sessionStore'
+import { acceptLiveReviewProject, addLiveReviewParticipant, appendLiveReviewChat, canAcceptLiveReviewEditorProject, connectedLiveReviewParticipants, createLiveReviewRoom, isLiveReviewRoomExpired, publicLiveReviewParticipants, rememberLiveReviewOperation, setLiveReviewState } from '../../live-server/sessionStore'
 import { liveRelayConfig, originAllowed } from '../../live-server/config'
 import { buildLiveReviewInviteUrl, OFFICIAL_PRODUCTION_RELAY, parseLiveReviewInviteSession, PUBLIC_LIVE_REVIEW_INVITE_BASE, resolveLiveReviewInviteBaseUrl, resolveLiveReviewRelayConfig } from '../liveReview/liveReviewConfig'
+import { defaultLiveReviewFollowHost, mergeLiveProjectWorkspace, sharedProjectSnapshot, shouldApplyLivePresentation } from '../core/liveReviewWorkspace'
 
 function project() {
   return createProjectDocument('project-live', 'Live Review', createEmptySceneDocument())
 }
 
 describe('Live Review foundation', () => {
+  it('keeps Editor workspace state local while shared project content updates', () => {
+    const current = project()
+    const secondScene = createEmptySceneDocument()
+    secondScene.metadata.id = 'scene-02'
+    current.scenes.push({ id: 'scene-02', name: 'Scene 02', scene: secondScene })
+    current.activeSceneId = 'scene-02'
+    const incoming = { ...current, activeSceneId: 'scene-01', activeShotId: null }
+    const merged = mergeLiveProjectWorkspace(incoming, { ...current, activeSceneId: 'scene-02' }, true)
+    expect(merged.activeSceneId).toBe('scene-02')
+    expect(merged.scenes.find((scene) => scene.id === 'scene-02')?.scene.timeline.currentFrame).toBe(0)
+    expect(defaultLiveReviewFollowHost('viewer')).toBe(true)
+    expect(defaultLiveReviewFollowHost('editor')).toBe(false)
+    expect(shouldApplyLivePresentation('editor', false)).toBe(false)
+    expect(shouldApplyLivePresentation('editor', true)).toBe(true)
+  })
+
+  it('keeps an editor snapshot from changing the host workspace', () => {
+    const host = project()
+    const editor = structuredClone(host)
+    editor.activeSceneId = 'scene-editor'
+    const editorScene = createEmptySceneDocument()
+    editorScene.metadata.id = 'scene-editor'
+    editor.scenes.push({ id: 'scene-editor', name: 'Editor Scene', scene: editorScene })
+    editor.scenes[0].scene.timeline.currentFrame = 73
+    const published = sharedProjectSnapshot(editor, host)
+    expect(published.activeSceneId).toBe(host.activeSceneId)
+    expect(published.activeShotId).toBe(host.activeShotId)
+    expect(published.scenes[0].scene.timeline.currentFrame).toBe(host.scenes[0].scene.timeline.currentFrame)
+  })
+
   it('creates a portable project snapshot using the existing project serializer', () => {
     const source = project()
     const snapshot = createLiveReviewSnapshot(source)
@@ -26,6 +57,8 @@ describe('Live Review foundation', () => {
     expect(state.workspace).toBe('blocking')
     expect(state.activeSceneId).toBe('scene-01')
     expect(isLiveReviewState(state)).toBe(true)
+    expect(isLiveReviewState({ ...state, shotListViewMode: 'board' })).toBe(true)
+    expect(isLiveReviewState({ ...state, shotListViewMode: 'unknown' })).toBe(false)
     expect(isLiveReviewState({ ...state, sceneFrame: Number.NaN })).toBe(false)
   })
 
@@ -45,6 +78,13 @@ describe('Live Review foundation', () => {
     expect(setLiveReviewState(room, { ...defaultLiveReviewState(source), projectRevision: 0 }, 300)).toBe(true)
     expect(room.state?.projectRevision).toBe(1)
     expect(room.expiresAt).toBeGreaterThan(300)
+  })
+
+  it('allows only an Editor with the current revision to publish a project edit', () => {
+    expect(canAcceptLiveReviewEditorProject('editor', 4, 4, true)).toBe(true)
+    expect(canAcceptLiveReviewEditorProject('viewer', 4, 4, true)).toBe(false)
+    expect(canAcceptLiveReviewEditorProject('editor', 3, 4, true)).toBe(false)
+    expect(canAcceptLiveReviewEditorProject('editor', 4, 4, false)).toBe(false)
   })
 
   it('expires a room from its TTL without depending on the browser session', () => {

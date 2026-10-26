@@ -68,6 +68,26 @@ describe('V2.8 .ndscene persistence', () => {
     expect(loaded.timeline.endFrame).toBe(120)
   })
 
+  it('normalizes unambiguous duplicate channel tracks without dropping keyframe IDs', () => {
+    const scene = createEmptySceneDocument()
+    const actor = createActorDocument('actor-01', 'Actor 01', [0, 0, 0])
+    const malformed = {
+      ...scene,
+      actors: [actor],
+      timeline: {
+        ...scene.timeline,
+        tracks: [
+          { id: 'legacy-position-a', entityId: actor.id, entityType: 'Actor' as const, property: 'position' as const, keyframes: [{ id: 'key-a', frame: 0, value: [0, 0, 0] as [number, number, number], interpolation: 'linear' as const }] },
+          { id: 'legacy-position-b', entityId: actor.id, entityType: 'Actor' as const, property: 'position' as const, keyframes: [{ id: 'key-b', frame: 24, value: [1, 0, 0] as [number, number, number], interpolation: 'linear' as const }] },
+        ],
+      },
+    }
+    const loaded = parseSceneFile(JSON.stringify({ format: 'ndscene', version: 1, scene: malformed }))
+    expect(loaded.timeline.tracks).toHaveLength(1)
+    expect(loaded.timeline.tracks[0].id).toBe('actor-01:position')
+    expect(loaded.timeline.tracks[0].keyframes.map((keyframe) => keyframe.id)).toEqual(['key-a', 'key-b'])
+  })
+
   it('restores legacy zero Mark Out sentinels to the timeline end', () => {
     const scene = createEmptySceneDocument()
     const legacy = JSON.parse(JSON.stringify(scene)) as { timeline: Record<string, unknown> }

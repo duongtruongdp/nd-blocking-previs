@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyGroupTransform, bakeGroupChildren, collapseSelectionToGroups, evaluateGroupTransforms, groupPivot } from '../core/groupMath'
+import { applyGroupTransform, bakeGroupChildren, collapseSelectionToGroups, evaluateGroupTransforms, groupPivot, groupSelectionIdForEdit, removeGroupTransform } from '../core/groupMath'
 import { createActorDocument, createEmptySceneDocument, type SceneGroup } from '../core/sceneDocument'
 import { evaluateTimeline } from '../timeline/timelineEvaluator'
 import { upsertTimelineKeyframe } from '../timeline/timelineMath'
@@ -75,5 +75,25 @@ describe('persistent blocking groups', () => {
   it('collapses rendered child hits to one logical group selection target', () => {
     const grouped = { ...group, childIds: ['actor-01', 'actor-02'] }
     expect(collapseSelectionToGroups(['actor-01', 'actor-02'], 'actor-02', [grouped])).toEqual({ ids: ['group-01'], primaryId: 'group-01' })
+  })
+
+  it('keeps grouped picks on the parent until child-edit mode is active', () => {
+    const grouped = { ...group, childIds: ['actor-01', 'actor-02'] }
+    expect(groupSelectionIdForEdit('actor-01', [grouped], null)).toBe('group-01')
+    expect(groupSelectionIdForEdit('actor-01', [grouped], 'group-01')).toBe('actor-01')
+    expect(groupSelectionIdForEdit('actor-02', [grouped], 'other-group')).toBe('group-01')
+  })
+
+  it('round-trips an edited world-space child back through the evaluated group delta', () => {
+    const actor = createActorDocument('actor-01', 'Actor 01', [1, 0, 2])
+    const movedGroup = { ...group, position: [3, 1, -2] as [number, number, number], rotation: [0, Math.PI / 3, 0] as [number, number, number], pivot: [0.5, 0, 0] as [number, number, number] }
+    const rendered = applyGroupTransform(actor, movedGroup)
+    const editedWorld = { ...rendered, position: [rendered.position[0] + 0.75, rendered.position[1], rendered.position[2] - 0.5] as [number, number, number] }
+    const local = removeGroupTransform(editedWorld, movedGroup)
+    const renderedAgain = applyGroupTransform(local, movedGroup)
+    renderedAgain.position.forEach((value, index) => expect(value).toBeCloseTo(editedWorld.position[index], 8))
+    expect(renderedAgain.rotation[0]).toBeCloseTo(editedWorld.rotation[0], 8)
+    expect(renderedAgain.rotation[1]).toBeCloseTo(editedWorld.rotation[1], 8)
+    expect(renderedAgain.rotation[2]).toBeCloseTo(editedWorld.rotation[2], 8)
   })
 })

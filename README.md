@@ -14,7 +14,7 @@ before stepping onto set.
   <a href="https://github.com/duongtruongdp/nd-blocking-previs/releases/latest">View Latest Release</a>
 </p>
 
-**Current release:** `0.2.1` · **Desktop:** macOS Apple Silicon / arm64
+**Current release:** `0.2.2` · **Desktop:** macOS Apple Silicon / arm64
 
 ![ND Blocking & Previs workspace](docs/images/hero-workspace.png)
 
@@ -56,6 +56,12 @@ export.
 - Snap On/Off, non-destructive trimming, multi-selection, and group movement.
 - Graphics tracks, music, duplicate/delete workflows, and undo/redo.
 
+### Workspace & Collaboration
+
+- Scene and Shot ordering with insert-before/after workflows.
+- Editable groups with child selection and Inspector editing.
+- Live Review Editor workflow with synchronized workspace and timeline state.
+
 ### Graphics & Music
 
 - Place graphics in the master sequence and preview them in context.
@@ -91,9 +97,20 @@ Master Shot Bin into one NLE-style review workspace.
 
 ![Master Timeline](docs/images/master-timeline.png)
 
-## Master Timeline in v0.2.1
+## Shot List views
 
-Version 0.2.1 focuses on a more natural, reliable editing workflow for the
+Shot List supports three complementary presentations:
+
+- **Board** — a thumbnail-only moodboard for reviewing visual flow.
+- **Grid** — thumbnails with Shot information and Inspector details.
+- **List** — a compact, information-dense Shot table.
+
+All three views reuse the same captured thumbnails, Shot selection, scene
+filtering, ordering, and double-click navigation into the Scene Timeline.
+
+## Master Timeline in v0.2.2
+
+Version 0.2.2 continues the more natural, reliable editing workflow for the
 Master Timeline:
 
 - Place Shots independently and preserve intentional gaps.
@@ -103,6 +120,8 @@ Master Timeline:
 - Keep Graphics in their own track and place them in timeline gaps.
 - Use undo and redo to review timing changes safely.
 - Work at low zoom without artificial minimum Shot widths.
+- Open a Master Shot's source Scene Timeline with a double-click.
+- Use the Board, Grid, or List Shot List presentation as needed.
 
 ## Download
 

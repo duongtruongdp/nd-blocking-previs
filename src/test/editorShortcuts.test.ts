@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { deleteShortcutForKey, destructiveShortcutTarget, editorShortcutForKey, groupShortcutForKey, timelineMarkShortcutForKey, timelinePlayPauseShortcut, timelineZoomShortcutForKey } from '../core/editorShortcuts'
 import { shortcutMatches } from '../core/shortcutRegistry'
+import { shouldHandleGlobalPlaybackShortcut } from '../core/editorShortcuts'
 
 describe('timeline play/pause shortcut', () => {
   it('handles Space outside text editing controls', () => {
@@ -76,5 +77,15 @@ describe('application shortcut registry', () => {
   it('supports Cmd/Ctrl project bindings without making Cmd+Q an editor tool', () => {
     expect(shortcutMatches({ key: 's', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false }, { key: 's', metaKey: true, ctrlKey: true })).toBe(true)
     expect(shortcutMatches({ key: 'q', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false }, { key: 'q', metaKey: true, ctrlKey: true })).toBe(true)
+  })
+
+  it('routes Space through the global playback guard only for a fresh non-editing gesture', () => {
+    const base = { code: 'Space', key: ' ', repeat: false, isComposing: false, isTextEditing: false, inDialog: false, activeGesture: false }
+    expect(shouldHandleGlobalPlaybackShortcut(base)).toBe(true)
+    expect(shouldHandleGlobalPlaybackShortcut({ ...base, repeat: true })).toBe(false)
+    expect(shouldHandleGlobalPlaybackShortcut({ ...base, isComposing: true })).toBe(false)
+    expect(shouldHandleGlobalPlaybackShortcut({ ...base, isTextEditing: true })).toBe(false)
+    expect(shouldHandleGlobalPlaybackShortcut({ ...base, inDialog: true })).toBe(false)
+    expect(shouldHandleGlobalPlaybackShortcut({ ...base, activeGesture: true })).toBe(false)
   })
 })

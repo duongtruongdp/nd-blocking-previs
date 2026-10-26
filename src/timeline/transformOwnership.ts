@@ -16,6 +16,10 @@ export type TimelineTransformCommitResult = {
   suspendEvaluation: boolean
 }
 
+function hasAuthoredTrack(document: SceneDocument, entityId: string, property: TimelineProperty): boolean {
+  return document.timeline.tracks.some((track) => track.entityId === entityId && track.property === property && track.keyframes.length > 0)
+}
+
 export function timelineEditingEnabled(isPlaying: boolean): boolean {
   return !isPlaying
 }
@@ -67,52 +71,77 @@ export function commitTimelineTransform(document: SceneDocument, change: Timelin
     const hasAnimatedProperty = change.editedProperty !== undefined && document.timeline.tracks.some((track) => track.entityId === change.entityId && track.property === change.editedProperty && track.keyframes.length > 0)
     const keyframeValue = change.editedProperty === 'position' ? [...change.position] as ActorVector3 : change.editedProperty === 'rotation' ? [...change.rotation] as ActorVector3 : undefined
     const timeline = hasAnimatedProperty && keyframeValue && change.editedProperty ? upsertTimelineKeyframe(document.timeline, group.id, 'Group', change.editedProperty, document.timeline.currentFrame, keyframeValue) : document.timeline
-    return { document: { ...document, groups: document.groups.map((item) => item.id === group.id ? { ...item, position: [...change.position], rotation: [...change.rotation] } : item), timeline }, changedKeyframe: hasAnimatedProperty, suspendEvaluation: false }
+    const position = hasAuthoredTrack(document, group.id, 'position') ? [...group.position] as ActorVector3 : [...change.position] as ActorVector3
+    const rotation = hasAuthoredTrack(document, group.id, 'rotation') ? [...group.rotation] as ActorVector3 : [...change.rotation] as ActorVector3
+    return { document: { ...document, groups: document.groups.map((item) => item.id === group.id ? { ...item, position, rotation } : item), timeline }, changedKeyframe: hasAnimatedProperty, suspendEvaluation: false }
   }
   if (!actor && !prop && !wall && !opening && !camera) return { document: applySceneEntityTransform(document, change), changedKeyframe: false, suspendEvaluation: false }
 
   const entityType: TimelineEntityType = camera ? 'Camera' : wall ? 'Wall' : opening ? 'Opening' : prop ? 'Prop' : 'Actor'
   const animatedProperty = change.editedProperty
-  const hasAnimatedProperty = animatedProperty !== undefined && document.timeline.tracks.some((track) => track.entityId === change.entityId && track.property === animatedProperty && track.keyframes.length > 0)
-  const keyframeValue = animatedProperty === 'position'
+  const hasPositionTrack = hasAuthoredTrack(document, change.entityId, 'position')
+  const hasRotationTrack = hasAuthoredTrack(document, change.entityId, 'rotation')
+  const hasHeadingTrack = hasAuthoredTrack(document, change.entityId, 'heading')
+  const hasScaleTrack = hasAuthoredTrack(document, change.entityId, 'scale')
+  // Actor heading is retained as a legacy scalar channel. New Actor gizmo and
+  // Inspector edits target the full Rotation channel; when an older Actor only
+  // has Heading, update that existing channel instead of creating a competing
+  // animation stream.
+  const effectiveProperty: TimelineTransformCommit['editedProperty'] = animatedProperty === 'rotation' && entityType === 'Actor' && !hasRotationTrack && hasHeadingTrack ? 'heading' : animatedProperty
+  const hasAnimatedProperty = effectiveProperty !== undefined && (
+    effectiveProperty === 'position' ? hasPositionTrack
+      : effectiveProperty === 'rotation' ? hasRotationTrack
+        : effectiveProperty === 'heading' ? hasHeadingTrack
+          : effectiveProperty === 'scale' ? hasScaleTrack
+            : false
+  )
+  const keyframeValue = effectiveProperty === 'position'
     ? [...change.position] as ActorVector3
-    : animatedProperty === 'rotation'
+    : effectiveProperty === 'rotation'
       ? [...change.rotation] as ActorVector3
-      : animatedProperty === 'scale'
+      : effectiveProperty === 'scale'
         ? [...(change.scale ?? [1, 1, 1])] as ActorVector3
-      : animatedProperty === 'heading'
+      : effectiveProperty === 'heading'
         ? change.rotation[1]
         : undefined
-  const timeline = hasAnimatedProperty && keyframeValue !== undefined
-    ? upsertTimelineKeyframe(document.timeline, change.entityId, entityType, animatedProperty, document.timeline.currentFrame, keyframeValue)
+  const timeline = hasAnimatedProperty && keyframeValue !== undefined && effectiveProperty
+    ? upsertTimelineKeyframe(document.timeline, change.entityId, entityType, effectiveProperty, document.timeline.currentFrame, keyframeValue)
     : document.timeline
+  // Only the explicitly edited, unanimated base channel is written back to
+  // the document. The other channels must remain the persisted baseline;
+  // evaluated animation and the temporary gizmo pose are not authoring input.
+  const position = animatedProperty === undefined || animatedProperty === 'position' ? [...change.position] as ActorVector3 : [...(actor ?? prop ?? wall ?? opening ?? camera)!.position] as ActorVector3
+  const rotation = animatedProperty === undefined || animatedProperty === 'rotation' || animatedProperty === 'heading'
+    ? [...change.rotation] as ActorVector3
+    : [...(actor ?? prop ?? wall ?? opening ?? camera)!.rotation] as ActorVector3
+  const scale = prop && (animatedProperty === undefined || animatedProperty === 'scale') ? [...(change.scale ?? prop.scale ?? [1, 1, 1])] as ActorVector3 : prop?.scale
   const nextDocument: SceneDocument = {
     ...document,
     actors: document.actors.map((item) => item.id === change.entityId ? {
       ...item,
-      position: [...change.position] as ActorVector3,
-      rotation: [...change.rotation] as ActorVector3,
+      position,
+      rotation,
     } : item),
     props: document.props.map((item) => item.id === change.entityId ? {
       ...item,
-      position: [...change.position] as ActorVector3,
-      rotation: [...change.rotation] as ActorVector3,
-      ...(change.scale ? { scale: [...change.scale] as ActorVector3 } : {}),
+      position,
+      rotation,
+      ...(scale ? { scale } : {}),
     } : item),
     walls: document.walls.map((item) => item.id === change.entityId ? {
       ...item,
-      position: [...change.position] as ActorVector3,
-      rotation: [...change.rotation] as ActorVector3,
+      position,
+      rotation,
     } : item),
     openings: document.openings.map((item) => item.id === change.entityId ? {
       ...item,
-      position: [...change.position] as ActorVector3,
-      rotation: [...change.rotation] as ActorVector3,
+      position,
+      rotation,
     } : item),
     cameras: document.cameras.map((item) => item.id === change.entityId ? {
       ...item,
-      position: [...change.position] as ActorVector3,
-      rotation: [...change.rotation] as ActorVector3,
+      position,
+      rotation,
     } : item),
     timeline,
   }

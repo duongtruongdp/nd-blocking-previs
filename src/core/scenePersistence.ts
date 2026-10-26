@@ -48,6 +48,7 @@ export function prepareSceneForSave(scene: SceneDocument, savedAt = new Date().t
     metadata: { ...scene.metadata, updatedAt: savedAt },
     props: scene.props.map((prop) => ({ ...prop, scale: prop.scale ?? [1, 1, 1] })),
     cameras: scene.cameras.map((camera) => ({ ...camera, cameraSnapshot: camera.cameraSnapshot ?? cameraPhysicalSnapshot(camera) ?? undefined })),
+    timeline: { ...scene.timeline, tracks: normalizeTimelineTracks(scene.timeline.tracks) as SceneDocument['timeline']['tracks'] },
   }
 }
 
@@ -211,8 +212,56 @@ function normalizeTimelineDocument(value: Record<string, unknown>): SceneDocumen
     markIn,
     markOut,
     frameRate: positiveRational(value.frameRate) ? value.frameRate as SceneDocument['timeline']['frameRate'] : { numerator: 24, denominator: 1 },
-    tracks: tracks as SceneDocument['timeline']['tracks'],
+    tracks: normalizeTimelineTracks(tracks) as SceneDocument['timeline']['tracks'],
   }
+}
+
+/**
+ * Repairs unambiguous legacy channel identity at the persistence boundary.
+ * A single entity/property track receives its canonical ID. Multiple tracks
+ * are merged only when their frame and keyframe identities do not collide;
+ * ambiguous historical data is preserved for inspection instead of losing a
+ * user's authored value.
+ */
+function normalizeTimelineTracks(value: unknown[]): unknown[] {
+  const groups = new Map<string, Array<{ index: number; track: Record<string, unknown> }>>()
+  value.forEach((candidate, index) => {
+    if (!isRecord(candidate) || typeof candidate.entityId !== 'string' || typeof candidate.property !== 'string' || !Array.isArray(candidate.keyframes)) return
+    const key = `${candidate.entityId}:${candidate.property}`
+    const group = groups.get(key) ?? []
+    group.push({ index, track: candidate })
+    groups.set(key, group)
+  })
+  const firstIndexByGroup = new Map<string, number>([...groups.entries()].map(([key, group]) => [key, group[0].index]))
+  const output: unknown[] = []
+  value.forEach((candidate, index) => {
+    if (!isRecord(candidate) || typeof candidate.entityId !== 'string' || typeof candidate.property !== 'string' || !Array.isArray(candidate.keyframes)) {
+      output.push(candidate)
+      return
+    }
+    const key = `${candidate.entityId}:${candidate.property}`
+    const group = groups.get(key) ?? []
+    if (firstIndexByGroup.get(key) !== index) return
+    const frameSet = new Set<number>()
+    const keyframeIdSet = new Set<string>()
+    const canMerge = group.length > 1 && group.every(({ track }) => (track.keyframes as unknown[]).every((keyframe: unknown) => {
+      if (!isRecord(keyframe) || typeof keyframe.frame !== 'number' || !Number.isInteger(keyframe.frame) || typeof keyframe.id !== 'string' || frameSet.has(keyframe.frame) || keyframeIdSet.has(keyframe.id)) return false
+      frameSet.add(keyframe.frame)
+      keyframeIdSet.add(keyframe.id)
+      return true
+    }))
+    if (group.length === 1 || canMerge) {
+      const keyframes = group.flatMap(({ track }) => track.keyframes as unknown[]).sort((left, right) => {
+        const leftFrame = isRecord(left) && typeof left.frame === 'number' ? left.frame : 0
+        const rightFrame = isRecord(right) && typeof right.frame === 'number' ? right.frame : 0
+        return leftFrame - rightFrame
+      })
+      output.push({ ...candidate, id: `${candidate.entityId}:${candidate.property}`, keyframes })
+      return
+    }
+    group.forEach(({ track }) => output.push(track))
+  })
+  return output
 }
 
 export function sceneFilename(name: string): string {

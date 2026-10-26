@@ -49,6 +49,8 @@ export type StageTransform = {
   position: [number, number, number]
   rotation: [number, number, number]
   scale?: [number, number, number]
+  /** The gizmo operation that authored this snapshot. Kept optional for old integrations. */
+  mode?: 'move' | 'rotate' | 'scale'
 }
 
 export type StageTransformBatch = {
@@ -192,6 +194,10 @@ export type StageEngineOptions = {
   toolShortcuts?: Partial<Record<StageTool, string>>
   frameSelectedShortcut?: string
   onAxisLockChange?: (axis: StageAxisName | null) => void
+  /** Called for a primary-button double click on a rendered entity. */
+  onEntityDoubleClick?: (entityId: string) => void
+  /** Gives the host a chance to consume Escape before selection is cleared. */
+  onEscape?: () => boolean
   onContextMenu?: (entityId: string | null, point: { clientX: number; clientY: number }) => void
   onViewChanged?: (selection: StageViewSelection) => void
   onViewOrientationChanged?: (orientation: StageViewOrientation) => void
@@ -788,6 +794,7 @@ export class StageEngine {
     this.canvas.addEventListener('pointerup', this.handlePointerUp)
     this.canvas.addEventListener('pointercancel', this.handlePointerCancel)
     this.canvas.addEventListener('lostpointercapture', this.handlePointerCancel)
+    this.canvas.addEventListener('dblclick', this.handleDoubleClick)
     this.canvas.addEventListener('wheel', this.handleWheel, { passive: false })
     window.addEventListener('keydown', this.handleKeyDown)
     window.addEventListener('keyup', this.handleKeyUp)
@@ -800,6 +807,7 @@ export class StageEngine {
     this.canvas.removeEventListener('pointerup', this.handlePointerUp)
     this.canvas.removeEventListener('pointercancel', this.handlePointerCancel)
     this.canvas.removeEventListener('lostpointercapture', this.handlePointerCancel)
+    this.canvas.removeEventListener('dblclick', this.handleDoubleClick)
     this.canvas.removeEventListener('wheel', this.handleWheel)
     window.removeEventListener('keydown', this.handleKeyDown)
     window.removeEventListener('keyup', this.handleKeyUp)
@@ -813,6 +821,14 @@ export class StageEngine {
     if (logicalHit && this.selectedIds.length > 1 && this.selectedIds.includes(logicalHit.id)) return
     if (logicalHit) this.select(logicalHit.id)
     this.options.onContextMenu?.(logicalHit?.id ?? null, { clientX: event.clientX, clientY: event.clientY })
+  }
+
+  private readonly handleDoubleClick = (event: MouseEvent) => {
+    if (this.disposed || event.button !== 0) return
+    const hit = this.pick(event)
+    if (!hit) return
+    event.preventDefault()
+    this.options.onEntityDoubleClick?.(hit.id)
   }
 
   private readonly handlePointerDown = (event: PointerEvent) => {
@@ -861,9 +877,15 @@ export class StageEngine {
     }
 
     const marqueeModifier = event.metaKey || event.ctrlKey
-    const marqueeHit = event.button === 0 && (marqueeModifier || this.tool === 'select') ? this.pick(event) : null
+    // Resolve the hit for every left-button gesture before choosing the
+    // interaction mode. Empty-space selection is a Stage gesture, not a
+    // transform-tool gesture: Move/Rotate/Scale must not turn an empty drag
+    // into orbit simply because the toolbar still has that tool active.
+    // Entity and gizmo hits continue through their existing tool-specific
+    // branches below.
+    const marqueeHit = event.button === 0 ? this.pick(event) : null
     const marqueeEmpty = event.button === 0 && !marqueeHit && !this.pickGizmo(event) && !this.pickCameraPathKeyframe(event) && !this.pickCameraPathSegment(event)
-    const selectModeMarquee = this.tool === 'select' && !this.spaceKeyActive && !event.altKey && !event.shiftKey && !marqueeModifier
+    const selectModeMarquee = !this.spaceKeyActive && !event.altKey && !event.shiftKey && !marqueeModifier
     const modifierMarquee = !this.spaceKeyActive && !(event.altKey && event.shiftKey) && (marqueeModifier || event.shiftKey || event.altKey)
     if (marqueeEmpty && (selectModeMarquee || modifierMarquee)) {
       this.drag = { ...base, mode: 'marquee', emptySpaceClick: true }
@@ -1106,6 +1128,11 @@ export class StageEngine {
         this.emitDebug()
         return
       }
+      if (event.target === this.canvas && !this.isTypingTarget(event.target) && this.options.onEscape?.()) {
+        event.preventDefault()
+        this.emitDebug(true, 'escape:handled')
+        return
+      }
       if (event.target === this.canvas && !this.isTypingTarget(event.target) && (this.selectedIds.length > 0 || this.selectedId !== null)) {
         this.select(null)
         event.preventDefault()
@@ -1324,7 +1351,7 @@ export class StageEngine {
 
   private beginTransform(drag: StageDrag): void {
     if (drag.groupEntities.length > 1) this.options.onTransformBatchStart?.(this.batchSnapshot(drag))
-    else if (drag.entity) this.options.onTransformStart?.(this.transformSnapshot(drag.entity))
+    else if (drag.entity) this.options.onTransformStart?.(this.transformSnapshot(drag.entity, drag))
   }
 
   private requestTransformPermission(drag: StageDrag): void {
@@ -1356,15 +1383,15 @@ export class StageEngine {
 
   private endTransform(drag: StageDrag): void {
     if (drag.groupEntities.length > 1) this.options.onTransformBatchEnd?.(this.batchSnapshot(drag))
-    else if (drag.entity) this.options.onTransformEnd?.(this.transformSnapshot(drag.entity))
+    else if (drag.entity) this.options.onTransformEnd?.(this.transformSnapshot(drag.entity, drag))
   }
 
   private emitTransformPreview(drag: StageDrag): void {
     if (drag.groupEntities.length > 1) this.options.onTransformBatchPreview?.(this.batchSnapshot(drag))
-    else if (drag.entity) this.options.onTransformPreview?.(this.transformSnapshot(drag.entity))
+    else if (drag.entity) this.options.onTransformPreview?.(this.transformSnapshot(drag.entity, drag))
   }
 
-  private transformSnapshot(entity: StageEntity): StageTransform {
+  private transformSnapshot(entity: StageEntity, drag: StageDrag | null = this.drag): StageTransform {
     const snapshot = entity.getTransformSnapshot?.()
     if (snapshot) {
       return {
@@ -1372,6 +1399,7 @@ export class StageEngine {
         position: snapshot.position,
         rotation: snapshot.rotation,
         scale: snapshot.scale ?? [entity.root.scale.x, entity.root.scale.y, entity.root.scale.z],
+        mode: drag?.mode === 'gizmo' ? drag.handle?.mode ?? 'move' : 'move',
       }
     }
     return {
@@ -1379,11 +1407,12 @@ export class StageEngine {
       position: [entity.root.position.x, entity.root.position.y, entity.root.position.z],
       rotation: [entity.root.rotation.x, entity.root.rotation.y, entity.root.rotation.z],
       scale: [entity.root.scale.x, entity.root.scale.y, entity.root.scale.z],
+      mode: drag?.mode === 'gizmo' ? drag.handle?.mode ?? 'move' : 'move',
     }
   }
 
   private batchSnapshot(drag: StageDrag): StageTransformBatch {
-    return { changes: drag.groupEntities.map((entity) => this.transformSnapshot(entity)), primaryEntityId: this.selectedId }
+    return { changes: drag.groupEntities.map((entity) => this.transformSnapshot(entity, drag)), primaryEntityId: this.selectedId }
   }
 
   private snapshotEntities(entities: readonly StageEntity[]): StageTransform[] {

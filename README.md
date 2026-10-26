@@ -14,7 +14,7 @@ before stepping onto set.
   <a href="https://github.com/duongtruongdp/nd-blocking-previs/releases/latest">View Latest Release</a>
 </p>
 
-**Current release:** `0.2.2` · **Desktop:** macOS Apple Silicon / arm64
+**Current release:** `0.2.3` · **Desktop:** macOS Apple Silicon / arm64
 
 ![ND Blocking & Previs workspace](docs/images/hero-workspace.png)
 
@@ -122,6 +122,13 @@ Master Timeline:
 - Work at low zoom without artificial minimum Shot widths.
 - Open a Master Shot's source Scene Timeline with a double-click.
 - Use the Board, Grid, or List Shot List presentation as needed.
+
+## v0.2.3 hotfix
+
+Master Preview and Master video export now share the same evaluated Scene
+frame, including grouped Actor, Prop, Wall, and Camera transforms. Shot IDs,
+timing, trims, source references, and existing project compatibility remain
+unchanged.
 
 ## Download
 

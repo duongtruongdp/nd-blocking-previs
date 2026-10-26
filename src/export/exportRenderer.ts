@@ -4,7 +4,7 @@ import type { ProjectDocument } from '../core/projectDocument'
 import { cameraProjectionForDocument } from '../runtime/cameraMath'
 import { createActorRuntime, type ActorRuntime } from '../runtime/actor/actorRuntime'
 import { createScenicVisual, scenicGeometrySignature, type ScenicDefinition, type ScenicVisual } from '../runtime/scenicRuntime'
-import { evaluateExportFrame } from './exportEvaluation'
+import { evaluateExportSceneFrame } from './exportEvaluation'
 import { centeredCrop, desqueezedCaptureAspect, dimensionsForDeliveryAspect, deliveryAspectForCamera, type ExportDimensions } from './exportMath'
 import type { VideoExportSettings } from './exportTypes'
 import { resolveOpeningAgainstWalls } from '../architecture/wallMath'
@@ -95,32 +95,22 @@ export class VideoExportRenderer {
   renderFrame(frame: number, evaluatedOverride?: Record<string, EvaluatedEntityState>): void {
     if (this.disposed) throw new Error('The export renderer has been disposed.')
     if (this.exportContextLost || this.sourceRenderer.getContext().isContextLost()) throw new Error('The dedicated export graphics context was lost.')
-    const evaluated = evaluatedOverride ?? evaluateExportFrame(this.document, frame)
-    const cameraDocument = this.resolveCamera(frame, evaluated)
+    const evaluatedScene = evaluateExportSceneFrame(this.document, frame, evaluatedOverride)
+    const cameraDocument = this.resolveCamera(evaluatedScene.cameras)
     if (!cameraDocument) throw new Error('The active Camera is not available for export.')
-    const evaluatedProps = this.document.props.map((prop) => ({ ...prop, ...(evaluated[prop.id] ?? {}) }))
-    const evaluatedWalls = this.document.walls.map((wall) => ({ ...wall, ...(evaluated[wall.id] ?? {}) }))
-    const evaluatedOpenings = this.document.openings.map((opening) => {
-      const value = evaluated[opening.id]
-      return resolveOpeningAgainstWalls({ ...opening, ...(value ?? {}), openAngle: value?.openAngle ?? opening.openAngle }, evaluatedWalls)
-    })
-    const evaluatedLights = this.document.lights.map((sun) => {
-      const value = evaluated[sun.id]
-      return { ...sun, ...(value ?? {}), azimuth: value?.azimuth ?? sun.azimuth, elevation: value?.elevation ?? sun.elevation, intensity: value?.intensity ?? sun.intensity, color: value?.color ?? sun.color }
-    })
-    this.syncScenic([...evaluatedProps, ...evaluatedWalls, ...evaluatedOpenings, ...evaluatedLights])
-    this.document.actors.forEach((actor) => {
+    this.syncScenic([...evaluatedScene.props, ...evaluatedScene.walls, ...evaluatedScene.openings, ...evaluatedScene.lights])
+    evaluatedScene.actors.forEach((actor) => {
       const runtime = this.actorRuntimes.get(actor.id)
-      if (runtime) runtime.applyDocument({ ...actor, ...(evaluated[actor.id] ?? {}) })
+      if (runtime) runtime.applyDocument(actor)
     })
-    evaluatedProps.forEach((prop) => {
+    evaluatedScene.props.forEach((prop) => {
       const runtime = this.scenicRuntimes.get(prop.id)
       if (!runtime) return
       runtime.applyDocument(prop)
     })
-    evaluatedWalls.forEach((wall) => this.scenicRuntimes.get(wall.id)?.applyDocument(wall))
-    evaluatedOpenings.forEach((opening) => this.scenicRuntimes.get(opening.id)?.applyDocument(opening))
-    evaluatedLights.forEach((sun) => this.scenicRuntimes.get(sun.id)?.applyDocument(sun))
+    evaluatedScene.walls.forEach((wall) => this.scenicRuntimes.get(wall.id)?.applyDocument(wall))
+    evaluatedScene.openings.forEach((opening) => this.scenicRuntimes.get(opening.id)?.applyDocument(opening))
+    evaluatedScene.lights.forEach((sun) => this.scenicRuntimes.get(sun.id)?.applyDocument(sun))
 
     const projection = cameraProjectionForDocument(cameraDocument)
     if (!projection) throw new Error('The active Camera has no valid capture mode.')
@@ -141,7 +131,7 @@ export class VideoExportRenderer {
     this.outputContext.clearRect(0, 0, this.canvas.width, this.canvas.height)
     this.outputContext.drawImage(this.sourceCanvas, crop.x, crop.y, crop.width, crop.height, 0, 0, this.canvas.width, this.canvas.height)
     if (this.drawShotInfo && this.shotInfoProject && this.settings.source !== 'master' && this.settings.shotInfoBurnIn?.enabled) {
-      drawShotInfoBurnIn(this.outputContext, this.canvas.width, this.canvas.height, resolveSceneShotInfoBurnInModel(this.shotInfoProject, this.shotInfoProjectName, this.document, cameraDocument.id, frame, this.document.timeline.frameRate, evaluated), this.settings.shotInfoBurnIn)
+      drawShotInfoBurnIn(this.outputContext, this.canvas.width, this.canvas.height, resolveSceneShotInfoBurnInModel(this.shotInfoProject, this.shotInfoProjectName, this.document, cameraDocument.id, frame, this.document.timeline.frameRate, evaluatedScene.evaluated), this.settings.shotInfoBurnIn)
     }
   }
 
@@ -206,11 +196,8 @@ export class VideoExportRenderer {
     return releasedResources
   }
 
-  private resolveCamera(frame: number, evaluatedEntities?: Record<string, EvaluatedEntityState>): CameraDocument | null {
-    const base = this.settings.cameraId ? this.document.cameras.find((camera) => camera.id === this.settings.cameraId) : null
-    if (!base) return null
-    const evaluated = (evaluatedEntities ?? evaluateExportFrame(this.document, frame))[base.id]
-    return evaluated ? { ...base, ...evaluated, focalLengthMm: evaluated.focalLengthMm ?? base.focalLengthMm } : base
+  private resolveCamera(cameras: readonly CameraDocument[]): CameraDocument | null {
+    return this.settings.cameraId ? cameras.find((camera) => camera.id === this.settings.cameraId) ?? null : null
   }
 
   private optionsDeliveryAspect(): number {

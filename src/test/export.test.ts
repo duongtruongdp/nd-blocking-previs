@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CAMERA_DATABASE } from '../core/cameraDatabase'
 import { createActorDocument, createCameraDocument, createEmptySceneDocument } from '../core/sceneDocument'
 import { cameraRotationLookingAt } from '../runtime/cameraMath'
-import { evaluateExportFrame } from '../export/exportEvaluation'
+import { evaluateExportFrame, evaluateExportSceneFrame } from '../export/exportEvaluation'
 import { centeredCrop, deliveryAspectForCamera, desqueezedCaptureAspect, dimensionsForDeliveryAspect, exportDurationSeconds, exportFilename, exportFrameRange, formatExportDuration, frameTimestampMicroseconds, physicalCaptureAspect, rationalFrameDuration, sanitizeExportFilename, validateExportRequest } from '../export/exportMath'
 import { preferredExportFormat } from '../export/formatSupport'
 import { selectWebmMimeType, supportedWebmMimeTypes } from '../export/mediaRecorder'
@@ -10,7 +10,7 @@ import { frameToTimelinePercent, upsertTimelineKeyframe } from '../timeline/time
 import { buildMasterRenderPlan, resolveMasterRenderFrame } from '../export/masterRenderPlan'
 import { createProjectDocument } from '../core/projectDocument'
 import { createShotDocument } from '../core/shotDocument'
-import { createMusicClip, resolveMasterFrame } from '../core/masterSequence'
+import { createMusicClip, insertMasterClipAtFrame, removeMasterClip, resolveMasterFrame } from '../core/masterSequence'
 import { createExportTracker, ExportStageError } from '../export/exportDiagnostics'
 
 describe('V2.6 video export logic', () => {
@@ -133,6 +133,39 @@ describe('V2.6 video export logic', () => {
     const timeline = upsertTimelineKeyframe(createEmptySceneDocument().timeline, actor.id, 'Actor', 'position', 0, [0, 0, 0])
     const document = { ...createEmptySceneDocument(), actors: [actor], timeline: upsertTimelineKeyframe(timeline, actor.id, 'Actor', 'position', 24, [4, 0, 0]) }
     expect(evaluateExportFrame(document, 12)[actor.id].position).toEqual([2, 0, 0])
+  })
+
+  it('composes timeline-evaluated group transforms for actors and cameras before export', () => {
+    const actor = createActorDocument('actor-grouped', 'Grouped Actor', [1, 0, 0])
+    const camera = createCameraDocument('camera-grouped', 'Grouped Camera', [0, 2, 4], cameraRotationLookingAt([0, 2, 4], [0, 1, 0]), CAMERA_DATABASE[0].id, CAMERA_DATABASE[0].captureModes[0].id)
+    const group = { id: 'group-grouped', name: 'Grouped', position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number], pivot: [0, 0, 0] as [number, number, number], childIds: [actor.id, camera.id] }
+    let timeline = createEmptySceneDocument().timeline
+    timeline = upsertTimelineKeyframe(timeline, group.id, 'Group', 'position', 0, [0, 0, 0])
+    timeline = upsertTimelineKeyframe(timeline, group.id, 'Group', 'position', 24, [4, 0, 0])
+    const document = { ...createEmptySceneDocument(), actors: [actor], cameras: [camera], activeCameraId: camera.id, groups: [group], timeline }
+    const frame = evaluateExportSceneFrame(document, 12)
+
+    expect(frame.actors[0].position).toEqual([3, 0, 0])
+    expect(frame.cameras[0].position).toEqual([2, 2, 4])
+  })
+
+  it('resolves current source Scene content after Master insertion and re-insertion', () => {
+    const actor = createActorDocument('actor-fresh', 'Fresh Actor', [0, 0, 0])
+    const camera = createCameraDocument('camera-fresh', 'Fresh Camera', [0, 2, 4], cameraRotationLookingAt([0, 2, 4], [0, 1, 0]), CAMERA_DATABASE[0].id, CAMERA_DATABASE[0].captureModes[0].id)
+    const scene = { ...createEmptySceneDocument(), metadata: { ...createEmptySceneDocument().metadata, id: 'scene-fresh', name: 'Fresh Scene' }, actors: [actor], cameras: [camera], activeCameraId: camera.id }
+    const project = createProjectDocument('project-fresh', 'Fresh Project', scene)
+    const shot = createShotDocument({ id: 'shot-fresh', name: 'Fresh Shot', sceneId: scene.metadata.id, cameraId: camera.id, startFrame: 0, endFrame: 24, order: 0, notes: '', thumbnail: null })
+    const inserted = insertMasterClipAtFrame({ ...project.masterSequence, clips: [] }, shot, 0)
+    expect(inserted).not.toBeNull()
+    const currentScene = { ...scene, actors: [{ ...actor, position: [7, 0, 0] as [number, number, number], appearance: { ...actor.appearance, primaryColor: '#ff0000' } }] }
+    const currentProject = { ...project, scenes: [{ id: currentScene.metadata.id, name: currentScene.metadata.name, scene: currentScene }], shots: [shot], masterSequence: inserted! }
+
+    expect(resolveMasterRenderFrame(currentProject, 0).scene.actors[0]).toMatchObject({ position: [7, 0, 0], appearance: { primaryColor: '#ff0000' } })
+
+    const removed = removeMasterClip(currentProject.masterSequence, inserted!.clips[0].id)
+    const reinserted = insertMasterClipAtFrame(removed, shot, 0)
+    expect(reinserted).not.toBeNull()
+    expect(resolveMasterRenderFrame({ ...currentProject, masterSequence: reinserted! }, 0).scene.actors[0].position).toEqual([7, 0, 0])
   })
 
   it('builds a deterministic Master plan with exclusive range and hard-cut scene boundaries', () => {

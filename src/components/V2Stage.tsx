@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import * as THREE from 'three'
 import type { ActorDocument, ActorVector3, CameraDocument, OpeningDocument, PropDocument, SceneDocument, SceneGroup, SunDocument, WallDocument } from '../core/sceneDocument'
 import { evaluateGroupTransforms, groupSelectionIdForEdit } from '../core/groupMath'
+import { evaluateSceneFrame } from '../core/sceneFrameEvaluation'
 import { cameraDisplayAspect, cameraProjectionForDocument, letterboxRect } from '../runtime/cameraMath'
 import { deliveryAspectValue, fitAspectInsideSource, insetFrameGuideRect } from '../runtime/frameGuideMath'
 import type { FrameGuide } from '../core/sceneDocument'
@@ -335,15 +336,16 @@ export function V2Stage({ view, activeSceneId, sceneScopeId, actors, props, wall
   const masterPreviewData = useMemo(() => {
     const scene = masterPreview?.scene ?? null
     const evaluation = masterPreview?.evaluatedEntities ?? (scene && masterPreview?.sourceFrame !== null && masterPreview?.sourceFrame !== undefined ? evaluateTimeline(scene, masterPreview.sourceFrame) : null)
-    const evaluatedGroups = scene && evaluation ? scene.groups.map((group) => evaluation[group.id] ? { ...group, position: [...evaluation[group.id].position] as ActorVector3, rotation: [...evaluation[group.id].rotation] as ActorVector3 } : group) : []
-    const previewCameras = scene && evaluation ? evaluateGroupTransforms(scene.cameras.map((camera) => cameraDocumentWithTimelineEvaluation(camera, evaluation[camera.id])), evaluatedGroups) : []
+    const evaluatedScene = scene && evaluation && masterPreview?.sourceFrame !== null && masterPreview?.sourceFrame !== undefined
+      ? evaluateSceneFrame(scene, masterPreview.sourceFrame, evaluation)
+      : null
     return {
-      actors: scene && evaluation ? evaluateGroupTransforms(scene.actors.map((actor) => ({ ...actor, ...(evaluation[actor.id] ?? {}) })), evaluatedGroups) : [],
-      props: scene && evaluation ? evaluateGroupTransforms(scene.props.map((prop) => ({ ...prop, ...(evaluation[prop.id] ?? {}) })), evaluatedGroups) : [],
-      walls: scene && evaluation ? evaluateGroupTransforms(scene.walls.map((wall) => ({ ...wall, ...(evaluation[wall.id] ?? {}) })), evaluatedGroups) : [],
-      openings: scene && evaluation ? scene.openings.map((opening) => ({ ...opening, ...(evaluation[opening.id] ?? {}), openAngle: evaluation[opening.id]?.openAngle ?? opening.openAngle })) : [],
-      lights: scene && evaluation ? scene.lights.map((light) => ({ ...light, ...(evaluation[light.id] ?? {}), azimuth: evaluation[light.id]?.azimuth ?? light.azimuth, elevation: evaluation[light.id]?.elevation ?? light.elevation, intensity: evaluation[light.id]?.intensity ?? light.intensity, color: evaluation[light.id]?.color ?? light.color })) : [],
-      camera: masterPreview?.cameraId ? previewCameras.find((camera) => camera.id === masterPreview.cameraId) ?? null : null,
+      actors: evaluatedScene?.actors ?? [],
+      props: evaluatedScene?.props ?? [],
+      walls: evaluatedScene?.walls ?? [],
+      openings: evaluatedScene?.openings ?? [],
+      lights: evaluatedScene?.lights ?? [],
+      camera: masterPreview?.cameraId ? evaluatedScene?.cameras.find((camera) => camera.id === masterPreview.cameraId) ?? null : null,
     }
   }, [masterPreview])
   const masterPreviewActors = masterPreviewData.actors

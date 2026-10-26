@@ -2,6 +2,15 @@
 
 User-visible changes are recorded here. This project is currently in Beta.
 
+## 0.2.3 — Hotfix
+
+### Fixed
+
+- Unified Master Preview and Master video export Scene evaluation.
+- Corrected grouped Actor, Prop, Wall, and Camera transforms during export.
+- Preserved current Shot timing, trims, source references, and project
+  compatibility.
+
 ## 0.1.3 — Beta
 
 ### Maintenance

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createCameraDocument, createEmptySceneDocument } from '../core/sceneDocument'
+import { createActorDocument, createCameraDocument, createEmptySceneDocument } from '../core/sceneDocument'
 import { createProjectDocument } from '../core/projectDocument'
 import { createShotDocument } from '../core/shotDocument'
 import { createMasterClip, createMasterSequenceDocument } from '../core/masterSequence'
@@ -53,6 +53,24 @@ describe('Master preview context', () => {
     const project = projectWithScenes()
     expect(resolveMasterPreviewContext(project, 2)).toMatchObject({ masterFrame: 2, clipId: 'clip-a', sceneId: 'scene-a', cameraId: 'camera-a', sourceFrame: 12, status: 'resolved' })
     expect(resolveMasterPreviewContext(project, 3)).toMatchObject({ masterFrame: 3, clipId: 'clip-b', sceneId: 'scene-b', cameraId: 'camera-b', sourceFrame: 40, status: 'resolved' })
+  })
+
+  it('uses the latest source content for a Master clip in a non-active Scene', () => {
+    const project = projectWithScenes()
+    const sourceScene = project.scenes[1].scene
+    const actor = createActorDocument('actor-non-active', 'Fresh Actor', [8, 0, 0])
+    const editedSourceScene = { ...sourceScene, actors: [actor], cameras: sourceScene.cameras.map((camera) => ({ ...camera, focalLengthMm: 75 })) }
+    const currentProject = {
+      ...project,
+      activeSceneId: project.scenes[0].id,
+      scenes: project.scenes.map((entry) => entry.id === sourceScene.metadata.id ? { ...entry, scene: editedSourceScene } : entry),
+    }
+
+    const context = resolveMasterPreviewContext(currentProject, 3, false)
+    expect(context.scene?.metadata.id).toBe(sourceScene.metadata.id)
+    expect(context.scene?.actors[0]).toMatchObject({ id: actor.id, position: [8, 0, 0] })
+    expect(context.scene?.cameras[0].focalLengthMm).toBe(75)
+    expect(currentProject.activeSceneId).toBe(project.scenes[0].id)
   })
 
   it('holds the final valid preview sample at the exact Master end boundary', () => {
